@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { AGENT_INSTRUCTIONS_SEED } from './agent-instructions.js';
+import { ALL_INSTRUCTION_TEXT } from './agent-instructions.js';
 
 /**
  * THE DOCUMENT HAS TO BE TRUE, NOT JUST DELIVERED.
@@ -123,10 +123,21 @@ function verbsInCli(cli: string): Set<string> {
   return out;
 }
 
+/**
+ * THESE READ EVERY WORD MUXPAD SHIPS, not just the resident page.
+ *
+ * The manual moved out of the injected document into `muxpad help <topic>`
+ * (agent-instructions.ts, INSTRUCTION_TOPICS) to get a chat's opening cost
+ * from ~12,900 tokens to ~1,200. A false claim is just as false on a help
+ * page, so the truth checks follow the text rather than the file: they read
+ * {@link ALL_INSTRUCTION_TEXT}. What belongs in the RESIDENT page — the
+ * standing rules, and an index that still names every topic — is pinned
+ * separately in agent-instructions-budget.test.ts.
+ */
 describe('the instructions name things that exist', () => {
   it('every `muxpad <verb>` in the document is a real CLI verb', () => {
     const cli = verbsInCli(CLI);
-    const missing = [...verbsNamedInDoc(AGENT_INSTRUCTIONS_SEED)]
+    const missing = [...verbsNamedInDoc(ALL_INSTRUCTION_TEXT)]
       .filter((v) => !PROSE_AFTER_MUXPAD.has(v))
       .filter((v) => !cli.has(v));
     expect(missing, `the doc tells agents to run verbs the CLI does not have: ${missing}`).toEqual(
@@ -139,9 +150,7 @@ describe('the instructions name things that exist', () => {
     // after the flag was deleted, and an agent that could not make it work
     // reached for a token on disk instead.
     const flags = new Set(
-      [...AGENT_INSTRUCTIONS_SEED.matchAll(/\s(--[a-z][a-z-]{1,24})\b/g)].map(
-        (m) => m[1] as string,
-      ),
+      [...ALL_INSTRUCTION_TEXT.matchAll(/\s(--[a-z][a-z-]{1,24})\b/g)].map((m) => m[1] as string),
     );
     // CSS custom properties and shell/browser flags the doc quotes for OTHER
     // programs (chrome, tailscale) are not muxpad's to own.
@@ -174,21 +183,21 @@ describe('the instructions name things that exist', () => {
     // not the launch — and one pair is drawn per round, so every
     // `muxpad agent send` handover leaves another. An agent told otherwise
     // tells the user their card does not exist while it is on screen.
-    expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/sidebar with its own row/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/PILL at the end of YOUR row/);
-    expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/NO card at spawn time/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/A LAUNCH LEAVES A CARD IN YOUR CHAT/);
+    expect(ALL_INSTRUCTION_TEXT).not.toMatch(/sidebar with its own row/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/PILL at the end of YOUR row/);
+    expect(ALL_INSTRUCTION_TEXT).not.toMatch(/NO card at spawn time/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/A LAUNCH LEAVES A CARD IN YOUR CHAT/);
   });
 
   it('does not claim `agent wait` exit 1 means "not an agent pane"', () => {
     // It also means a usage error, and a pane whose runner has not registered
     // yet — the normal state for a second or two after `muxpad agent new`.
     // Measured: two live agent panes returned 1 immediately after spawn.
-    expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/1 = not an agent pane/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/1 is overloaded/);
+    expect(ALL_INSTRUCTION_TEXT).not.toMatch(/1 = not an agent pane/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/1 is overloaded/);
   });
 
   it('never mentions a Slack identity flag — there is no bot identity', () => {
-    expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/--as-me|--as-bot/);
+    expect(ALL_INSTRUCTION_TEXT).not.toMatch(/--as-me|--as-bot/);
   });
 });

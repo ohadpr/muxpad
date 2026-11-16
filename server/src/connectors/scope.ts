@@ -357,3 +357,32 @@ export function mayPaneUse(
   }
   return d;
 }
+
+/**
+ * WHICH CONNECTOR MANUALS A MACHINE SHOULD EVEN BE SHOWN.
+ *
+ * Not an authorization decision — the broker still decides every call, and
+ * this answers a documentation question: is it worth describing Slack to a
+ * chat on a machine where Slack is refused by design? It was not, and the
+ * cost was ~2.8k tokens of manual per session for capabilities that answer
+ * "wrong machine".
+ *
+ * `null` when there is nothing to say — an unscoped policy means no machine
+ * is restricted, so the caller should describe everything rather than take an
+ * empty list for an answer. That distinction is the whole safety of this:
+ * silently hiding a capability the user HAS is the failure that matters, and
+ * it is the one a careless `[]` produces.
+ */
+export function capabilitiesFor(
+  origin: string,
+  policy: ConnectorPolicy,
+  known: readonly ConnectorId[] = KNOWN_CONNECTORS,
+): string[] | null {
+  if (!policy.enforce) return null;
+  return known.filter((c) => mayUse(c, origin, policy).ok);
+}
+
+/** The connectors muxpad ships a manual for. Naming them here rather than
+ *  reading the policy's keys: a policy that forgot to mention one must not
+ *  make its manual vanish — it must make it REFUSED, which `mayUse` does. */
+export const KNOWN_CONNECTORS: readonly ConnectorId[] = ['slack', 'msgvault'];

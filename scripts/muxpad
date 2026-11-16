@@ -4521,6 +4521,34 @@ USAGE
 # expression (AND/OR/NEAR/"phrases"); a syntax error server-side falls back
 # to a plain phrase match. `muxpad search --sessions [--cwd=X]` lists the
 # archived sessions instead.
+# ── muxpad help <topic> ──────────────────────────────────────────────────────
+# The manual that is NOT injected into every session. The pages are written at
+# boot by server/src/agent-instructions.ts (writeHelpTopics) so this answers
+# with no server running, inside a sandbox, in any backend.
+cmd_help() {
+  local dir="$DATA_DIR/help" topic="${1:-}"
+  if [ -z "$topic" ]; then
+    if [ ! -d "$dir" ]; then
+      echo "muxpad: no help pages yet — they are written when the server boots" >&2
+      return 1
+    fi
+    echo "muxpad help <topic> — the detail that is not in every session:"
+    echo
+    for f in "$dir"/*.md; do
+      [ -e "$f" ] || continue
+      local name; name="$(basename "$f" .md)"
+      printf '  %-10s %s\n' "$name" "$(head -3 "$f" | tr '\n' ' ' | sed 's/^#* *//' | cut -c1-58)"
+    done
+    return 0
+  fi
+  local page="$dir/${topic}.md"
+  if [ ! -f "$page" ]; then
+    echo "muxpad: no help topic '$topic'. Try: muxpad help" >&2
+    return 1
+  fi
+  cat "$page"
+}
+
 cmd_search() {
   # `--sessions` is a bare mode flag, not a --key=value pair — pre-strip it.
   local mode=search
@@ -6009,6 +6037,7 @@ case "$VERB" in
     exec node "$ROOT/server/dist/claude-accounts/cli.js" "${ARGS[@]:1}"
     ;;
   cron) cmd_cron "${ARGS[@]:1}" ;;
+  help) cmd_help "${ARGS[@]:1}" ;;
   search) cmd_search "${ARGS[@]:1}" ;;
   slack) cmd_slack "${ARGS[@]:1}" ;;
   browser) cmd_browser "${ARGS[@]:1}" ;;

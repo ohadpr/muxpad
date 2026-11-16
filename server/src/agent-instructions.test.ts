@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentNotesPath, generatedBody, sha256 } from './agent-files.js';
 import {
   AGENT_INSTRUCTIONS_SEED,
+  ALL_INSTRUCTION_TEXT,
   INSTRUCTIONS_MIGRATION,
   SHIPPED_INSTRUCTIONS_DEFAULTS,
   agentInstructionsPath,
@@ -14,6 +15,17 @@ import {
   wrapAgentInstructions,
 } from './agent-instructions.js';
 
+/**
+ * THESE READ EVERY WORD MUXPAD SHIPS, not just the resident page.
+ *
+ * The manual moved out of the injected document into `muxpad help <topic>`
+ * (agent-instructions.ts, INSTRUCTION_TOPICS) to get a chat's opening cost
+ * from ~12,900 tokens to ~1,200. A false claim is just as false on a help
+ * page, so the truth checks follow the text rather than the file: they read
+ * {@link ALL_INSTRUCTION_TEXT}. What belongs in the RESIDENT page — the
+ * standing rules, and an index that still names every topic — is pinned
+ * separately in agent-instructions-budget.test.ts.
+ */
 describe('agent-instructions', () => {
   let dataDir: string;
   beforeEach(() => {
@@ -26,6 +38,7 @@ describe('agent-instructions', () => {
   it('generates the file at boot with muxpad capability content', () => {
     seedAgentInstructions(dataDir);
     const text = readFileSync(agentInstructionsPath(dataDir), 'utf8');
+    // The FILE is the resident page; the manual lives in help/ beside it.
     expect(text).toBe(generatedBody(AGENT_INSTRUCTIONS_SEED));
     expect(text).toContain('muxpad search');
     expect(text).toContain('muxpad publish');
@@ -36,11 +49,11 @@ describe('agent-instructions', () => {
     // The whole point of shipping `muxpad cron` is that agents stop reaching
     // for a session-scoped scheduler that silently expires and never catches
     // up. If the seed stops SAYING so, the feature quietly stops being used.
-    expect(AGENT_INSTRUCTIONS_SEED).toContain('DO NOT use');
-    expect(AGENT_INSTRUCTIONS_SEED).toContain('muxpad cron new');
-    expect(AGENT_INSTRUCTIONS_SEED).toContain('--pane');
+    expect(ALL_INSTRUCTION_TEXT).toContain('DO NOT use');
+    expect(ALL_INSTRUCTION_TEXT).toContain('muxpad cron new');
+    expect(ALL_INSTRUCTION_TEXT).toContain('--pane');
     for (const verb of ['cron list', 'cron run', 'cron pause', 'cron rm'])
-      expect(AGENT_INSTRUCTIONS_SEED).toContain(`muxpad ${verb}`);
+      expect(ALL_INSTRUCTION_TEXT).toContain(`muxpad ${verb}`);
   });
 
   it('names EVERY harness scheduling entry point it means to displace', () => {
@@ -61,16 +74,16 @@ describe('agent-instructions', () => {
       'CronDelete',
       'ScheduleWakeup',
     ])
-      expect(AGENT_INSTRUCTIONS_SEED).toContain(entryPoint);
+      expect(ALL_INSTRUCTION_TEXT).toContain(entryPoint);
 
     // And the rule has to read as absolute, covering one-off as well as
     // recurring, and cover RECOMMENDING them, not just calling them.
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/ONLY scheduler/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/one-off|ONE-OFF/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/not RECOMMEND|Do not RECOMMEND/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/ONLY scheduler/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/one-off|ONE-OFF/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/not RECOMMEND|Do not RECOMMEND/);
     // The justification is what makes it persuasive rather than arbitrary.
     for (const reason of [/catches\s+up/, /expire/, /durable/, /every backend/])
-      expect(AGENT_INSTRUCTIONS_SEED).toMatch(reason);
+      expect(ALL_INSTRUCTION_TEXT).toMatch(reason);
   });
 
   it('rewrites the file on every boot, so a seed change can never go stale', () => {
@@ -102,25 +115,25 @@ describe('agent-instructions', () => {
     // columns; the done→ready rename slipped past this file because nothing
     // asserted the vocabulary. Bound to the schema so it cannot drift again.
     const states = PaneStatusSchema.options;
-    for (const s of states) expect(AGENT_INSTRUCTIONS_SEED).toContain(`\`${s}\``);
+    for (const s of states) expect(ALL_INSTRUCTION_TEXT).toContain(`\`${s}\``);
 
     // The enumeration itself must list those five and nothing else.
-    const from = AGENT_INSTRUCTIONS_SEED.indexOf('It is one of');
-    const to = AGENT_INSTRUCTIONS_SEED.indexOf('`agents` alongside');
+    const from = ALL_INSTRUCTION_TEXT.indexOf('It is one of');
+    const to = ALL_INSTRUCTION_TEXT.indexOf('`agents` alongside');
     expect(from).toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
-    const enumerated = [...AGENT_INSTRUCTIONS_SEED.slice(from, to).matchAll(/`([a-z]+)`/g)].map(
+    const enumerated = [...ALL_INSTRUCTION_TEXT.slice(from, to).matchAll(/`([a-z]+)`/g)].map(
       (m) => m[1],
     );
     expect(new Set(enumerated)).toEqual(new Set(states));
 
     // …and no surface still advertises the retired two-state column.
-    expect(AGENT_INSTRUCTIONS_SEED).not.toContain('busy|idle');
+    expect(ALL_INSTRUCTION_TEXT).not.toContain('busy|idle');
     // `busy` survives only as HISTORY — the field is gone, and the seed may
     // mention it solely to tell a reader not to look for it.
-    for (const m of AGENT_INSTRUCTIONS_SEED.matchAll(/`busy`/g)) {
-      const line = AGENT_INSTRUCTIONS_SEED.slice(0, m.index).split('\n').length;
-      const text = AGENT_INSTRUCTIONS_SEED.split('\n')[line - 1] ?? '';
+    for (const m of ALL_INSTRUCTION_TEXT.matchAll(/`busy`/g)) {
+      const line = ALL_INSTRUCTION_TEXT.slice(0, m.index).split('\n').length;
+      const text = ALL_INSTRUCTION_TEXT.split('\n')[line - 1] ?? '';
       expect(text).toMatch(/not `busy`|is gone/);
     }
   });
@@ -163,7 +176,7 @@ describe('agent-instructions', () => {
  * So the instruction has to name the ACTION, not just the outcome.
  */
 describe('the browser policy names app bundles specifically', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   it('forbids touching an app bundle, in those words', () => {
     expect(policy).toMatch(/\.app\b/);
@@ -205,7 +218,7 @@ describe('the browser policy names app bundles specifically', () => {
  * name the move.
  */
 describe('the browser policy teaches the handoff', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   it('names the command an agent runs to ask for a person', () => {
     // A VERB, not a raw curl at the endpoint. The curl was the one documented
@@ -242,7 +255,7 @@ describe('the browser policy teaches the handoff', () => {
 });
 
 describe('the summons is one short line', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   it('asks for a handful of words, not a paragraph', () => {
     // The reason is the whole content of a card in a conversation, and a card
@@ -257,7 +270,7 @@ describe('the summons is one short line', () => {
 });
 
 describe('the handoff lands where the work is', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   it('tells the agent to reach the wall before summoning', () => {
     // Handing somebody a home page and letting them hunt for the sign-in link
@@ -284,26 +297,26 @@ describe('what agents are told about a browser that is not running yet', () => {
    * behaviour that turns a one-second pause into a storm.
    */
   it('says the first call starts it, and that the wait is not a fault', () => {
-    const text = AGENT_INSTRUCTIONS_SEED;
+    const text = ALL_INSTRUCTION_TEXT;
     expect(text).toMatch(/starts when you first reach for it/i);
     expect(text).toMatch(/do not retry/i);
   });
 
   it('still tells them to stop at a wall rather than push through it', () => {
     // The rule the whole handoff rests on; a doc edit must not cost it.
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/stop at a wall/i);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/needs-you/);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/stop at a wall/i);
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/needs-you/);
   });
 
   it('still names the profile as the agent’s OWN browser', () => {
     // Summoning somebody to another browser sends them to log in somewhere the
     // agent cannot see — the bug this replaced.
-    expect(AGENT_INSTRUCTIONS_SEED).toContain('s-$MUXPAD_TAB_ID');
+    expect(ALL_INSTRUCTION_TEXT).toContain('s-$MUXPAD_TAB_ID');
   });
 });
 
 describe('what a card should be made OF', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   /**
    * Observed in a real chat: two agents reporting build progress as
@@ -356,7 +369,7 @@ describe('what a card should be made OF', () => {
  * tells the two apart. None of that was written down. Fencing was.
  */
 describe('the archive section teaches the shape of the data', () => {
-  const policy = AGENT_INSTRUCTIONS_SEED;
+  const policy = ALL_INSTRUCTION_TEXT;
 
   it('says that one search returns mail AND calendar, and how to tell them apart', () => {
     expect(policy).toMatch(/MAIL AND CALENDAR EVENTS/i);

@@ -26,7 +26,7 @@ import {
   taskNotificationToolUseId,
 } from '@muxpad/shared';
 import { z } from 'zod';
-import { readAgentInstructions } from '../../agent-instructions.js';
+import { capsAllower, readAgentInstructions } from '../../agent-instructions.js';
 import { readChatModeOverlay, wrapModeNote } from '../../agent-modes.js';
 import { findTranscript } from '../../chat/TranscriptReader.js';
 import { accountCompletion } from '../../claude-accounts/completion.js';
@@ -1518,10 +1518,12 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
   // sessions alike — it's session-level system-prompt material, not a
   // message. Agent mode contributes nothing, so an Agent-mode pane's prompt
   // is byte-for-byte what it was before modes existed.
-  // The workspace decides which capabilities are described at all — see
-  // readAgentInstructions. Fetched once per runner and cached.
+  // The MACHINE decides which connector manuals are described at all: the
+  // server passes `MUXPAD_CAPS` for the pane (PaneRuntime), and a capability
+  // missing from it has its block cut rather than dangled in front of a chat
+  // that will be refused. Unset keeps everything. Read once per runner.
   const muxpadSystemPrompt = claudeSystemPromptOption(
-    readAgentInstructions(),
+    readAgentInstructions(undefined, capsAllower(process.env.MUXPAD_CAPS)),
     readChatModeOverlay(currentMode),
   );
 

@@ -112,6 +112,16 @@ export interface PaneRuntimeSpec {
    * reason as `tab_id`. Exposed as `MUXPAD_WORKSPACE_ID`.
    */
   workspace_id?: string | undefined;
+  /**
+   * The connectors this pane's MACHINE is allowed to use, as the broker scopes
+   * them (connectors/scope.ts). Exposed as `MUXPAD_CAPS` so the agent runner
+   * can leave out the manual for a capability that will be refused here.
+   *
+   * Absent means "nobody told me", which keeps every capability described —
+   * advertising one the user does not have is a bad minute, and hiding one
+   * they do have is a feature they never find.
+   */
+  capabilities?: readonly string[] | undefined;
 }
 
 type Listener<T extends unknown[]> = (...args: T) => void;
@@ -247,6 +257,16 @@ export class PaneRuntime extends EventEmitter {
       MUXPAD_PANE_ID: this.spec.id,
       MUXPAD_TAB_ID: this.spec.tab_id ?? '',
       MUXPAD_WORKSPACE_ID: this.spec.workspace_id ?? '',
+      // ── WHICH CONNECTOR MANUALS THIS PANE IS EVEN SHOWN ───────────────
+      //
+      // The broker scopes Slack to one machine and the mail archive to
+      // another (connectors/scope.ts). A pane that cannot use one has no
+      // business being handed its manual: the capability is advertised to
+      // exactly the context that must never have it, and the chat finds out
+      // by trying. Comma-separated names; ABSENT means "no policy to hand",
+      // which keeps everything, because silently removing a capability the
+      // user does have is the worse failure.
+      ...(this.spec.capabilities ? { MUXPAD_CAPS: this.spec.capabilities.join(',') } : {}),
       // Suppress oh-my-zsh's "Would you like to check for updates? [Y/n]"
       // prompt. Without this it fires on the first pane of the day and
       // eats the first character of any startup_cmd as its answer.

@@ -22,7 +22,7 @@
 //             flag (backends/cursor.ts)
 // - `muxpad claude` TUI wrapper → native `--append-system-prompt`
 //   (scripts/muxpad cmd_claude)
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type MigratedFile,
@@ -148,11 +148,61 @@ ${STANDING_RULES}
 
 Capabilities worth knowing:
 
-- \`muxpad search "query"\` (add \`--sessions\` to list matching sessions) —
-  full-text search across the archived history of EVERY agent session ever
-  run on this machine. Use it to recall past decisions or find which session
-  discussed something.
-- \`muxpad publish <file-or-dir> [--name=slug]\` — hosts the artifact and
+- \`muxpad search "query"\` (add \`--sessions\`) — full-text search across the
+  archived history of EVERY agent session ever run on this machine. Use it to
+  recall past decisions or find which session discussed something.
+- \`muxpad app\` — long-running local web servers muxpad keeps alive with NO
+  tab: \`app list|start|stop|logs <slug>\`, \`app add --name= --url= --cwd= --\`.
+  APPS ARE PRIVATE (tailnet only).
+
+## The manual is NOT in here — read it before you use one
+
+Each of these is a page of real detail: the flags, the failure modes, and the
+mistakes that produced the rule. **\`muxpad help <topic>\` prints one.** Read
+the topic BEFORE your first use of that capability in a session; guessing at
+the flags of something that posts, pays, publishes or schedules is how the
+stories in those pages got written.
+
+| topic | what it is |
+|---|---|
+| \`publish\` | a PUBLIC internet url for an artifact somebody asked for |
+| \`cards\` | the pinned value above a conversation that must not scroll away |
+| \`cron\` | the ONLY scheduler on this machine — anything that happens later |
+| \`delegate\` | sub-agents, which are panes: \`muxpad agent new\` |
+| \`browser\` | the headless browser, screenshots, and handing it to a person |
+| \`modes\` | Chat mode and Agent mode, and what each one carries |
+| \`mentions\` | an \`@other-chat\` handed to you as context |
+| \`turns\` | what a turn costs, and how to wait without burning tokens |
+<!--cap:msgvault-->| \`msgvault\` | the user's own mail and calendar, approved per use |
+<!--/cap:msgvault-->
+<!--cap:slack-->| \`slack\` | the company Slack, sent AS THE USER, approved per use |
+<!--/cap:slack-->
+
+\`muxpad help\` with no topic lists them.
+
+`;
+
+/**
+ * THE MANUAL, WHICH IS NOT INJECTED.
+ *
+ * These pages used to sit inside {@link AGENT_INSTRUCTIONS_SEED}, which meant
+ * every chat about CSS opened with the full flag reference for Slack, mail,
+ * payments, cards, crons and the browser — measured at 12.8k tokens, of which
+ * about 550 were the rules an agent has to know BEFORE it acts. The rest is
+ * documentation, and documentation belongs where you look it up.
+ *
+ * So the rules stay resident and each manual is written to
+ * \`<dataDir>/help/<topic>.md\` at boot, printed by \`muxpad help <topic>\`.
+ * The seed carries a one-line index, which is what keeps an agent reaching for
+ * a capability it would otherwise never know existed — the one thing that
+ * cannot be deferred.
+ *
+ * Nothing here was deleted or softened in the move: a topic is the same text
+ * it was, which is why the truth tests read {@link ALL_INSTRUCTION_TEXT}
+ * rather than the seed.
+ */
+export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
+  publish: `- \`muxpad publish <file-or-dir> [--name=slug]\` — hosts the artifact and
   prints a PUBLIC internet URL. Use \`--name=<slug>\` for a stable
   re-publishable URL; \`muxpad publish --rm <slug>\` takes one down.
 
@@ -215,15 +265,8 @@ Capabilities worth knowing:
   \`thing2\`/\`thing3\`/\`thing-v2\` — a numbered pile of near-identical slugs
   means the user has to guess which one is current, which is precisely the
   problem \`--update\` exists to prevent.
-
-- \`muxpad app\` — long-running local web servers muxpad keeps alive with NO
-  tab: \`muxpad app list\` (slug, measured state, url), \`app start|stop <slug>\`,
-  \`app logs <slug>\` when one is unreachable and you need to see why. Register
-  one with \`muxpad app add --name=<n> --url=<url> --cwd=<dir> -- <command>\`.
-  APPS ARE PRIVATE (tailnet only) — never publish an app's data or suggest
-  exposing it; \`publish\` is for static artifacts you MEAN to be public.
-
-<!--cap:msgvault-->
+`,
+  msgvault: `<!--cap:msgvault-->
 - \`muxpad msgvault\` — the user's own mail and calendar, APPROVED PER USE.
 
   READS: \`search '<gmail-like query>' [--limit=N]\` (max 200),
@@ -356,7 +399,8 @@ Capabilities worth knowing:
   anything from a binary or a config file.
 
 <!--/cap:msgvault-->
-<!--cap:slack-->
+`,
+  slack: `<!--cap:slack-->
 - \`muxpad slack\` — the company Slack, read/write, from any chat or terminal
   and any harness. \`slack read <channel-name|conversationID> [--since=2h]\`, \`slack search
   "<query>"\`, \`slack post <channel-name|conversationID> "<text>"\`,
@@ -418,8 +462,8 @@ Capabilities worth knowing:
   workspace permissions, or look for credentials to bypass it.
 
 <!--/cap:slack-->
-
-## \`@mentions\` — a chat handed to you as CONTEXT
+`,
+  mentions: `## \`@mentions\` — a chat handed to you as CONTEXT
 
 When the user mentions another chat (\`@Investing\`), the message still comes to
 YOU. It arrives with a trailing \`<muxpad-context>\` block listing each mentioned
@@ -441,8 +485,8 @@ first:
 Start with the TAIL. It is cheap and usually enough; a summary costs a model
 call and a full transcript can be a hundred KB. Go deeper only when the tail
 does not answer the question.
-
-## Cards — the value that should not scroll away
+`,
+  cards: `## Cards — the value that should not scroll away
 
 A chat can hold named CARDS, pinned above the conversation. Setting the same
 name again REPLACES that card. The transcript is the history; a card is the
@@ -531,8 +575,8 @@ speaks into a chat — so \`muxpad say\` is how it reaches anybody. \`--silent\`
 \`--speak\` were earlier attempts to put this switch on the SCHEDULE; they are
 accepted and ignored, because a schedule cannot know in advance whether a given
 run will have something worth saying.)
-
-## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
+`,
+  cron: `## Scheduling — \`muxpad cron\` is the ONLY scheduler on this machine
 
 **Anything that should happen LATER — once or repeatedly — is a \`muxpad
 cron\`.** "Remind me tomorrow", "check this every morning", "run that at 5pm",
@@ -598,8 +642,8 @@ the same on every backend, and can be fired by hand before you trust it.
   \`muxpad cron show <name>\` (+ run history), \`muxpad cron run <name>\`
   (fire NOW — always test a new cron this way), \`muxpad cron pause/resume
   <name>\`, \`muxpad cron rm <name>\`.
-
-## Browsers, screenshots and dev servers
+`,
+  browser: `## Browsers, screenshots and dev servers
 
 This runs on somebody's live workstation. **Nothing you do may put a window on
 their screen.**
@@ -756,8 +800,8 @@ is a documented top failure mode for exactly this handoff.
 
 Nothing above changes the rules further up: still headless, still no window, and
 the file chooser is intercepted so no native dialog ever opens.
-
-## The two modes: Chat and Agent
+`,
+  modes: `## The two modes: Chat and Agent
 
 Every agent session runs in one of exactly two modes, and the mode is what the
 sidebar calls it: a chat (Chat mode) or an agent (Agent mode). These are the
@@ -788,8 +832,8 @@ new contract as a one-time \`<muxpad-mode>\` note in the conversation — which 
 long session can drift from, like any instruction. If the mode genuinely
 matters for a piece of work, start a NEW chat in it rather than switching this
 one.
-
-## Delegating work — it goes in a CHAT, never in a hidden subprocess
+`,
+  delegate: `## Delegating work — it goes in a CHAT, never in a hidden subprocess
 
 **Every agent you put to work must be a chat of its own.** \`muxpad agent new
 [--backend=<b>] [--model=<m>] [--name=<label>] "the brief"\` is how you start one,
@@ -943,8 +987,8 @@ tomorrow, and its result comes back to you through one path.
 
 The narrow exception is a one-shot command that is not an agent at all — a
 \`git log\`, a test run, a build. Those are tools, not workers.
-
-## Working across chats and terminals
+`,
+  turns: `## Working across chats and terminals
 
 Other chats, agents and terminals are running alongside you. The map:
 \`muxpad pane list --all [--json]\` (every chat, agent and terminal: pane id,
@@ -1007,7 +1051,15 @@ call; about 15% were follow-up reads that did not depend on the previous result.
 - To block on one specific turn, still prefer \`agent wait\` / \`turn_active\`:
   \`working\` deliberately stays true while a background subagent outlives the
   turn that launched it.
-`;
+`,
+};
+
+/** Every word muxpad ships — resident rules plus every manual page. What the
+ *  truth tests check, since a claim is just as wrong on a help page. */
+export const ALL_INSTRUCTION_TEXT = [
+  AGENT_INSTRUCTIONS_SEED,
+  ...Object.values(INSTRUCTION_TOPICS),
+].join('\n\n');
 
 export const AGENT_INSTRUCTIONS_FILE = 'agent-instructions.md';
 
@@ -1054,6 +1106,56 @@ export const INSTRUCTIONS_MIGRATION: MigratedFile = {
 /** Rewrite the generated file at server boot. It always matches this build. */
 export function seedAgentInstructions(dataDir: string): void {
   writeGeneratedFile(dataDir, AGENT_INSTRUCTIONS_FILE, AGENT_INSTRUCTIONS_SEED);
+  writeHelpTopics(dataDir);
+}
+
+/** Where `muxpad help <topic>` reads from. */
+export const HELP_DIR = 'help';
+
+export function helpTopicPath(dataDir: string, topic: string): string {
+  return join(dataDir, HELP_DIR, `${topic}.md`);
+}
+
+/**
+ * Write every manual page beside the instructions, at boot.
+ *
+ * Files rather than a server route on purpose: `muxpad help` has to answer in
+ * a terminal with no server reachable, inside a sandbox, and during the boot
+ * that writes them. A stale page is impossible — they are rewritten from this
+ * build every time, exactly like the instructions.
+ *
+ * Best-effort as a whole: a help page that cannot be written must never stop
+ * a server from starting. The index still names the topic and `muxpad help`
+ * says it is missing, which is a better failure than no muxpad.
+ */
+/**
+ * One manual page, as it is read rather than as it is stored.
+ *
+ * Two differences from the raw topic. The capability fences are for the
+ * INJECTED copy — a reader who typed `muxpad help slack` has already decided
+ * to read about Slack, and an HTML comment in their terminal is noise. And a
+ * page that begins mid-bullet, as the connector pages do, gets a title, so
+ * `muxpad help` can list it and a reader knows what they opened.
+ */
+export function helpPage(topic: string, body: string): string {
+  const text = dropFences(body).trim();
+  const titled = text.startsWith('#') ? text : `## muxpad ${topic}\n\n${text}`;
+  return `${titled}\n`;
+}
+
+export function writeHelpTopics(dataDir: string): void {
+  try {
+    mkdirSync(join(dataDir, HELP_DIR), { recursive: true });
+  } catch {
+    return;
+  }
+  for (const [topic, body] of Object.entries(INSTRUCTION_TOPICS)) {
+    try {
+      writeFileSync(helpTopicPath(dataDir, topic), helpPage(topic, body), 'utf8');
+    } catch {
+      /* one unwritable page is not a boot failure */
+    }
+  }
 }
 
 /**
@@ -1068,14 +1170,60 @@ function dropFences(text: string): string {
   return text.replace(/<!--\/?cap:[a-z-]+-->\n?/g, '');
 }
 
-export function readAgentInstructions(dataDir: string = runnerDataDir()): string | null {
+/**
+ * CUT WHAT THIS CHAT IS NOT ALLOWED TO USE.
+ *
+ * A fenced block names a capability the broker decides on, per machine
+ * (connectors/scope.ts: Slack is scoped to the work machine, the mail archive
+ * to the personal one). Injecting its manual anyway advertises a capability
+ * to exactly the context that must never have it — the migration note at
+ * store/migrations.ts:1363 records that happening once already, and a chat
+ * found out by trying.
+ *
+ * `allow` answers for one capability name. Returning true keeps the block
+ * (minus its markers), false removes it entirely. The default keeps
+ * everything, because a caller with no policy to hand must not quietly
+ * silence a capability the user does have.
+ */
+export function applyCapabilities(text: string, allow?: (cap: string) => boolean): string {
+  if (!allow) return dropFences(text);
+  const cut = text.replace(
+    /<!--cap:([a-z-]+)-->\n?([\s\S]*?)<!--\/cap:\1-->\n?/g,
+    (_m, cap: string, body: string) => (allow(cap) ? body : ''),
+  );
+  return dropFences(cut);
+}
+
+/**
+ * Read `MUXPAD_CAPS` into the predicate {@link applyCapabilities} wants.
+ *
+ * UNSET AND EMPTY MEAN DIFFERENT THINGS, and getting that backwards is how a
+ * capability disappears for everybody. Unset is "no policy reached me" —
+ * every manual stays. An empty string is a real answer: this machine may use
+ * no connectors, so none of their manuals are shown.
+ */
+export function capsAllower(raw: string | undefined): ((cap: string) => boolean) | undefined {
+  if (raw === undefined) return undefined;
+  const allowed = new Set(
+    raw
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean),
+  );
+  return (cap) => allowed.has(cap);
+}
+
+export function readAgentInstructions(
+  dataDir: string = runnerDataDir(),
+  allow?: (cap: string) => boolean,
+): string | null {
   let generated: string | null = null;
   try {
     generated = readFileSync(agentInstructionsPath(dataDir), 'utf8');
   } catch {
     generated = null;
   }
-  if (generated) generated = dropFences(generated);
+  if (generated) generated = applyCapabilities(generated, allow);
   const parts = [generated, readAgentNotes(dataDir)]
     .map((t) => t?.trim())
     .filter((t): t is string => !!t);

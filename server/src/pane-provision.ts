@@ -73,6 +73,7 @@
 // `settled`, the whole ladder, which nobody on the request path awaits. The
 // retries happen entirely after the user is already looking at their new chat.
 import type Database from 'better-sqlite3';
+import { capabilitiesFor, loadPolicy } from './connectors/scope.js';
 import type { EventBus } from './events.js';
 import type { PaneOps } from './node-link/PaneRouter.js';
 import { withPaneKey } from './pane-key.js';
@@ -80,6 +81,7 @@ import { clearProvisionError, setProvisionError } from './pane-provision-state.j
 import { type PtydCache, decoratePane } from './ptyd-cache.js';
 import type { PtydClient } from './ptyd-client/PtydClient.js';
 import type { PaneRuntimeSpec } from './runtime/PaneRuntime.js';
+import { LOCAL_NODE_ID } from './store/NodeStore.js';
 import { PaneStore } from './store/PaneStore.js';
 
 // The registry lives in pane-provision-state.ts (see the note there — it is
@@ -167,6 +169,38 @@ const reason = (err: unknown): string => {
  * paths that are already a user-initiated retry, where a second ladder
  * underneath the first only delays the honest answer.
  */
+/**
+ * The connector manuals this pane's machine should be shown, as a spec patch.
+ *
+ * Folded in HERE for the same reason the pane key is: this is the one function
+ * that hands a spec to ptyd, so it is the one place that can promise every
+ * pane is told the truth about its own machine.
+ *
+ * Returns `{}` — not `{ capabilities: [] }` — whenever the answer is "no
+ * policy to apply", because the runner reads an ABSENT list as "describe
+ * everything" and an empty one as "describe nothing". A pane whose row is not
+ * written yet is the ordinary case on create, and it is treated as local,
+ * which is what it is.
+ */
+function capabilitiesForPane(
+  db: Database.Database,
+  paneId: string,
+): { capabilities?: readonly string[] } {
+  try {
+    const policy = loadPolicy();
+    const row = db.prepare('SELECT node_id AS n FROM panes WHERE id = ?').get(paneId) as
+      | { n: string | null }
+      | undefined;
+    const origin = row?.n ? row.n : LOCAL_NODE_ID;
+    const caps = capabilitiesFor(origin, policy);
+    return caps ? { capabilities: caps } : {};
+  } catch {
+    // A policy we cannot read must not silence a capability: say nothing and
+    // let every manual through, exactly as before this existed.
+    return {};
+  }
+}
+
 export function provisionPane(
   deps: ProvisionDeps,
   spec: PaneRuntimeSpec & { attempts?: number },
@@ -192,7 +226,11 @@ export function provisionPane(
       // Folded in HERE rather than at every caller that builds a spec: this is
       // the one function that hands a spec to ptyd, so it is the one place
       // that can promise a pane is always told its own key.
-      await deps.ptyd.ensurePane({ ...spec, env: withPaneKey(spec.env, spec.id) });
+      await deps.ptyd.ensurePane({
+        ...spec,
+        env: withPaneKey(spec.env, spec.id),
+        ...(spec.capabilities ? {} : capabilitiesForPane(deps.db, spec.id)),
+      });
     } catch (err) {
       onAsked();
       return { ok: false, why: reason(err) };
