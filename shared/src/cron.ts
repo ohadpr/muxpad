@@ -70,6 +70,19 @@ export const CronSchema = z.object({
    * for 2027 as a result.
    */
   once: z.boolean(),
+  /**
+   * A shell command the SERVER runs at each due slot. The fire happens only
+   * when its output has CHANGED since the last run; `watch_hash` is what it
+   * hashed to then.
+   *
+   * The alternative, measured on this machine, is a prompt that says "say
+   * nothing unless X changed" and an agent turn burned every interval to
+   * discover that nothing did — plus a watcher that stays quiet only as long
+   * as the model stays disciplined. A change detector is not a judgement
+   * call, so it does not belong to the model.
+   */
+  watch_cmd: z.string().nullable().default(null),
+  watch_hash: z.string().nullable().default(null),
   catchup: CronCatchupSchema,
   overlap: CronOverlapSchema,
   on_context: CronOnContextSchema,

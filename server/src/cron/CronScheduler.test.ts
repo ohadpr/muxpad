@@ -1,4 +1,4 @@
-import { parseCronMarker } from '@muxpad/shared';
+import { type Cron, parseCronMarker } from '@muxpad/shared';
 // Policy tests for the cron tick. Everything here runs against a real
 // in-memory SQLite (the schema IS the design) with a FAKE injection primitive,
 // a fake ptyd and a driven clock — no sleeping, no daemon, no ~/.muxpad.
@@ -889,6 +889,58 @@ describe('CronScheduler', () => {
     });
     s.store.finishRun(kept.id, 'done');
     expect(s.store.runs(cron.id).find((r) => r.id === kept.id)?.outcome).toBe('kept');
+  });
+
+  // ── a watch fires only when something changed ────────────────────────────
+
+  it('does not wake an agent when the watched output is the same', async () => {
+    // THE WHOLE POINT. A three-minute watcher was measured spending a full
+    // model turn per check to discover nothing had happened — and staying
+    // quiet only because its prompt asked it to.
+    const s = scheduler();
+    const cron = makeCron(s, { watch_cmd: 'printf steady' });
+    runAt(cron);
+    await s.tick();
+    expect(sent).toHaveLength(1); // first check has nothing to compare against
+
+    now += 3_600_000;
+    runAt(s.store.getById(cron.id) as Cron);
+    await s.tick();
+    expect(sent, 'unchanged output must not fire').toHaveLength(1);
+    expect(s.store.getById(cron.id)?.last_status).toBe('watch:unchanged');
+    // …and a check is not a run: one row per check would bury the fires.
+    expect(s.store.runs(cron.id).length).toBe(1);
+  });
+
+  it('fires, with the new output in the prompt, when it changes', async () => {
+    const s = scheduler();
+    const cron = makeCron(s, { watch_cmd: 'printf $WATCH_TEST_VALUE' });
+    process.env.WATCH_TEST_VALUE = 'before';
+    runAt(cron);
+    await s.tick();
+    process.env.WATCH_TEST_VALUE = 'AFTER-THE-CHANGE';
+    now += 3_600_000;
+    runAt(s.store.getById(cron.id) as Cron);
+    await s.tick();
+    expect(sent).toHaveLength(2);
+    // The agent is handed what the server already fetched; otherwise its
+    // first move every fire is a second round trip for the same bytes.
+    expect(sent[1]?.text).toContain('AFTER-THE-CHANGE');
+    process.env.WATCH_TEST_VALUE = undefined;
+  });
+
+  it('re-anchors after a check that did not fire', async () => {
+    // A watch that skipped must still move to its next slot, or it checks
+    // once and never again.
+    const s = scheduler();
+    const cron = makeCron(s, { watch_cmd: 'printf steady' });
+    runAt(cron);
+    await s.tick();
+    const after = s.store.getById(cron.id) as Cron;
+    now += 3_600_000;
+    runAt(after);
+    await s.tick();
+    expect(s.store.getById(cron.id)?.next_due_at).toBeGreaterThan(now);
   });
 });
 

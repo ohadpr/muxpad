@@ -95,6 +95,17 @@ export function cronsRoutes(deps: {
          *  shape a card name takes; the store does not validate it against an
          *  existing card because a cron may legitimately create one. */
         card: z.string().min(1).max(40).optional(),
+        /**
+         * A shell command the SERVER runs at each due slot; the agent is woken
+         * only when its output changed. Bounded because it is stored and
+         * re-run forever, and a megabyte of shell in a cron row is a mistake
+         * somebody will have to find later.
+         *
+         * It runs AS THE USER, with the cron's cwd — the same authority every
+         * agent on this machine already has, which is why this is a
+         * convenience rather than a new power.
+         */
+        watch_cmd: z.string().min(1).max(2_000).optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -181,6 +192,7 @@ export function cronsRoutes(deps: {
       ...(body.once === undefined ? {} : { once: body.once }),
       ...(body.fold === undefined ? {} : { fold: body.fold }),
       ...(body.card === undefined ? {} : { card: body.card }),
+      ...(body.watch_cmd === undefined ? {} : { watch_cmd: body.watch_cmd }),
       next_due_at: nextAfter(schedule, tz, now),
     });
     emitCronTabUpdate(deps, cron.target_pane);

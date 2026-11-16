@@ -167,7 +167,7 @@ stories in those pages got written.
 |---|---|
 | \`publish\` | a PUBLIC internet url for an artifact somebody asked for |
 | \`cards\` | the pinned value above a conversation that must not scroll away |
-| \`cron\` | the ONLY scheduler on this machine — anything that happens later |
+| \`cron\` | the ONLY scheduler — anything later, incl. \`--watch\` (fire on change) |
 | \`delegate\` | sub-agents, which are panes: \`muxpad agent new\` |
 | \`browser\` | the headless browser, screenshots, and handing it to a person |
 | \`modes\` | Chat mode and Agent mode, and what each one carries |
@@ -638,6 +638,13 @@ the same on every backend, and can be fired by hand before you trust it.
   \`--at\` accepts cron expressions or phrases; \`--tz=<IANA>\` pins a zone.
   \`--pane\` with no value means this chat; use it only when its history is
   essential, and keep that conversation compact.
+- **\`--watch='<shell command>'\` makes the due slot a CHECK, not a fire.** The
+  SERVER runs the command at each slot and wakes an agent only when its output
+  has CHANGED since last time — and hands it that output, already fetched. A
+  watcher that polls with a model turn per interval costs one turn to discover
+  that nothing happened; this costs a subprocess. A command that starts
+  FAILING counts as a change, because a watcher going quiet when the thing it
+  watches breaks is the failure nobody notices.
 - \`muxpad cron list\` (schedules, next due, last run, failure streak),
   \`muxpad cron show <name>\` (+ run history), \`muxpad cron run <name>\`
   (fire NOW — always test a new cron this way), \`muxpad cron pause/resume

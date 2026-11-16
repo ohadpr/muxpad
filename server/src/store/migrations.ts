@@ -1839,6 +1839,22 @@ const MIGRATIONS: Migration[] = [
         db.exec('ALTER TABLE spawn_rounds ADD COLUMN abandoned_at INTEGER');
     },
   },
+  {
+    // A CRON THAT FIRES ONLY WHEN SOMETHING CHANGED.
+    //
+    // `watch_cmd` is a shell command the SERVER runs at each due slot;
+    // `watch_hash` is what its output hashed to last time. Equal means
+    // nothing happened, so no agent turn is spent: the measured cost of the
+    // alternative is a full model turn every interval to discover nothing,
+    // and a watcher staying quiet only because its prompt told it to.
+    version: 56,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      const has = (c: string) => cols.some((x) => x.name === c);
+      if (!has('watch_cmd')) db.exec('ALTER TABLE crons ADD COLUMN watch_cmd TEXT');
+      if (!has('watch_hash')) db.exec('ALTER TABLE crons ADD COLUMN watch_hash TEXT');
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

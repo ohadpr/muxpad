@@ -35,6 +35,7 @@ import { TabStore } from '../store/TabStore.js';
 import type { TabActivity } from '../tab-activity.js';
 import { CronStore } from './CronStore.js';
 import { firesDue } from './schedule.js';
+import { type WatchReading, runWatch, withWatchReading } from './watch.js';
 
 /** Tick cadence. 30s granularity is ample for agent work and cheap: one
  *  indexed query per pass, nothing else, whether there are 0 crons or 200. */
@@ -252,12 +253,38 @@ export class CronScheduler {
     const missed = fires.filter((t) => t < now - CRON_MISSED_GRACE_MS);
     const current = fires[fires.length - 1] as number;
 
+    // ── A WATCH FIRES ONLY WHEN SOMETHING CHANGED ──────────────────────────
+    //
+    // The due slot is now a CHECK, not a fire. Running the command here costs
+    // a subprocess; the alternative costs a model turn — measured on this
+    // machine at one full turn every three minutes to discover that nothing
+    // had happened, with the silence depending on the agent choosing to stay
+    // quiet. A change detector is not a judgement call.
+    //
+    // A FAILING COMMAND FIRES. `curl` that cannot reach a host, a script with
+    // a typo: its output changes, and the agent is the right thing to show it
+    // to. Swallowing it would be a watcher that goes silent exactly when the
+    // thing it watches breaks.
+    let watched: WatchReading | null = null;
+    if (cron.watch_cmd) {
+      watched = await this.readWatch(cron);
+      this.store.setWatchHash(cron.id, watched.hash);
+      if (watched.hash === cron.watch_hash) {
+        // Not a run. One row per check would bury the fires that matter in a
+        // history of nothing happening — the same argument as the quiet-hours
+        // deferral above, which also records only a status.
+        this.store.recordOutcome(cron.id, { at: now, status: 'watch:unchanged', ok: true });
+        this.store.setNextDue(cron.id, this.store.nextFireAfter(cron.id, now - jitter));
+        return;
+      }
+    }
+
     if (cron.catchup === 'all') {
       // Each tick genuinely matters — enqueue them all. They serialize through
       // the pane's queue (one per turn), so this is a batch, not a stampede.
       let last: CronFireResult | null = null;
       for (const due of fires) {
-        const r = await this.fire(cron, due, 0, now);
+        const r = await this.fire(cron, due, 0, now, watched);
         this.record(cron, due, now, r, { capped });
         last = r;
         if (r.defer) break;
@@ -278,7 +305,7 @@ export class CronScheduler {
       // 'once' (and 'skip' with a live current slot): ONE fire, carrying a
       // marker for whatever was collapsed into it.
       const collapsed = cron.catchup === 'once' ? missed.length : 0;
-      const r = await this.fire(cron, current, collapsed, now);
+      const r = await this.fire(cron, current, collapsed, now, watched);
       this.record(cron, current, now, r, { capped });
       if (r.defer) return; // quiet hours — leave the anchor alone
     }
@@ -367,11 +394,23 @@ export class CronScheduler {
 
   // ── Firing ───────────────────────────────────────────────────────────────
 
+  /**
+   * One check of this cron's watch command.
+   *
+   * Runs in the cron's own cwd, so a watch on a repo sees that repo. Bounded
+   * by WATCH_TIMEOUT_MS, and a timeout is itself a reading — see watch.ts for
+   * why a failure must fire rather than go quiet.
+   */
+  private readWatch(cron: Cron): Promise<WatchReading> {
+    return runWatch(cron.watch_cmd as string, { cwd: cron.cwd ?? null });
+  }
+
   private async fire(
     cron: Cron,
     dueAt: number,
     missed: number,
     now: number,
+    watched: WatchReading | null = null,
   ): Promise<CronFireResult> {
     const marker: CronMarker = {
       id: cron.id,
@@ -380,7 +419,7 @@ export class CronScheduler {
       missed,
       ...(cron.card ? { card: cron.card } : {}),
     };
-    const text = renderCronMarker(marker, cron.prompt);
+    const text = renderCronMarker(marker, withWatchReading(cron.prompt, watched));
     return cron.target_kind === 'new-tab'
       ? this.fireNewTab(cron, text, now)
       : this.firePane(cron, text, now, marker);

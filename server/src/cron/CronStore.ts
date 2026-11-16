@@ -32,6 +32,8 @@ interface CronRow {
   fold: number;
   speak: number;
   card: string | null;
+  watch_cmd: string | null;
+  watch_hash: string | null;
   catchup: string;
   overlap: string;
   on_context: string;
@@ -75,6 +77,8 @@ export interface CronCreateInput {
   /** Fire once, then retire. Omitted means "infer from the schedule" — see
    *  `isDatedSchedule`. Pass it to override the inference either way. */
   once?: boolean;
+  /** Run this at each due slot and fire only when its output changed. */
+  watch_cmd?: string | null;
 }
 
 /** SQLite access for `crons` + `cron_runs`. No policy — see CronScheduler. */
@@ -94,8 +98,9 @@ export class CronStore {
            id, name, schedule, tz, prompt, target_kind, target_pane, workspace_id,
            cwd, model, backend, mode, enabled, catchup, overlap, on_context,
            quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
-           last_fire_at, last_status, fail_streak, created_at, once, fold, card
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?, ?, ?)`,
+           last_fire_at, last_status, fail_streak, created_at, once, fold, card,
+           watch_cmd
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -125,6 +130,7 @@ export class CronStore {
         (input.once ?? isDatedSchedule(input.schedule)) ? 1 : 0,
         input.fold ? 1 : 0,
         input.card ?? null,
+        input.watch_cmd ?? null,
       );
     return this.getById(id) as Cron;
   }
@@ -344,6 +350,13 @@ export class CronStore {
       .run(outcome, detail ?? null, runId);
   }
 
+  /** Remember what the watch command's output hashed to, so the next slot can
+   *  tell whether anything happened. Written whether or not it fired: the
+   *  point of reference is the LAST OBSERVATION, not the last fire. */
+  setWatchHash(id: string, hash: string): void {
+    this.db.prepare('UPDATE crons SET watch_hash = ? WHERE id = ?').run(hash, id);
+  }
+
   runs(cronId: string, limit = CRON_RUNS_KEEP): CronRun[] {
     return this.db
       .prepare('SELECT * FROM cron_runs WHERE cron_id = ? ORDER BY fired_at DESC, id DESC LIMIT ?')
@@ -388,6 +401,8 @@ function rowToCron(r: CronRow): Cron {
     fold: r.fold === 1,
     speak: false,
     card: r.card ?? null,
+    watch_cmd: r.watch_cmd ?? null,
+    watch_hash: r.watch_hash ?? null,
     catchup: r.catchup === 'skip' || r.catchup === 'all' ? r.catchup : 'once',
     overlap: r.overlap === 'queue' ? 'queue' : 'skip',
     on_context:
