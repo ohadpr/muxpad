@@ -17,6 +17,7 @@ import {
   type WheelLease,
 } from '../browser/BrowserWheel.js';
 import { type StorageState, mergeCookieChanges } from '../browser/CookieJar.js';
+import { type RemoteBrowserConfig, readRemoteConfig } from '../browser/RemoteBrowser.js';
 import {
   type HandbackOutcome,
   type HandbackPage,
@@ -287,6 +288,8 @@ export function browsersRoutes(deps: {
    * machine awake while one is. Optional for the same reason as resumeAgent.
    */
   onSummonsChange?: (profile: string, waiting: boolean) => void;
+  /** The remote-browser opt-in. Defaults to reading it from the data dir. */
+  remoteBrowser?: () => RemoteBrowserConfig | null;
   /**
    * How long discovery waits for BOTH listeners (Chrome, then the viewer)
    * before giving up with a 504. Injectable only so the test that pins the
@@ -670,7 +673,11 @@ export function browsersRoutes(deps: {
     const path = new URL(c.req.url).pathname.slice(prefix.length) || '/';
     if (path.replace(/\/$/, '') !== '/json/version')
       return c.json({ error: 'use the guarded CDP socket' }, 404);
-    const upstream = `${state.cdpUrl}${path}`;
+    // OPTED IN TO A REMOTE BROWSER: ask the host, not Chrome's local port —
+    // there is no local Chrome, and the host may also have fallen back to one,
+    // so it is the only thing that knows. See RemoteBrowser.ts.
+    const remote = (deps.remoteBrowser ?? (() => readRemoteConfig(deps.dataDir)))();
+    const upstream = remote ? `${state.viewerUrl}/json/version` : `${state.cdpUrl}${path}`;
     const deadline = Date.now() + (deps.cdpReadyTimeoutMs ?? 30_000);
     /**
      * IS THE VIEWER LISTENING YET? Not "is Chrome", which is a different

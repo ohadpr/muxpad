@@ -1,3 +1,4 @@
+import { readRemoteConfig } from '../RemoteBrowser.js';
 import { startBrowserHost } from './run.js';
 
 /**
@@ -38,6 +39,9 @@ const host = await startBrowserHost({
   chromePath: required('chrome'),
   ...(flag('jar') ? { jarPath: flag('jar') as string } : {}),
   ...(flag('api') ? { apiUrl: flag('api') as string } : {}),
+  // Read at every start, so opting in or out takes effect on the next restart
+  // of a browser without touching the server. See RemoteBrowser.ts.
+  remote: readRemoteConfig(required('data-dir')),
 });
 
 console.log(`browser host ready · viewer ${host.url} · cdp ${host.cdpUrl}`);

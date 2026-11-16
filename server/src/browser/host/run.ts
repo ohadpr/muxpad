@@ -38,6 +38,11 @@ import {
 } from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
+import {
+  type RemoteBrowserConfig,
+  chooseBrowserEndpoint,
+  releaseRemoteBrowser,
+} from '../RemoteBrowser.js';
 import { ScreencastSession } from '../ScreencastSession.js';
 import {
   clearSelectMarkExpression,
@@ -94,6 +99,12 @@ export interface BrowserHostOptions {
   apiUrl?: string;
   /** Called when Chrome exits on its own. Defaults to taking this process with it. */
   onChromeExit?: () => void;
+  /**
+   * Drive a browser somewhere else instead of spawning one — see
+   * RemoteBrowser.ts. Null or absent is today's path exactly; a provider that
+   * fails falls back to it.
+   */
+  remote?: RemoteBrowserConfig | null;
   log?: (line: string) => void;
 }
 
@@ -147,99 +158,125 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
    * restarts us either way; the difference is whether each attempt leaves a
    * process behind.
    */
-  if (await portIsLive(spec.url)) {
-    throw new Error(
-      `a browser is already answering on ${spec.url} for profile ${opts.profile} — not starting a second one (stop the owner first)`,
-    );
-  }
+  // ── WHICH BROWSER ─────────────────────────────────────────────────────
+  // A remote one only if somebody opted in AND it answered; everything else is
+  // the local headless shell, started exactly as it always was.
+  const choice = await chooseBrowserEndpoint({
+    config: opts.remote ?? null,
+    profile: opts.profile,
+  });
+  if (choice.kind === 'local' && choice.reason)
+    log(`[remote] using the local browser instead: ${choice.reason}`);
+  const remoteEndpoint = choice.kind === 'remote' ? choice.endpoint : null;
+  if (remoteEndpoint) log(`[remote] driving ${remoteEndpoint}`);
+  const endpoint = remoteEndpoint ?? spec.url;
+  let localChrome: ChildProcess | null = null;
+  let killLocalChrome = () => {};
 
-  mkdirSync(spec.profileDir, { recursive: true });
-  // A lock left by an unclean exit makes every subsequent launch die on
-  // startup, which `muxpad serve` then retries forever. One profile has one
-  // owner, so a lock present as WE start is by definition stale.
-  clearStaleProfileLock(spec.profileDir);
-  const chrome = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  chrome.stderr?.on('data', (b) => log(`[chrome] ${String(b).trimEnd()}`));
-  /**
-   * CHROME DOES NOT OUTLIVE THIS PROCESS. EVER.
-   *
-   * The tidy paths were all covered — `close()` kills it, and the signal
-   * handlers in cli.ts call `close()`. What was not covered is the untidy
-   * one, and it is the one that happened: a throw anywhere in the ~200 lines
-   * of startup below took the process down with Chrome already running, and
-   * nothing killed it. The supervisor restarted the host, which leaked
-   * another, for ten hours.
-   *
-   * `exit` fires for a normal return, an uncaught exception and an unhandled
-   * rejection alike, and `kill` is a synchronous syscall, so it is safe in
-   * that handler. It cannot help if the host is SIGKILLed — nothing can —
-   * but that is now the only way to orphan a browser.
-   */
-  const killChrome = () => {
-    try {
-      chrome.kill('SIGKILL');
-    } catch {
-      // already gone, which is the outcome this wanted
+  if (!remoteEndpoint) {
+    if (await portIsLive(spec.url)) {
+      throw new Error(
+        `a browser is already answering on ${spec.url} for profile ${opts.profile} — not starting a second one (stop the owner first)`,
+      );
     }
-  };
-  process.once('exit', killChrome);
-  // WHEN CHROME DIES, THIS PROCESS DIES. It used to just log, and the result was
-  // a host serving a viewer against a dead browser: the socket opened, no frames
-  // ever came, and /healthz cheerfully said ok. `muxpad serve` already supplies
-  // crash-loop backoff, so exiting is how a restart happens — a second opinion
-  // about recovery, inside a process whose CDP connection is already gone, is
-  // how you get a thing that looks alive and does nothing.
-  chrome.on('exit', (code) => {
-    log(`[chrome] exited ${code}`);
-    if (!closing) onChromeExit();
-  });
 
-  // findChrome deliberately does NOT verify a path inside an app bundle —
-  // stat-ing there is what raises a macOS permission dialog on the real screen.
-  // So a wrong path arrives HERE instead, and this is where it has to become a
-  // sentence rather than an unhandled 'error' event that takes the process down
-  // with a stack trace nobody can act on.
-  let spawnFailure: Error | null = null;
-  chrome.on('error', (err) => {
-    spawnFailure = new Error(`cannot launch ${spec.command}: ${err.message}`);
-    log(`[chrome] ${spawnFailure.message}`);
-  });
+    mkdirSync(spec.profileDir, { recursive: true });
+    // A lock left by an unclean exit makes every subsequent launch die on
+    // startup, which `muxpad serve` then retries forever. One profile has one
+    // owner, so a lock present as WE start is by definition stale.
+    clearStaleProfileLock(spec.profileDir);
+    const chrome = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    chrome.stderr?.on('data', (b) => log(`[chrome] ${String(b).trimEnd()}`));
+    /**
+     * CHROME DOES NOT OUTLIVE THIS PROCESS. EVER.
+     *
+     * The tidy paths were all covered — `close()` kills it, and the signal
+     * handlers in cli.ts call `close()`. What was not covered is the untidy
+     * one, and it is the one that happened: a throw anywhere in the ~200 lines
+     * of startup below took the process down with Chrome already running, and
+     * nothing killed it. The supervisor restarted the host, which leaked
+     * another, for ten hours.
+     *
+     * `exit` fires for a normal return, an uncaught exception and an unhandled
+     * rejection alike, and `kill` is a synchronous syscall, so it is safe in
+     * that handler. It cannot help if the host is SIGKILLed — nothing can —
+     * but that is now the only way to orphan a browser.
+     */
+    const killChrome = () => {
+      try {
+        chrome.kill('SIGKILL');
+      } catch {
+        // already gone, which is the outcome this wanted
+      }
+    };
+    process.once('exit', killChrome);
+    // WHEN CHROME DIES, THIS PROCESS DIES. It used to just log, and the result was
+    // a host serving a viewer against a dead browser: the socket opened, no frames
+    // ever came, and /healthz cheerfully said ok. `muxpad serve` already supplies
+    // crash-loop backoff, so exiting is how a restart happens — a second opinion
+    // about recovery, inside a process whose CDP connection is already gone, is
+    // how you get a thing that looks alive and does nothing.
+    chrome.on('exit', (code) => {
+      log(`[chrome] exited ${code}`);
+      if (!closing) onChromeExit();
+    });
 
-  /**
-   * ── EVERY FAILURE FROM HERE ON KILLS THE BROWSER IT STARTED ────────────
-   *
-   * Chrome is already running by this line. Nothing below used to be guarded,
-   * so any failure — a CDP port that never answered, a refused websocket, a
-   * bad page — propagated out of this function, took the process down, and
-   * LEFT CHROME RUNNING. `muxpad serve` then restarted the host, which
-   * spawned another, which leaked too.
-   *
-   * It is not a slow leak. Measured on this machine: 1,001 orphaned
-   * `chrome-headless-shell` processes, 3,014 processes with their gpu and
-   * utility helpers, against 4,040 on the box — one profile had 452 of them.
-   * The machine was unusable.
-   *
-   * And it could not recover on its own, because every instance of a profile
-   * asks for the SAME debugging port. The first orphan holds it forever, so
-   * each restart times out waiting for a port it can never have, and leaks
-   * one more. The loop is self-feeding: one leak is permanent failure.
-   *
-   * So: one try, one kill, and the error still propagates — a host that
-   * cannot start must still exit, because the supervisor's restart is the
-   * recovery. What changes is that it no longer leaves a process behind to
-   * guarantee the restart fails too.
-   */
-  try {
-    await waitForCdp(spec.url, chrome, () => spawnFailure);
-  } catch (err) {
-    closing = true; // the exit handler above must not call onChromeExit now
-    chrome.kill('SIGKILL');
-    throw err;
+    // findChrome deliberately does NOT verify a path inside an app bundle —
+    // stat-ing there is what raises a macOS permission dialog on the real screen.
+    // So a wrong path arrives HERE instead, and this is where it has to become a
+    // sentence rather than an unhandled 'error' event that takes the process down
+    // with a stack trace nobody can act on.
+    let spawnFailure: Error | null = null;
+    chrome.on('error', (err) => {
+      spawnFailure = new Error(`cannot launch ${spec.command}: ${err.message}`);
+      log(`[chrome] ${spawnFailure.message}`);
+    });
+
+    /**
+     * ── EVERY FAILURE FROM HERE ON KILLS THE BROWSER IT STARTED ────────────
+     *
+     * Chrome is already running by this line. Nothing below used to be guarded,
+     * so any failure — a CDP port that never answered, a refused websocket, a
+     * bad page — propagated out of this function, took the process down, and
+     * LEFT CHROME RUNNING. `muxpad serve` then restarted the host, which
+     * spawned another, which leaked too.
+     *
+     * It is not a slow leak. Measured on this machine: 1,001 orphaned
+     * `chrome-headless-shell` processes, 3,014 processes with their gpu and
+     * utility helpers, against 4,040 on the box — one profile had 452 of them.
+     * The machine was unusable.
+     *
+     * And it could not recover on its own, because every instance of a profile
+     * asks for the SAME debugging port. The first orphan holds it forever, so
+     * each restart times out waiting for a port it can never have, and leaks
+     * one more. The loop is self-feeding: one leak is permanent failure.
+     *
+     * So: one try, one kill, and the error still propagates — a host that
+     * cannot start must still exit, because the supervisor's restart is the
+     * recovery. What changes is that it no longer leaves a process behind to
+     * guarantee the restart fails too.
+     */
+    try {
+      await waitForCdp(spec.url, chrome, () => spawnFailure);
+    } catch (err) {
+      closing = true; // the exit handler above must not call onChromeExit now
+      chrome.kill('SIGKILL');
+      throw err;
+    }
+
+    localChrome = chrome;
+    killLocalChrome = killChrome;
   }
 
   const cdp = new CdpConnection({
-    endpoint: spec.url,
-    onError: (where, err) => log(`[cdp] ${where}: ${err.message}`),
+    endpoint,
+    onError: (where, err) => {
+      log(`[cdp] ${where}: ${err.message}`);
+      // A REMOTE browser has no process here to watch exit, so its connection
+      // closing is the same news: go down, and let the supervisor's restart
+      // ask the provider again — or fall back to the local browser.
+      if (remoteEndpoint && where === 'closed' && !closing) onChromeExit();
+    },
   });
   await cdp.connect();
   const target = await cdp.attachToPage();
@@ -413,7 +450,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     const state = (await response.json()) as { wheel?: { holder: string } };
     return state.wheel?.holder !== 'human';
   });
-  const agentVersion = (await (await fetch(`${spec.url}/json/version`)).json()) as {
+  const agentVersion = (await (await fetch(`${endpoint}/json/version`)).json()) as {
     webSocketDebuggerUrl: string;
   };
   const agentWss = new WebSocketServer({ noServer: true });
@@ -1010,6 +1047,17 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       }
       return;
     }
+    /**
+     * The browser's version document, served from the HOST — whichever browser
+     * that is. The lazy CDP route used to read it straight off Chrome's local
+     * debugging port, which does not exist when the browser is remote; asking
+     * the host instead answers for both, and an answer here also proves the
+     * viewer is listening.
+     */
+    if (full.endsWith('/json/version')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(agentVersion));
+      return;
+    }
     if (path === '/' || path === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(VIEWER_PAGE.html);
       return;
@@ -1151,7 +1199,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
 
   return {
     url: `http://127.0.0.1:${viewerPort}`,
-    cdpUrl: spec.url,
+    cdpUrl: endpoint,
     async close() {
       closing = true;
       // PHOTOGRAPH IT ON THE WAY OUT, before anything is torn down. The card for
@@ -1210,8 +1258,9 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         log(`[host] untidy shutdown: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         clearInterval(heartbeat);
-        chrome.kill();
-        process.off('exit', killChrome);
+        localChrome?.kill();
+        process.off('exit', killLocalChrome);
+        if (remoteEndpoint && opts.remote) await releaseRemoteBrowser(opts.remote, opts.profile);
       }
     },
   };

@@ -122,3 +122,28 @@ describe('a failed start does not leave a browser behind', () => {
     expect(pids, `strays: ${pids.join(',')}`).toEqual([]);
   });
 });
+
+describe('opting in to a remote browser that is not there', () => {
+  /**
+   * The remote path is opt-in and must never break browsing: a provider that
+   * is down sends the host down the local path it always took. The fake Chrome
+   * being SPAWNED is the evidence it got there.
+   */
+  it('falls back to launching the local browser', async () => {
+    const port = await freeReservedPort();
+    const lines: string[] = [];
+    const chromePath = fakeChrome();
+    const start = startBrowserHost({
+      ...opts(chromePath, port, (l) => lines.push(l)),
+      // Port 9 (discard) on loopback refuses at once.
+      remote: { provider: 'http://127.0.0.1:9' },
+    });
+    await expect(start).rejects.toThrow();
+    for (const l of lines) {
+      const pid = Number(/FAKE_CHROME_PID=(\d+)/.exec(l)?.[1]);
+      if (pid) started.push(pid);
+    }
+    expect(lines.some((l) => l.includes('[remote] using the local browser instead'))).toBe(true);
+    expect(lines.some((l) => l.includes('FAKE_CHROME_PID='))).toBe(true);
+  }, 30_000);
+});

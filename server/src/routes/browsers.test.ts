@@ -399,6 +399,51 @@ describe('a browser starts when something reaches for it, not before', () => {
     }
   });
 
+  it('with a REMOTE browser, asks the host — there is no Chrome on the local port', async () => {
+    // RemoteBrowser.ts: the host drives a browser elsewhere and answers the
+    // version document itself. Nothing listens on the profile's cdp port here.
+    const remoteApp = new Hono().route(
+      '/api/browsers',
+      browsersRoutes({
+        db,
+        dataDir: tempDataDir,
+        hostEntry: '/opt/cli.js',
+        cwd: '/home',
+        registry,
+        chromePath: () => CHROME,
+        remoteBrowser: () => ({ provider: 'http://127.0.0.1:9' }),
+        cdpReadyTimeoutMs: 600,
+      }),
+    );
+    const body = (await (
+      await remoteApp.request('/api/browsers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ profile: 'shopping', start: false }),
+      })
+    ).json()) as { cdpUrl: string };
+    const viewerPort = Number(new URL(body.cdpUrl).port) + 100;
+    const viewer = createServer((req, res) => {
+      if (req.url?.endsWith('/json/version')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://vm:9301/devtools/browser/x' }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((r) => viewer.listen(viewerPort, '127.0.0.1', r));
+    try {
+      const res = await remoteApp.request('/api/browsers/shopping/cdp/json/version');
+      expect(res.status).toBe(200);
+      expect((await res.json()) as { webSocketDebuggerUrl: string }).toMatchObject({
+        webSocketDebuggerUrl: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+\/agent-cdp$/),
+      });
+    } finally {
+      await new Promise<void>((r) => viewer.close(() => r()));
+    }
+  });
+
   it('does NOT hand out a socket url before the VIEWER is listening', async () => {
     // THE RACE, and the reason this route waits for two things.
     //
