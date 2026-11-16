@@ -674,6 +674,30 @@ describe('the five-state status model', () => {
     expect(cache.getStatus('p1', true)).toBe('working');
   });
 
+  it('reads a chat parked on a person at its browser as blocked', () => {
+    // Not a sixth status: the same fact as an open question. Kept in its own
+    // set, so answering a question does not lower a summons, and the reverse.
+    const cache = new PtydCache();
+    cache.setAgentBusy('p1', true);
+    const seen: string[] = [];
+    cache.on('paneChange', (id: string) => seen.push(id));
+    cache.setAwaitingPerson(new Set(['p1']));
+    expect(cache.getStatus('p1', false)).toBe('blocked');
+    expect(seen).toEqual(['p1']);
+
+    cache.setBlocked('p1', true);
+    cache.setBlocked('p1', false);
+    expect(cache.getStatus('p1', false)).toBe('blocked');
+
+    // The same set again is not news.
+    cache.setAwaitingPerson(new Set(['p1']));
+    expect(seen).toEqual(['p1']);
+
+    cache.setAwaitingPerson(new Set());
+    expect(cache.getStatus('p1', false)).toBe('working');
+    expect(seen).toEqual(['p1', 'p1']);
+  });
+
   it('gates the pty heuristic to RUNNER-LESS panes (D4)', async () => {
     // The rest of the codebase already tells agents never to trust `busy` for
     // turn state. This makes the sidebar agree: on a runner-owned pane, pty

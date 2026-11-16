@@ -145,6 +145,19 @@ export function useBrowsers({
     [by, doFetch, refresh],
   );
 
+  /**
+   * "I'm done" / "Skip" from a card. Wakes the agent parked on the summons —
+   * the server reads the page and tells it what is there. Closes the viewer if
+   * it was open over this browser: the person has said they are finished.
+   */
+  const answer = useCallback(
+    async (profile: string, outcome: 'done' | 'skip') => {
+      if (openProfile === profile) setOpenProfile(null);
+      await post(`/api/browsers/${profile}/handback`, { by, outcome });
+    },
+    [by, post, openProfile],
+  );
+
   // One card per MOMENT, in the conversation where it happened. See
   // browserMoments — a browser that merely exists produces no cards at all.
   //
@@ -159,6 +172,11 @@ export function useBrowsers({
     [open],
   );
 
+  const answerSync = useCallback(
+    (profile: string, outcome: 'done' | 'skip') => void answer(profile, outcome),
+    [answer],
+  );
+
   const active = browsers.find((b) => b.profile === openProfile) ?? null;
 
   return {
@@ -166,6 +184,8 @@ export function useBrowsers({
     moments,
     /** Takes the wheel and shows the stream. Stable — see `moments`. */
     open: openSync,
+    /** Answers a summons from its card. */
+    answer: answerSync,
     /** Render this anywhere; it is fixed-position and draws nothing when closed. */
     modal: active ? (
       <BrowserModal
@@ -182,7 +202,7 @@ export function useBrowsers({
 
 /** Standalone use: draws every moment in order, then the modal. */
 export function BrowserCards(props: BrowserCardsProps) {
-  const { moments, open, modal, viewportWidth } = useBrowsers(props);
+  const { moments, open, answer, modal, viewportWidth } = useBrowsers(props);
   return (
     <>
       {moments.map((moment: BrowserMoment) => (
@@ -191,6 +211,7 @@ export function BrowserCards(props: BrowserCardsProps) {
           moment={moment}
           {...(viewportWidth !== undefined ? { viewportWidth } : {})}
           onOpen={(mode) => open(moment.browser, mode, browserOpenIntent(moment))}
+          onAnswer={(outcome) => answer(moment.profile, outcome)}
         />
       ))}
       {modal}

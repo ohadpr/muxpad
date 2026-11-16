@@ -749,17 +749,30 @@ describe('handing the browser back', () => {
     expect(h.el('handback').hidden).toBe(true);
   });
 
-  it('releases the lease of whoever actually holds it', async () => {
-    // This page usually did not take the wheel; the card did. Releasing as
-    // somebody else is refused, which is the same as not releasing.
+  it('answers through the handback route, saying Done', async () => {
+    // This page usually did not take the wheel; the card did. The handback
+    // route releases a PERSON's lease whichever of their tabs holds it, so the
+    // page no longer has to look the holder up first.
     const h = run({
       fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
     });
     h.el('handback').fire('click');
     await h.settle();
-    const release = h.fetches.find((f) => f.method === 'DELETE');
-    expect(release?.url).toContain('/wheel');
-    expect(JSON.parse(release?.body ?? '{}')).toMatchObject({ by: 'pane-7' });
+    const answer = h.fetches.find((f) => f.url.endsWith('/handback'));
+    expect(answer?.method).toBe('POST');
+    expect(JSON.parse(answer?.body ?? '{}')).toMatchObject({ outcome: 'done' });
+  });
+
+  it('offers Skip beside Done, and it says Skip', async () => {
+    const h = run({
+      fetchJson: { wheel: { holder: 'human', by: 'pane-7', takenAt: 0, expiresAt: 1000 } },
+    });
+    expect(h.el('skip').hidden).toBe(false);
+    h.el('skip').fire('click');
+    await h.settle();
+    const answer = h.fetches.find((f) => f.url.endsWith('/handback'));
+    expect(JSON.parse(answer?.body ?? '{}')).toMatchObject({ outcome: 'skip' });
+    expect(h.el('skip').hidden).toBe(true);
   });
 
   it('keeps showing the page afterwards, as a watcher', async () => {
@@ -1170,7 +1183,7 @@ describe('Done finishes the errand', () => {
     const h = run(driving);
     h.el('handback').fire('click');
     await h.settle();
-    expect(h.fetches.some((f) => f.url.endsWith('/wheel') && f.method === 'DELETE')).toBe(true);
+    expect(h.fetches.some((f) => f.url.endsWith('/handback') && f.method === 'POST')).toBe(true);
   });
 
   it('stays put when it is framed, and asks the modal to close instead', async () => {

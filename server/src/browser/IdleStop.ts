@@ -32,6 +32,12 @@ export interface IdleStopInput {
   running: boolean;
   /** False while a HUMAN holds the wheel — see BrowserWheel. */
   agentMayDrive: boolean;
+  /**
+   * An agent has summoned a person to this browser and they have not answered
+   * yet (within the hold — see AwaitingPerson.ts). Optional so older callers
+   * read as "nobody asked", which is how they behaved.
+   */
+  awaitingPerson?: boolean;
   idleThresholdMs: number;
 }
 
@@ -48,5 +54,11 @@ export function shouldStopIdleBrowser(i: IdleStopInput): boolean {
   // A human mid-login holds the wheel with no socket of their own between taps
   // — the one case where "nobody is attached" is true and stopping is worst.
   if (!i.agentMayDrive) return false;
+  // THE PAGE SOMEBODY HAS BEEN SENT FOR. The agent raised the card and ended
+  // its turn, so it holds no socket; the person has not arrived, so there is
+  // no viewer. "Nobody attached" is true, and it is the worst moment there is
+  // to stop: measured, a payment checkout filled to its last step was stopped
+  // at 20 minutes and the person arrived at 41 to an about:blank tab.
+  if (i.awaitingPerson) return false;
   return i.report.idleMs >= i.idleThresholdMs;
 }

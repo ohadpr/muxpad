@@ -24,6 +24,8 @@ export interface BrowserEvent {
   reason?: string;
   /** A still of the page was captured for this moment. */
   shot?: boolean;
+  /** On a `resolved`: what the person pressed. */
+  outcome?: 'done' | 'skip';
 }
 
 export interface BrowserCardData {
@@ -87,7 +89,24 @@ export interface BrowserCardView {
    * number with nothing to refer to.
    */
   countdown: boolean;
+  /**
+   * Offer "I'm done" and "Skip".
+   *
+   * The agent that raised this card has ended its turn and is PARKED on it —
+   * the chat reads `blocked` until one of these is pressed, and pressing one is
+   * what wakes it. Closing a viewer used to be the only way to say you had
+   * finished, and nobody does that on purpose; an evening was lost to an agent
+   * waiting on a signal that was never going to come.
+   */
+  answers: boolean;
 }
+
+/**
+ * How long an unanswered summons keeps its buttons — the same hold the server
+ * keeps the chat parked and the browser alive for (AwaitingPerson.ts). Past it
+ * the errand is abandoned, and an old card must not wake an agent about it.
+ */
+export const SUMMONS_HOLD_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Whether to open the stream in a modal or a new tab.
@@ -251,7 +270,12 @@ export function browserMoments(
     // about the BROWSER, so a conversation with two errands in it — one dealt
     // with, one live — would light up both, and the settled one would demand
     // attention for something finished an hour ago.
-    const resolvedAt = events.filter((e) => e.kind === 'resolved').map((e) => e.at);
+    // A newer summons SUPERSEDES an older one — the server's own rule
+    // (outstandingSummons) only ever considers the latest, so an older card
+    // still offering Done would answer a question nobody is asking.
+    const resolvedAt = events
+      .filter((e) => e.kind === 'resolved' || e.kind === 'needs-you')
+      .map((e) => e.at);
     for (const event of events) {
       if (event.kind === 'resolved') continue;
       // AN ANSWERED SUMMONS STOPS ASKING; IT DOES NOT VANISH.
@@ -339,10 +363,20 @@ function isLive(browser: BrowserCardData): boolean {
  * action: offering to open a viewer that is not running is a connection error
  * inside an iframe, which reads as "muxpad is broken".
  */
-export function browserMomentView(moment: BrowserMoment): BrowserCardView {
+export function browserMomentView(
+  moment: BrowserMoment,
+  now: number = Date.now(),
+): BrowserCardView {
   const { browser } = moment;
   const live = isLive(browser);
   const yours = browser.wheel?.holder === 'human';
+  // STILL OPEN, whoever has the wheel: asking, being answered, or abandoned by
+  // a viewer that went away before anyone pressed anything (the wheel lapses
+  // after 90s with nobody watching, and the agent is still parked).
+  const answers =
+    moment.kind === 'needs-you' &&
+    !moment.answered &&
+    (Boolean(browser.needsYou) || yours || now - moment.at < SUMMONS_HOLD_MS);
   // A summons while YOU are already driving is a card asking for something you
   // have already done. It reads as handled, because it is.
   const stillAsking =
@@ -363,6 +397,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
       countdown: false,
       passive: false,
       openable: live,
+      answers,
     };
   }
 
@@ -400,6 +435,7 @@ export function browserMomentView(moment: BrowserMoment): BrowserCardView {
     countdown: yours,
     passive: true,
     openable: live,
+    answers,
   };
 }
 

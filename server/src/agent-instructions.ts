@@ -793,17 +793,26 @@ browser resolved\` puts the hand back down if you get past it on your own.)
 
 A card appears in your conversation, goes loud, and offers them the wheel — on
 their phone if that is where they are. Then **say what you are waiting for and
-stop**, in that turn. Do not poll, do not retry the click, do not try a
-different selector. Somebody dealing with a login is not a race you can win, and
-the retries are pure cost: a session on this machine burned several turns on
-them and got nowhere. **Do not retry.**
+END YOUR TURN.** That is parking, not giving up: your chat reads as blocked in
+the rail, your browser is kept alive (it is not stopped for idleness while the
+card is open), and the card carries **I'm done** and **Skip**. Pressing either
+wakes you with a message saying which, plus the page's current url, title and
+an outline of what is on it. Do not poll, do not retry the click, do not try a
+different selector, and do not hold the turn open waiting — nothing you do
+makes a person faster, and the retries are pure cost.
 
 **While a person has the wheel, you do not.** Taking it is refused with \`409\`
 and a sentence naming why. That is not an error to work around — it means a
 human is typing into the page right now, possibly a card number. Report it and
-wait. When they hand it back, RE-CHECK the page before doing anything: the url
-may have changed and the DOM certainly has, and resuming from a stale snapshot
-is a documented top failure mode for exactly this handoff.
+wait for the card.
+
+**When you are woken, the page has changed under you — act on the message, not
+on memory.** Your browser connection was cut at the handback, so an element ref
+from before it no longer resolves ("Ref eN not found… capture new snapshot"):
+take a fresh snapshot before any click or type. **Skip** means carry on without
+that step, or stop and say what you need instead. A step that failed part-way
+is not replayed automatically: if you cannot tell whether a submit or payment
+went through, look and say so — never press it again to find out.
 
 Nothing above changes the rules further up: still headless, still no window, and
 the file chooser is intercepted so no native dialog ever opens.

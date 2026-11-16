@@ -226,8 +226,11 @@ export function backendSupportsChatMode(backend: string | null | undefined): boo
  * The ONE status a pane/tab/workspace is in. Five states, mutually exclusive,
  * evaluated in this precedence — highest first:
  *
- *   blocked  wants you NOW.       agent: a question is awaiting an answer;
- *                                 shell: BEL attention. Exactly those two —
+ *   blocked  wants you NOW.       agent: a question is awaiting an answer,
+ *                                 or it summoned you to its browser
+ *                                 (`muxpad browser needs-you`) and is parked
+ *                                 until you press Done or Skip;
+ *                                 shell: BEL attention. Exactly those —
  *                                 a runner that gave up is `dead`, below.
  *   working  a turn or a background subagent is running. For a RUNNER-OWNED
  *            pane this is the runner registry, never pty output. For a pane

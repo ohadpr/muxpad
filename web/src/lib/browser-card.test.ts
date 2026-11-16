@@ -4,6 +4,7 @@ import {
   type BrowserEvent,
   type BrowserMoment,
   type BrowserWheelLease,
+  SUMMONS_HOLD_MS,
   browserMomentView,
   browserMoments,
   browserOpenIntent,
@@ -769,5 +770,73 @@ describe('browser moments outside the loaded window', () => {
   it('flushes nothing at the tail before the log has a timeline', () => {
     // The same edge that put thirty spawn cards at the reader's feet.
     expect(shape(injectBrowserMoments([], [moment(1)], render))).toEqual([]);
+  });
+});
+
+describe("the card's way back: I'm done, and Skip", () => {
+  /**
+   * The agent ended its turn on this card and is parked until one of these is
+   * pressed. Closing a viewer used to be the only handback there was.
+   */
+  const summons = (over: Record<string, unknown> = {}): BrowserMoment => ({
+    kind: 'needs-you',
+    at: 1_000,
+    reason: 'Cloudflare check before Pay',
+    shotUrl: null,
+    answered: false,
+    profile: 'shopping',
+    browser: { ...base, needsYou: { reason: 'Cloudflare check before Pay', at: 1_000 } },
+    ...over,
+  });
+
+  it('offers them while the summons is asking', () => {
+    expect(browserMomentView(summons(), 2_000).answers).toBe(true);
+  });
+
+  it('keeps offering them while you are answering it', () => {
+    const yours = summons({
+      browser: {
+        ...base,
+        needsYou: null,
+        wheel: { holder: 'human', by: 'p', takenAt: 0, expiresAt: 5_000 },
+      },
+    });
+    expect(browserMomentView(yours, 2_000).answers).toBe(true);
+  });
+
+  it('keeps offering them after the viewer lapsed without anyone pressing anything', () => {
+    // The wheel goes back after 90s with nobody watching; the agent is still
+    // parked, so the card is still the way to wake it.
+    const lapsed = summons({ browser: { ...base, needsYou: null, wheel: null } });
+    expect(browserMomentView(lapsed, 60_000).answers).toBe(true);
+  });
+
+  it('stops once it has been answered', () => {
+    expect(browserMomentView(summons({ answered: true }), 2_000).answers).toBe(false);
+  });
+
+  it('stops once the hold has passed, so an old card cannot wake an agent', () => {
+    const lapsed = summons({ browser: { ...base, needsYou: null, wheel: null } });
+    expect(browserMomentView(lapsed, 1_000 + SUMMONS_HOLD_MS).answers).toBe(false);
+  });
+
+  it('never appears on a card that is not a summons', () => {
+    expect(browserMomentView(summons({ kind: 'opened' }), 2_000).answers).toBe(false);
+  });
+
+  it('treats an older summons as answered by a newer one', () => {
+    const moments = browserMoments(
+      [
+        {
+          ...base,
+          events: [
+            { kind: 'needs-you', at: 100, tabId: 'tab-1', reason: 'first' },
+            { kind: 'needs-you', at: 200, tabId: 'tab-1', reason: 'second' },
+          ],
+        },
+      ],
+      'tab-1',
+    );
+    expect(moments.map((m) => m.answered)).toEqual([true, false]);
   });
 });

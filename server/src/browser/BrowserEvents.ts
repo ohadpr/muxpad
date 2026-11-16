@@ -42,6 +42,8 @@ export interface BrowserEvent {
    * card without a picture.
    */
   shot?: boolean;
+  /** On a `resolved`: what the person pressed — see ResumeAfterHandback. */
+  outcome?: 'done' | 'skip';
 }
 
 /**

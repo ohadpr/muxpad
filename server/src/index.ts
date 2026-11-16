@@ -21,6 +21,7 @@ import { adoptServePanes } from './apps/adopt-serve-panes.js';
 import { ArchiveDb } from './archive/ArchiveDb.js';
 import { Archiver } from './archive/Archiver.js';
 import { startAttachmentReaper } from './attachment-reaper.js';
+import { awaitingPanes, liveSummonsAt } from './browser/AwaitingPerson.js';
 import { ensureBrowserApp, listBrowserApps } from './browser/BrowserApps.js';
 import { BrowserEvents } from './browser/BrowserEvents.js';
 import { BrowserOwner } from './browser/BrowserOwner.js';
@@ -985,6 +986,13 @@ const BROWSER_IDLE_STOP_MS = 20 * 60 * 1000;
 // enough that a closed view stops blocking the agent for ten minutes.
 const BROWSER_WHEEL_GRACE_MS = 90 * 1000;
 const stopIdleBrowsers = async () => {
+  // The parked-on-a-person set expires (SUMMONS_HOLD_MS) and follows pane
+  // respawns; nothing else re-derives it between summonses, so this sweep does.
+  try {
+    cache.setAwaitingPerson(awaitingPanes(db));
+  } catch (err) {
+    console.error('[browser] awaiting-person sync failed', err);
+  }
   try {
     for (const row of listBrowserApps(db)) {
       if (row.state !== 'running') continue;
@@ -1019,6 +1027,8 @@ const stopIdleBrowsers = async () => {
           report: idle,
           running: true,
           agentMayDrive: new BrowserWheel(db).canDrive(row.profile, 'agent'),
+          awaitingPerson:
+            liveSummonsAt(new BrowserEvents(db).list(row.profile), Date.now()) !== null,
           idleThresholdMs: BROWSER_IDLE_STOP_MS,
         })
       )

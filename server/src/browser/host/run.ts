@@ -29,6 +29,7 @@ import {
   focusProbeExpression,
   loginFormExpression,
 } from '../FocusProbe.js';
+import { pageOutlineExpression } from '../HandbackPage.js';
 import { appendKeyboardLog } from '../KeyboardLog.js';
 import {
   emulationParams,
@@ -937,6 +938,46 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
       } finally {
         clearTimeout(timer);
       }
+      return;
+    }
+    /**
+     * A PERSON HAS HANDED THE BROWSER BACK. Two things happen, both for the
+     * agent that is about to be woken.
+     *
+     * EVERY AGENT SOCKET IS CUT. They were all opened before the person took
+     * over, and an agent holding one still holds the element references it
+     * took then — refs into a page somebody else has since clicked through.
+     * playwright-mcp drops its whole context when its connection closes and
+     * builds a fresh one on the next tool call, so a ref from before the
+     * handoff answers "Ref eN not found in the current page snapshot" instead
+     * of clicking whatever now sits where that element used to be. That is the
+     * re-check made mechanical: the stale ref is REFUSED, not trusted.
+     *
+     * AND THE PAGE IS READ, so the message that wakes the agent carries it. See
+     * HandbackPage.ts — labels and filled/empty, never a value.
+     */
+    if (path === '/handback' && req.method === 'POST') {
+      const severed = agentSockets.size;
+      for (const socket of [...agentSockets]) {
+        try {
+          socket.close(4001, 'a person had the browser — reconnect and take a fresh snapshot');
+        } catch {
+          // Already going; that is the outcome this wanted.
+        }
+      }
+      let page: unknown = null;
+      try {
+        const read = (await cdp.send('Runtime.evaluate', {
+          expression: pageOutlineExpression(),
+          returnByValue: true,
+        })) as unknown as { result?: { value?: unknown } };
+        page = read.result?.value ?? null;
+      } catch {
+        // An unreadable page is reported as unread, not as an empty one.
+      }
+      res
+        .writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ severed, page }));
       return;
     }
     if (path === '/handoff' && req.method === 'POST') {

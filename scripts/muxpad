@@ -1796,6 +1796,7 @@ cmd_browser_needs_you() {
      + (if $tab == "" then {} else {tabId: $tab} end)')"
   http_request POST "/api/browsers/$profile/needs-you" "$body" >/dev/null
   printf 'asked for a person: %s\n' "$reason"
+  printf 'now say what you are waiting for and END YOUR TURN — the card'"'"'s Done/Skip wakes you with the page as it is.\n'
 }
 
 # The agent got past it on its own; put the hand down.
@@ -1825,7 +1826,8 @@ usage:
   needs-you summons a person to the browser THIS chat is driving, and rings
   the thing that needs them. Walk to the wall first — the login form, the
   captcha, the payment step — then call it, say what you are waiting for and
-  STOP. Do not poll and do not retry.
+  END YOUR TURN. The chat parks as blocked; the card's "I'm done" / "Skip"
+  wakes you with the page's current url and outline. Do not poll, do not retry.
 EOF
       return 1
       ;;

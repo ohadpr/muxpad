@@ -27,6 +27,32 @@ describe('what the agent is told when the browser comes back', () => {
   it('survives a reason that is only whitespace', () => {
     expect(handbackMessage('   ')).toBe(handbackMessage(null));
   });
+
+  it('says which button was pressed', () => {
+    expect(handbackMessage('a login', 'done')).toContain('pressed Done');
+    const skipped = handbackMessage('a login', 'skip');
+    expect(skipped).toContain('pressed Skip');
+    expect(skipped).toMatch(/carry on without it/);
+  });
+
+  it('carries the page as it is now, so re-reading is not left to memory', () => {
+    const text = handbackMessage('a login', 'done', {
+      url: 'https://shop.example/account',
+      title: 'Your account',
+      outline: ['heading: Welcome back'],
+    });
+    expect(text).toContain('https://shop.example/account');
+    expect(text).toContain('Your account');
+    expect(text).toContain('heading: Welcome back');
+  });
+
+  it('says plainly when the page could not be read, rather than implying it is empty', () => {
+    expect(handbackMessage('a login', 'done', null)).toContain('could not be read');
+  });
+
+  it('names the screenshot when there is one', () => {
+    expect(handbackMessage(null, 'done', null, '/data/shot.jpg')).toContain('/data/shot.jpg');
+  });
 });
 
 describe('when a hand-back should wake somebody', () => {
@@ -127,8 +153,9 @@ describe('whether anybody is still being waited on', () => {
    * is how this was caught.
    */
   it('finds a summons nobody has answered', () => {
-    expect(outstandingSummons([{ kind: 'needs-you', reason: 'a login' }])).toEqual({
+    expect(outstandingSummons([{ kind: 'needs-you', reason: 'a login', at: 5 }])).toEqual({
       reason: 'a login',
+      at: 5,
     });
   });
 
@@ -143,9 +170,9 @@ describe('whether anybody is still being waited on', () => {
       outstandingSummons([
         { kind: 'needs-you', reason: 'a login' },
         { kind: 'resolved' },
-        { kind: 'needs-you', reason: 'a captcha' },
+        { kind: 'needs-you', reason: 'a captcha', at: 9 },
       ]),
-    ).toEqual({ reason: 'a captcha' });
+    ).toEqual({ reason: 'a captcha', at: 9 });
   });
 
   it('ignores moments that are not summonses', () => {

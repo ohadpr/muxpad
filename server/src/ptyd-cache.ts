@@ -165,6 +165,8 @@ export class PtydCache extends EventEmitter {
   // (not in PaneState) for the same reason as agentBusy: pty lifecycle must not
   // be able to clear it.
   private readonly blocked = new Set<string>();
+  /** Panes waiting on a person at their browser — see setAwaitingPerson. */
+  private awaitingPerson: Set<string> = new Set();
   // Panes whose runner exhausted its automatic restarts (respawns.gaveUp) or
   // reported a fatal it can't come back from. Mirrored from the ws layer.
   private readonly dead = new Set<string>();
@@ -583,8 +585,9 @@ export class PtydCache extends EventEmitter {
   /**
    * The pane's ONE status (see PaneStatus). Precedence, highest first:
    *
-   *   blocked  a question awaits the user, or a BEL rang. Those two only — a
-   *            runner that gave up is `dead`, two lines down.
+   *   blocked  a question awaits the user, a browser summons is outstanding,
+   *            or a BEL rang. Those only — a runner that gave up is `dead`,
+   *            two lines down.
    *   working  a turn is in flight, OR the durable subagent roster is non-empty,
    *            OR a backgrounded shell command is still running, OR — only for
    *            a pane with NO runner — the pty output heuristic
@@ -601,7 +604,12 @@ export class PtydCache extends EventEmitter {
    * the sidebar agree with them.
    */
   getStatus(id: string, unread: boolean): PaneStatus {
-    if (this.blocked.has(id) || (this.state.get(id)?.attention ?? false)) return 'blocked';
+    if (
+      this.blocked.has(id) ||
+      this.awaitingPerson.has(id) ||
+      (this.state.get(id)?.attention ?? false)
+    )
+      return 'blocked';
     // ── A BACKGROUNDED COMMAND IS WORK TOO ──────────────────────────────
     //
     // It counts for exactly the reason a subagent roster does, and the owner
@@ -624,6 +632,32 @@ export class PtydCache extends EventEmitter {
     if (this.dead.has(id)) return 'dead';
     if (unread) return 'ready';
     return 'idle';
+  }
+
+  /**
+   * The panes whose agent has summoned a person to its browser and is waiting
+   * for them — see browser/AwaitingPerson.ts.
+   *
+   * `blocked`, not a sixth status: it is the same fact as an open question —
+   * this chat cannot move until you do something — and the rail already knows
+   * how to say that. Kept in its OWN set rather than folded into `blocked`,
+   * because the two are cleared by different events: answering a question must
+   * not lower a summons, and handing a browser back must not dismiss a
+   * question.
+   *
+   * Replaced WHOLESALE. The waiting set is derived from the browser event log,
+   * which is the source of truth, so the caller recomputes it and hands over
+   * the answer; only the panes that changed are announced.
+   */
+  setAwaitingPerson(ids: ReadonlySet<string>): void {
+    const touched = new Set<string>();
+    for (const id of this.awaitingPerson) if (!ids.has(id)) touched.add(id);
+    for (const id of ids) if (!this.awaitingPerson.has(id)) touched.add(id);
+    if (touched.size === 0) return;
+    const before = new Map([...touched].map((id) => [id, this.getStatus(id, false)]));
+    this.awaitingPerson = new Set(ids);
+    for (const id of touched)
+      if (this.getStatus(id, false) !== before.get(id)) this.emit('paneChange', id);
   }
 
   /** The pane's agent is waiting on an answer (a `question` frame is open). */

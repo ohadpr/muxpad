@@ -276,3 +276,45 @@ it('shares the iframe claimant and updates the modal after takeover without relo
   await click(buttons(host).find((b) => b.textContent === 'Done'));
   expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ by: 'pane-7' });
 });
+
+describe('answering a summons from the card', () => {
+  const summoned = () =>
+    browser({
+      needsYou: { reason: 'Captcha before Pay', at: Date.now() },
+      events: [{ kind: 'needs-you', at: Date.now(), tabId: 'tab-1', reason: 'Captcha before Pay' }],
+    });
+
+  it("posts I'm done to the handback route, as the person", async () => {
+    const { impl, calls } = fakeFetch(() => [summoned()]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
+    await click(buttons(host).find((b) => b.textContent === 'I’m done'));
+    const answer = calls.find((c) => c.url.endsWith('/handback'));
+    expect(answer).toMatchObject({
+      url: '/api/browsers/shopping/handback',
+      method: 'POST',
+      body: { by: 'pane-7', outcome: 'done' },
+    });
+  });
+
+  it('posts Skip without opening anything first', async () => {
+    const { impl, calls } = fakeFetch(() => [summoned()]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
+    await click(buttons(host).find((b) => b.textContent === 'Skip'));
+    expect(calls.some((c) => c.url.endsWith('/wheel/take'))).toBe(false);
+    expect(calls.find((c) => c.url.endsWith('/handback'))?.body).toMatchObject({
+      outcome: 'skip',
+    });
+  });
+
+  it('offers neither on a card that is not asking for anything', async () => {
+    const { impl } = fakeFetch(() => [browser()]);
+    const { host } = await mount(
+      <BrowserCards by="pane-7" tabId="tab-1" fetchImpl={impl} pollMs={100000} />,
+    );
+    expect(buttons(host).some((b) => b.textContent === 'Skip')).toBe(false);
+  });
+});

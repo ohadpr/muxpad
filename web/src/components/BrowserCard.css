@@ -462,3 +462,33 @@
     max-height: 116px;
   }
 }
+
+/* "I'm done" / "Skip" — the handback. A row of its own under everything else,
+   because on a phone these are the reason the card is open. */
+.browser-card__answers {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.browser-card__answer {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  min-height: 32px;
+}
+.browser-card__answer--done {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
+}
+.browser-card__answer:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

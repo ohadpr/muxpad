@@ -6,6 +6,8 @@ import { apiAuth, authMode, initApiAuth, throttleRefusal } from './api-auth.js';
 import type { AppRegistry } from './apps/AppRegistry.js';
 import type { AppStatusProbe } from './apps/AppStatus.js';
 import type { ArchiveDb } from './archive/ArchiveDb.js';
+import { awaitingPanes } from './browser/AwaitingPerson.js';
+import { KeepAwake } from './browser/KeepAwake.js';
 import { wakeBrowser } from './browser/WakeBrowser.js';
 import { findChrome } from './browser/findChrome.js';
 import { browserHostEntry } from './browser/hostEntry.js';
@@ -461,6 +463,10 @@ export function createApp(deps: AppDeps): Hono {
   // nothing that could start a browser, and a route that 500s on every call is
   // worse than a 404.
   if (resolved.apps?.registry) {
+    const keepAwake = new KeepAwake();
+    // A server that restarts mid-summons must come back with the chat still
+    // reading as parked — the event log survived, so the state should too.
+    resolved.cache.setAwaitingPerson(awaitingPanes(resolved.db));
     app.route(
       '/api/browsers',
       browsersRoutes({
@@ -480,6 +486,14 @@ export function createApp(deps: AppDeps): Hono {
                 resolved.agentBridge?.send(paneId, text),
             }
           : {}),
+        // A summons parks its chat as `blocked` until the card answers it, and
+        // keeps this machine awake for the person on their way. See
+        // browser/AwaitingPerson.ts and browser/KeepAwake.ts.
+        onSummonsChange: (profile: string, waiting: boolean) => {
+          resolved.cache.setAwaitingPerson(awaitingPanes(resolved.db));
+          if (waiting) keepAwake.hold(profile);
+          else keepAwake.release(profile);
+        },
       }),
     );
     // The viewer, served underneath muxpad's own origin so the link a person is

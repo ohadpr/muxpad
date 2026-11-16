@@ -1164,6 +1164,7 @@ export function ChatPane({
   const {
     moments: browserMoments,
     open: openBrowser,
+    answer: answerBrowser,
     modal: browserModal,
   } = useBrowsers({ by: paneId, tabId: myChat?.tabId ?? '' });
   // A link tapped in a message opens in a sheet over the chat when the page can
@@ -4746,6 +4747,7 @@ export function ChatPane({
                       onOpen={(mode) =>
                         openBrowser(moment.browser, mode, browserOpenIntent(moment))
                       }
+                      onAnswer={(outcome) => answerBrowser(moment.profile, outcome)}
                     />
                   ),
                   // The same window floor the cards get — a browser opened before the
@@ -4999,6 +5001,7 @@ export function ChatPane({
     // ago keeps shouting, because the memo never recomputes.
     browserMoments,
     openBrowser,
+    answerBrowser,
     // Same again for the action cards: they live IN the transcript, so it has
     // to rebuild when one lands or resolves — otherwise a card says "waiting
     // for you" forever over a message that was approved.

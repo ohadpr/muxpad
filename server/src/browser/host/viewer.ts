@@ -49,6 +49,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   /* Once the password field has gone the errand is probably over, and this is
      the only thing left to press. Loud enough to be found without reading. */
   #handback.ready{background:#2f7d4a;border-color:#2f7d4a;color:#fff}
+  #skip{font-size:11px;white-space:nowrap}
   /* An out-of-date page is worth interrupting for: everything measured on one is
      measured on code that is no longer there. */
   #reloadPage{background:#8f3f3f;border-color:#8f3f3f;color:#fff;font-size:11px;white-space:nowrap}
@@ -185,6 +186,7 @@ export const VIEWER_HTML = String.raw`<!doctype html>
   <button id="signin" title="fill a sign-in form from your password manager" hidden>&#128273; Sign in</button>
   <button id="paste" title="paste from your clipboard into the page">&#128203; Paste</button>
   <button id="takeover" title="take the wheel so you can type" hidden>Take over</button>
+  <button id="skip" title="give it back and tell the agent to carry on without this" hidden>Skip</button>
   <button id="handback" title="give the browser back to the agent" hidden>Done</button>
   <button id="reloadPage" title="this page is running an older version of muxpad" hidden>&#8679; Update muxpad</button>
   <span id="url" title="">–</span>
@@ -805,6 +807,7 @@ sink.addEventListener('keydown', (e) => {
 // forwarding input.
 const takeover = document.getElementById('takeover')
 const handback = document.getElementById('handback')
+const skip = document.getElementById('skip')
 const profileFromPath = () => location.pathname.split('/').filter(Boolean)[1]
 const claimant = () => new URLSearchParams(location.search).get('by') || ('viewer-' + profileFromPath())
 const applyWatching = () => {
@@ -816,6 +819,7 @@ const applyWatching = () => {
   // minutes of nothing, at the end of every handoff, on the surface the handoff
   // was built for.
   handback.hidden = watching
+  skip.hidden = watching
   msg.textContent = watching ? 'watching — touch the page to drive' : ''
 }
 takeover.addEventListener('click', () => takeTheWheel())
@@ -832,16 +836,20 @@ applyWatching()
  * browser back mid-two-factor. So it is a button, and an abandoned lease is
  * left to lapse on its own.
  */
-handback.addEventListener('click', async () => {
+// Done and Skip are the same gesture with a different answer: either way the
+// person is finished with the page. The server releases their lease, reads the
+// page and wakes the agent that asked, telling it which was pressed — see
+// POST /:profile/handback.
+handback.addEventListener('click', () => giveBack('done'))
+skip.addEventListener('click', () => giveBack('skip'))
+async function giveBack(outcome) {
   const profile = profileFromPath()
   if (!profile) return
   try {
-    const r = await fetch('/api/browsers/' + profile)
-    const lease = r.ok ? (await r.json())?.wheel : null
-    await fetch('/api/browsers/' + profile + '/wheel', {
-      method: 'DELETE',
+    await fetch('/api/browsers/' + profile + '/handback', {
+      method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ by: lease?.by ?? ('viewer-' + profile) }),
+      body: JSON.stringify({ by: claimant(), outcome }),
     })
     // Still looking, no longer driving — the agent can get on with it.
     watching = true
@@ -871,7 +879,7 @@ handback.addEventListener('click', async () => {
       try { window.parent.postMessage({ muxpad: 'handback' }, location.origin) } catch { /* not ours to close */ }
     }
   } catch { msg.textContent = 'could not reach muxpad' }
-})
+}
 
 /**
  * TAKES THE WHEEL BECAUSE SOMEBODY TAPPED A TEXT FIELD.

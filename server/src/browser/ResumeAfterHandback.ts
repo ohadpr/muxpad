@@ -33,11 +33,11 @@ import type Database from 'better-sqlite3';
  * itself retires on, so the two cannot drift apart.
  */
 export function outstandingSummons(
-  events: readonly { kind: string; reason?: string }[],
-): { reason: string } | null {
-  let waiting: { reason: string } | null = null;
+  events: readonly { kind: string; reason?: string; at?: number }[],
+): { reason: string; at: number } | null {
+  let waiting: { reason: string; at: number } | null = null;
   for (const e of events) {
-    if (e.kind === 'needs-you') waiting = { reason: e.reason ?? '' };
+    if (e.kind === 'needs-you') waiting = { reason: e.reason ?? '', at: e.at ?? 0 };
     else if (e.kind === 'resolved') waiting = null;
   }
   return waiting;
@@ -50,6 +50,23 @@ export interface HandbackNudge {
   text: string;
 }
 
+/** What the person pressed. `skip` means "carry on without it". */
+export type HandbackOutcome = 'done' | 'skip';
+
+/**
+ * The page as it is at the moment of the handback, read by the host.
+ *
+ * `outline` is a short list of what is on screen — headings, buttons, links,
+ * and every field with its LABEL and whether it is filled. Never a field's
+ * value: a person has just been typing on this page, and what they typed is
+ * very often a card number or a password.
+ */
+export interface HandbackPage {
+  url: string;
+  title: string;
+  outline: string[];
+}
+
 /**
  * What the agent is told.
  *
@@ -60,13 +77,37 @@ export interface HandbackNudge {
  * request — so this says what happened and leaves the next move where it
  * belongs.
  *
- * The RE-CHECK is the load-bearing sentence. A resumed agent acting on the
- * snapshot it had before the handoff is the documented failure mode of this
- * whole exchange: the url has usually changed and the DOM certainly has.
+ * THE PAGE RIDES ALONG. "Look at it before you act" used to be the whole of
+ * the re-check, and a sentence is a request: the agent that acted on its old
+ * snapshot anyway is the documented failure of this exchange. So the message
+ * carries the page as it is NOW — url, title, what is on it — and the agent's
+ * browser connection was cut at the same moment (see the host's /handback), so
+ * any element reference from before the handoff is refused rather than obeyed.
  */
-export function handbackMessage(reason: string | null): string {
+export function handbackMessage(
+  reason: string | null,
+  outcome: HandbackOutcome = 'done',
+  page: HandbackPage | null = null,
+  shotPath: string | null = null,
+): string {
   const what = reason?.trim() ? ` (you asked: ${reason.trim()})` : '';
-  return `The browser is yours again${what} — I have finished with it and handed it back. The page has almost certainly changed, so look at it before you act on anything you saw before the handoff.`;
+  const head =
+    outcome === 'skip'
+      ? `They pressed Skip${what} — they will not do it. The browser is yours again; carry on without it, or stop and say what you need instead.`
+      : `They pressed Done${what} — the browser is yours again.`;
+  const lines = [head, 'The page may have changed while they had it.'];
+  if (page) {
+    lines.push('', `The page now: ${page.url}${page.title ? ` — "${page.title}"` : ''}`);
+    if (page.outline.length) lines.push(...page.outline.map((l) => `  ${l}`));
+  } else {
+    lines.push('', 'The page could not be read just now.');
+  }
+  if (shotPath) lines.push(`Screenshot: ${shotPath}`);
+  lines.push(
+    '',
+    'Your browser connection was reset, so element refs from before the handoff no longer resolve: take a fresh snapshot before you click or type anything.',
+  );
+  return lines.join('\n');
 }
 
 /**
@@ -109,6 +150,9 @@ export function nudgeForHandback(input: {
   needsYou: { reason: string } | null;
   /** The pane the owning conversation is running in, if it has one. */
   paneId: string | null;
+  outcome?: HandbackOutcome;
+  page?: HandbackPage | null;
+  shotPath?: string | null;
 }): HandbackNudge | null {
   // Not the holder: the release failed, so nothing was handed anywhere.
   if (!input.held || input.held.by !== input.by) return null;
@@ -117,5 +161,13 @@ export function nudgeForHandback(input: {
   // Nobody was waiting — this person was looking, not helping.
   if (!input.needsYou) return null;
   if (!input.paneId) return null;
-  return { paneId: input.paneId, text: handbackMessage(input.needsYou.reason) };
+  return {
+    paneId: input.paneId,
+    text: handbackMessage(
+      input.needsYou.reason,
+      input.outcome ?? 'done',
+      input.page ?? null,
+      input.shotPath ?? null,
+    ),
+  };
 }

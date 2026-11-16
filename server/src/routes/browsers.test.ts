@@ -24,6 +24,10 @@ let registry: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> 
 const CHROME = { path: '/bin/chrome', source: 'test' };
 
 let tempDataDir: string;
+/** What the fake host reports the page to be at a handback. */
+let hostPage: unknown;
+let handbackCalls: number;
+let summonsChanges: Array<{ profile: string; waiting: boolean }>;
 let resumed: Array<{ paneId: string; text: string }>;
 const resumeAgent = (paneId: string, text: string) => {
   resumed.push({ paneId, text });
@@ -35,10 +39,21 @@ beforeEach(() => {
     const url = String(input);
     if (url.endsWith('/agent-quiesce') || url.endsWith('/handoff'))
       return Promise.resolve(new Response('{}'));
+    if (url.endsWith('/handback')) {
+      handbackCalls++;
+      return Promise.resolve(new Response(JSON.stringify({ severed: 1, page: hostPage })));
+    }
     return realFetch(input, init);
   });
   tempDataDir = mkdtempSync(join(tmpdir(), 'browsers-route-'));
   resumed = [];
+  hostPage = {
+    url: 'https://shop.example/checkout',
+    title: 'Checkout',
+    outline: ['heading: Review your order', 'field "Card number": filled', 'button: Pay'],
+  };
+  handbackCalls = 0;
+  summonsChanges = [];
   db = new Database(':memory:');
   db.exec(`CREATE TABLE apps (
     id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
@@ -74,6 +89,7 @@ beforeEach(() => {
       chromePath: () => CHROME,
       tailnetHost: () => 'example-host.example-tailnet.ts.net',
       resumeAgent,
+      onSummonsChange: (profile, waiting) => summonsChanges.push({ profile, waiting }),
       // The real deadline is 30s. Tests that exercise the never-ready path
       // would otherwise sit out all of it, and a 30s test is a 30s shard.
       cdpReadyTimeoutMs: 600,
@@ -590,12 +606,30 @@ describe('the moments a conversation shows', () => {
   });
 
   it('does not record a "resolved" when nothing was asking', async () => {
+    // It used to, despite this test's name — the assertion said
+    // ['opened', 'resolved']. A `resolved` with no summons before it closes
+    // nothing, and it would make the log read as an errand that never was.
     await ensure();
     await post('/api/browsers/shopping/opened', {});
     await post('/api/browsers/shopping/wheel/take', { by: 'pane-7' });
     const res = await del('/api/browsers/shopping/wheel', { by: 'pane-7' });
     const body = (await res.json()) as { events: Array<{ kind: string }> };
-    expect(body.events.map((e) => e.kind)).toEqual(['opened', 'resolved']);
+    expect(body.events.map((e) => e.kind)).toEqual(['opened']);
+  });
+
+  it('closes the errand when the agent gets past it alone', async () => {
+    // `muxpad browser resolved` lowered the flag and left the summons open, so
+    // the chat kept reading as parked and a later release woke the agent
+    // about a handoff it had already abandoned.
+    await ensure();
+    await post('/api/browsers/shopping/needs-you', { reason: 'captcha' });
+    const res = await app.request('/api/browsers/shopping/needs-you', { method: 'DELETE' });
+    const body = (await res.json()) as { events: Array<{ kind: string }> };
+    expect(body.events.map((e) => e.kind)).toEqual(['needs-you', 'resolved']);
+    expect(summonsChanges).toEqual([
+      { profile: 'shopping', waiting: true },
+      { profile: 'shopping', waiting: false },
+    ]);
   });
 });
 
@@ -1006,4 +1040,110 @@ it('answers a stale client’s retired link-open with a STRING error — an obje
   expect(res.status).toBe(410);
   const body = (await res.json()) as { error: unknown };
   expect(typeof body.error).toBe('string');
+});
+
+describe("answering a summons: I'm done, and Skip", () => {
+  /**
+   * The evening this was built for: a checkout walked to its last step, a
+   * summons for a human check, the agent ended its turn — and the person, on a
+   * phone, had no way to say "done" except typing it into the chat. Closing a
+   * viewer was the only handback there was, and nobody does that on purpose.
+   */
+  const summoned = async () => {
+    await ensure({ profile: 'shopping', tabId: 'TAB1' });
+    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    await post('/api/browsers/shopping/needs-you', { reason: 'Cloudflare check before Pay' });
+  };
+
+  it('Done wakes the agent with the page as it is NOW', async () => {
+    await summoned();
+    await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
+    const res = await post('/api/browsers/shopping/handback', {
+      by: 'card-1',
+      outcome: 'done',
+    });
+    expect(res.status).toBe(200);
+    expect(resumed).toHaveLength(1);
+    const text = resumed[0]?.text ?? '';
+    expect(resumed[0]?.paneId).toBe('pane-9');
+    expect(text).toContain('pressed Done');
+    expect(text).toContain('Cloudflare check before Pay');
+    expect(text).toContain('https://shop.example/checkout');
+    expect(text).toContain('field "Card number": filled');
+    expect(text).toMatch(/fresh snapshot/);
+  });
+
+  it('cuts the agent’s old connection BEFORE it is woken', async () => {
+    // The stale-ref guard lives in the host; this pins that the route asks.
+    await summoned();
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    expect(handbackCalls).toBe(1);
+  });
+
+  it('Skip wakes it too, and says to carry on without it', async () => {
+    await summoned();
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'skip' });
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.text).toContain('pressed Skip');
+    expect(resumed[0]?.text).toMatch(/carry on without it/);
+  });
+
+  it('works without the person ever having taken the wheel', async () => {
+    // "Not now", straight from the card, is the common Skip.
+    await summoned();
+    const res = await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'skip' });
+    const view = (await res.json()) as { wheel: unknown; events: Array<{ kind: string }> };
+    expect(resumed).toHaveLength(1);
+    expect(view.events.map((e) => e.kind)).toEqual(['needs-you', 'resolved']);
+  });
+
+  it('releases a person’s wheel, whichever of their tabs took it', async () => {
+    await summoned();
+    await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
+    const res = await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    const view = (await res.json()) as { wheel: unknown };
+    expect(view.wheel).toBeNull();
+  });
+
+  it('never releases an AGENT’s wheel — that is not the person’s to give', async () => {
+    await summoned();
+    await post('/api/browsers/shopping/wheel/claim', { by: 'pane-9' });
+    const res = await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    const view = (await res.json()) as { wheel: { holder: string } | null };
+    expect(view.wheel?.holder).toBe('agent');
+  });
+
+  it('wakes nobody twice, however many times it is pressed', async () => {
+    await summoned();
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'skip' });
+    expect(resumed).toHaveLength(1);
+  });
+
+  it('records which was pressed, and ends the wait', async () => {
+    await summoned();
+    const res = await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'skip' });
+    const view = (await res.json()) as {
+      needsYou: unknown;
+      events: Array<{ kind: string; outcome?: string }>;
+    };
+    expect(view.needsYou).toBeNull();
+    expect(view.events.at(-1)).toMatchObject({ kind: 'resolved', outcome: 'skip' });
+    expect(summonsChanges.at(-1)).toEqual({ profile: 'shopping', waiting: false });
+  });
+
+  it('still wakes the agent when the page cannot be read, and says so', async () => {
+    hostPage = null;
+    await summoned();
+    await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'done' });
+    expect(resumed[0]?.text).toContain('could not be read');
+  });
+
+  it('refuses an answer that is neither', async () => {
+    await summoned();
+    const res = await post('/api/browsers/shopping/handback', { by: 'card-1', outcome: 'maybe' });
+    expect(res.status).toBe(400);
+    expect(resumed).toEqual([]);
+  });
 });

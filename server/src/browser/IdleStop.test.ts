@@ -48,3 +48,18 @@ describe('stopping a browser nobody is using', () => {
     expect(at({ report: { agents: 0, viewers: 0, idleMs: 20 * 60_000 } })).toBe(true);
   });
 });
+
+describe('a browser somebody has been sent for', () => {
+  /**
+   * Measured: a checkout filled to its last step, a summons raised, the agent's
+   * turn over — no socket, no viewer, and the sweep stopped Chrome at 20
+   * minutes. The person arrived at 41 to an about:blank tab.
+   */
+  it('is never stopped while the summons is outstanding', () => {
+    expect(at({ awaitingPerson: true })).toBe(false);
+  });
+
+  it('is stopped as before once nobody is waiting', () => {
+    expect(at({ awaitingPerson: false })).toBe(true);
+  });
+});

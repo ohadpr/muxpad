@@ -29,6 +29,11 @@ export interface BrowserCardProps {
   moment: BrowserMoment;
   /** Opens the stream. Modal on a desktop, a new tab on a phone. */
   onOpen: (mode: 'modal' | 'tab') => void;
+  /**
+   * Answers the summons: "I'm done" or "Skip". Wakes the agent parked on it.
+   * Absent, the card offers neither — a card drawn somewhere nobody can answer.
+   */
+  onAnswer?: (outcome: 'done' | 'skip') => void;
   /** Injected in tests; defaults to the real viewport. */
   viewportWidth?: number;
   now?: number;
@@ -196,8 +201,11 @@ function useLiveShot(
   return shown;
 }
 
-export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardProps) {
-  const view = browserMomentView(moment);
+export function BrowserCard({ moment, onOpen, onAnswer, viewportWidth, now }: BrowserCardProps) {
+  const view = browserMomentView(moment, now);
+  // One press per card. The request takes a moment and a second tap would read,
+  // to the agent, as a second handback.
+  const [answering, setAnswering] = useState(false);
   const data = moment.browser;
   const [tick, setTick] = useState(() => now ?? Date.now());
 
@@ -475,6 +483,34 @@ export function BrowserCard({ moment, onOpen, viewportWidth, now }: BrowserCardP
             e.currentTarget.remove();
           }}
         />
+      ) : null}
+      {/* THE WAY BACK. The agent ended its turn on this card and is parked until
+        one of these is pressed — see `answers` in lib/browser-card. Under the
+        picture, full width, because on a phone they are the reason the card
+        is open. */}
+      {view.answers && onAnswer ? (
+        <div className="browser-card__answers">
+          {(['skip', 'done'] as const).map((outcome) => (
+            <button
+              key={outcome}
+              type="button"
+              className={`browser-card__answer browser-card__answer--${outcome}`}
+              disabled={answering}
+              title={
+                outcome === 'done'
+                  ? 'Give the browser back and wake the agent'
+                  : 'Wake the agent and tell it to carry on without this'
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                setAnswering(true);
+                onAnswer(outcome);
+              }}
+            >
+              {outcome === 'done' ? 'I’m done' : 'Skip'}
+            </button>
+          ))}
+        </div>
       ) : null}
     </div>
   );

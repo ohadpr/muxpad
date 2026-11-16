@@ -18,7 +18,10 @@ import {
 } from '../browser/BrowserWheel.js';
 import { type StorageState, mergeCookieChanges } from '../browser/CookieJar.js';
 import {
+  type HandbackOutcome,
+  type HandbackPage,
   agentPaneForTab,
+  handbackMessage,
   nudgeForHandback,
   outstandingSummons,
 } from '../browser/ResumeAfterHandback.js';
@@ -55,6 +58,7 @@ import { findChrome } from '../browser/findChrome.js';
  *   DELETE /api/browsers/:profile/wheel         → BrowserView  (hand it back)
  *   POST   /api/browsers/:profile/needs-you     → BrowserView  (agent asks for a person)
  *   DELETE /api/browsers/:profile/needs-you     → BrowserView  (agent got past it)
+ *   POST   /api/browsers/:profile/handback      → BrowserView  (person: "I'm done" / "Skip")
  */
 
 export interface BrowserView extends BrowserAppState {
@@ -123,6 +127,33 @@ const NeedsYouSchema = z.object({
   tabId: z.string().min(1).max(64).optional(),
   /** What needs them, so the viewer can arrive pointing at it. */
   selector: z.string().min(1).max(200).optional(),
+});
+
+/** What the host said the page was — checked, because it came off a socket. */
+function readPage(raw: unknown): HandbackPage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as { url?: unknown; title?: unknown; outline?: unknown };
+  if (typeof p.url !== 'string') return null;
+  return {
+    url: p.url,
+    title: typeof p.title === 'string' ? p.title : '',
+    outline: Array.isArray(p.outline)
+      ? p.outline.filter((l): l is string => typeof l === 'string').slice(0, 40)
+      : [],
+  };
+}
+
+/**
+ * A person answering a summons from its card or the viewer.
+ *
+ * HUMAN-ONLY, like /wheel/take: it is reached from the UI, and the only thing
+ * it can do is give the browser BACK. There is no outcome in which it hands an
+ * agent a wheel a person is holding against that person's will — pressing it
+ * IS the person letting go.
+ */
+const HandbackSchema = z.object({
+  by: z.string().min(1).max(200),
+  outcome: z.enum(['done', 'skip']),
 });
 
 /**
@@ -251,6 +282,12 @@ export function browsersRoutes(deps: {
    */
   resumeAgent?: (paneId: string, text: string) => void;
   /**
+   * Somebody was summoned, or stopped being. The server re-derives which chats
+   * are waiting on a person (see AwaitingPerson.ts) and keeps the browser's
+   * machine awake while one is. Optional for the same reason as resumeAgent.
+   */
+  onSummonsChange?: (profile: string, waiting: boolean) => void;
+  /**
    * How long discovery waits for BOTH listeners (Chrome, then the viewer)
    * before giving up with a 504. Injectable only so the test that pins the
    * never-ready case does not have to sit out the real one — a 30s test is a
@@ -332,6 +369,53 @@ export function browsersRoutes(deps: {
       if (!bytes && shotCache.get(profile)?.work === work) shotCache.delete(profile);
     });
     return work;
+  };
+
+  /**
+   * THE HANDBACK, in one place — the card's two buttons, the viewer's Done, and
+   * closing a viewer you were summoned to all end here.
+   *
+   * Order matters. The summons is read BEFORE `resolved` closes it; the host is
+   * asked to cut the agent's old sockets and read the page BEFORE the agent is
+   * woken, so the first thing it sees is the page as it is now and the first
+   * stale ref it tries is refused (see the host's /handback).
+   */
+  const handBack = async (
+    profile: string,
+    state: BrowserAppState,
+    outcome: HandbackOutcome,
+    waiting: { reason: string } | null,
+  ): Promise<void> => {
+    let page: HandbackPage | null = null;
+    try {
+      const res = await fetch(`${state.viewerUrl}/handback`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { page?: HandbackPage | null };
+        page = readPage(body.page);
+      }
+    } catch {
+      // A browser that cannot answer still gets handed back — the message says
+      // the page was not read rather than holding up the agent.
+    }
+    const bytes = await fetchShot(state);
+    const moment = events.record(profile, {
+      kind: 'resolved',
+      outcome,
+      ...(bytes ? { shot: true } : {}),
+    });
+    const shotPath =
+      bytes && saveBrowserShot(deps.dataDir, profile, moment.at, bytes)
+        ? browserShotPath(deps.dataDir, profile, moment.at)
+        : null;
+    attention.clear(profile);
+    deps.onSummonsChange?.(profile, false);
+    const tabId = owner.get(profile);
+    const paneId = tabId ? agentPaneForTab(deps.db, tabId) : null;
+    if (waiting && paneId)
+      deps.resumeAgent?.(paneId, handbackMessage(waiting.reason, outcome, page, shotPath));
   };
 
   app.get('/', (c) => c.json({ browsers: listBrowserApps(deps.db).map(view) }));
@@ -797,16 +881,64 @@ export function browsersRoutes(deps: {
       ...(bytes ? { shot: true } : {}),
     });
     if (bytes) saveBrowserShot(deps.dataDir, profile, moment.at, bytes);
+    deps.onSummonsChange?.(profile, true);
     return c.json(view(state));
   });
 
-  /** The agent got past it on its own; put the hand down. */
+  /**
+   * The agent got past it on its own; put the hand down.
+   *
+   * AND CLOSE THE ERRAND. This used to lower the flag and leave the summons
+   * open in the log, so the chat went on reading as waiting on a person — and
+   * the next time anybody released the wheel, the agent was told a handoff it
+   * had already abandoned was over.
+   */
   app.delete('/:profile/needs-you', (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
     const state = find(profile);
     if (!state) return c.json({ error: 'no such browser' }, 404);
     attention.clear(profile);
+    if (outstandingSummons(events.list(profile))) {
+      events.record(profile, { kind: 'resolved' });
+      deps.onSummonsChange?.(profile, false);
+    }
+    return c.json(view(state));
+  });
+
+  /**
+   * "I'm done" or "Skip" — the person answering, explicitly.
+   *
+   * Closing a viewer used to be the only handback there was, and it is a
+   * gesture people do not make on purpose: last night's owner finished on a
+   * phone, never closed anything, and the agent sat with no idea. These are
+   * two buttons that mean exactly one thing each, and they work whether or not
+   * the person ever took the wheel — Skip from the card, without opening
+   * anything, is the common case for "not now".
+   *
+   * Releases a HUMAN's lease, whoever's. There is one human here; refusing
+   * their own Done because a different tab of theirs took the wheel is the
+   * kind of correctness nobody wants.
+   */
+  app.post('/:profile/handback', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const state = find(profile);
+    if (!state) return c.json({ error: 'no such browser' }, 404);
+
+    const parsed = HandbackSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'by and outcome (done|skip) are required' }, 400);
+
+    const held = wheel.holder(profile);
+    const waiting = outstandingSummons(events.list(profile));
+    if (held?.holder === 'human') wheel.release(profile, held.by);
+    if (!waiting) {
+      // Nothing was asking. The release above is the whole of it.
+      return c.json(view(state));
+    }
+    await handBack(profile, state, parsed.data.outcome, waiting);
+    if (held?.holder === 'human' && parsed.data.outcome === 'done')
+      void harvestJar(state.viewerUrl).catch(() => {});
     return c.json(view(state));
   });
 
@@ -835,19 +967,15 @@ export function browsersRoutes(deps: {
     if (!parsed.success) return c.json({ error: 'by is required' }, 400);
 
     const held = wheel.holder(profile);
-    // BEFORE the `resolved` below, which is the thing that closes it.
+    // BEFORE the handback below, which is the thing that closes it.
     const waiting = outstandingSummons(events.list(profile));
     const released = wheel.release(profile, parsed.data.by);
-    // Handed back: the errand is over, so the card retires. Only for the person
-    // who actually held it — a failed release must not retire somebody's card.
-    if (held?.by === parsed.data.by && held.holder === 'human') {
-      events.record(profile, { kind: 'resolved' });
-    }
     // AND THE AGENT IS TOLD, because it is the only party that does not already
     // know. Pressing Done used to hand the browser back and leave the person to
     // go and say so in words — two taps and a sentence to deliver a fact muxpad
     // had the instant the wheel came back. See ResumeAfterHandback for every
-    // case where this deliberately stays quiet.
+    // case where this deliberately stays quiet; when it does speak, it goes
+    // through the same handBack as the card's buttons.
     const tabId = owner.get(profile);
     const nudge = nudgeForHandback({
       held: held ? { holder: held.holder, by: held.by } : null,
@@ -855,7 +983,14 @@ export function browsersRoutes(deps: {
       needsYou: waiting,
       paneId: tabId ? agentPaneForTab(deps.db, tabId) : null,
     });
-    if (nudge) deps.resumeAgent?.(nudge.paneId, nudge.text);
+    if (nudge) {
+      await handBack(profile, state, 'done', waiting);
+    } else if (held?.by === parsed.data.by && held.holder === 'human' && waiting) {
+      // Handed back with nobody to tell (the chat has no pane left): the errand
+      // is still over, so the card retires.
+      events.record(profile, { kind: 'resolved' });
+      deps.onSummonsChange?.(profile, false);
+    }
     // A person has just finished with the browser, which is overwhelmingly when
     // a LOGIN has just happened. Harvest it into the shared jar now, so the next
     // session starts warm — otherwise the login only ever reaches whoever
