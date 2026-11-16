@@ -30,7 +30,11 @@ import {
   loginFormExpression,
 } from '../FocusProbe.js';
 import { appendKeyboardLog } from '../KeyboardLog.js';
-import { emulationParams } from '../MobileEmulation.js';
+import {
+  emulationParams,
+  shouldReloadForSignals,
+  typedInputExpression,
+} from '../MobileEmulation.js';
 import { isBrowsingUrl } from '../PageAttachment.js';
 import { clearStaleProfileLock } from '../ProfileLock.js';
 import { ScreencastSession } from '../ScreencastSession.js';
@@ -868,9 +872,25 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
         await cdp.send('Emulation.setTouchEmulationEnabled', emulation.touch);
         await cdp.send('Emulation.setUserAgentOverride', emulation.userAgent ?? { userAgent: '' });
         // The page has to be re-fetched for a server-rendered mobile layout;
-        // a resize alone gets a desktop page in a narrow window. But re-fetching
-        // on every rotation would throw away whatever was typed into it.
-        if (signalsChanged) await cdp.send('Page.reload', {});
+        // a resize alone gets a desktop page in a narrow window. But a page
+        // somebody has typed into is NOT refetchable — see
+        // shouldReloadForSignals for the evening that proved it.
+        if (signalsChanged) {
+          const typed = await cdp
+            .send('Runtime.evaluate', {
+              expression: typedInputExpression(),
+              returnByValue: true,
+            })
+            .then((r) => Boolean((r as { result?: { value?: unknown } })?.result?.value))
+            // Unreadable page → assume it holds something. Losing a layout beats
+            // losing a card number.
+            .catch(() => true);
+          if (shouldReloadForSignals({ signalsChanged, hasTypedInput: typed })) {
+            await cdp.send('Page.reload', {});
+          } else {
+            log('[emulate] signals changed but the page has input in it — not reloading');
+          }
+        }
       } else if (message.t === 'nav') {
         // Back, forward and reload. A person looking at a page they did not
         // navigate to needs a way out of it that is not "ask the agent".

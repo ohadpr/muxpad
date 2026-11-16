@@ -83,3 +83,65 @@ export function emulationParams(
     userAgent: { userAgent: MOBILE_DEVICE.userAgent },
   };
 }
+
+/**
+ * ── RELOADING WHEN THE SCREEN CHANGES, AND THE ONE TIME IT MUST NOT ────────
+ *
+ * Switching the page between desktop and phone changes three signals at once
+ * (metrics, touch, user-agent), and a server-rendered site only acts on them
+ * at the next fetch — so the reload is what makes "open it on my phone"
+ * actually give a phone layout.
+ *
+ * It is also how an evening gets lost. An agent walked a parking-citation
+ * payment to the card step; the handoff was opened ON A PHONE; the signals
+ * changed from desktop to mobile; the page reloaded; the form emptied, the
+ * captcha rotated and the payment portal dropped back to step 1. Three times,
+ * each time reading as "the site logged me out" rather than as muxpad
+ * refetching the page under the person it had just summoned.
+ *
+ * So: a page NOBODY HAS TYPED INTO is a page worth refetching. A page with
+ * anything in it belongs to the person who put it there, and a layout that is
+ * a bit wide is strictly better than losing it. A human asking for reload
+ * explicitly still gets one — that is a different question, asked by someone
+ * who can see the page.
+ */
+export function shouldReloadForSignals(input: {
+  /** Did metrics/user-agent actually change? A pure resize is not a reload. */
+  signalsChanged: boolean;
+  /** Does the page hold anything a person typed, picked or pasted? */
+  hasTypedInput: boolean;
+}): boolean {
+  return input.signalsChanged && !input.hasTypedInput;
+}
+
+/**
+ * Asked in the page: is there anything in here somebody would lose?
+ *
+ * Deliberately broad and deliberately cheap. A checkout's card number, a
+ * half-written comment, a chosen dropdown, a ticked box — all of it counts,
+ * including inside same-origin frames. Cross-origin frames cannot be read from
+ * here; a page with one of those (a card field in a processor's iframe) is
+ * usually a page with its own fields filled too, which is enough to catch it.
+ *
+ * On any doubt it answers TRUE — the failure it exists to prevent is
+ * destroying somebody's input, and the cost of being wrong the other way is a
+ * desktop-width layout.
+ */
+export function typedInputExpression(): string {
+  return `(() => { try {
+    const docs = [document];
+    for (const f of document.querySelectorAll('iframe')) {
+      try { if (f.contentDocument) docs.push(f.contentDocument); } catch {}
+    }
+    for (const d of docs) {
+      for (const el of d.querySelectorAll('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
+        const t = (el.type || '').toLowerCase();
+        if (t === 'hidden' || t === 'submit' || t === 'button' || t === 'reset') continue;
+        if (t === 'checkbox' || t === 'radio') { if (el.checked) return true; continue; }
+        if (el.isContentEditable) { if ((el.textContent || '').trim()) return true; continue; }
+        if ((el.value ?? '') !== '' && el.value !== el.defaultValue) return true;
+      }
+    }
+    return false;
+  } catch { return true; } })()`;
+}
