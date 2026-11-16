@@ -160,15 +160,24 @@ describe('the instructions name things that exist', () => {
     expect(missing, `the doc names flags the CLI does not accept: ${missing}`).toEqual([]);
   });
 
-  it('does not promise a sub-agent its own sidebar row, or a card at spawn time', () => {
+  it('does not promise a sub-agent its own sidebar row — but does promise its card', () => {
     // The claim that produced the "I see no sub-chat, no report, nothing"
-    // report. A sub-agent is a PILL on the parent's row while it works, a
-    // `⇤ reported` chip when it finishes, and gone from the live list after —
-    // see groupChats in web/src/components/NavTree.tsx, which is explicit that
-    // a retired sub-chat "is not shown AT ALL".
+    // report was about the RAIL: a sub-agent is a PILL on the parent's row
+    // while it works, and gone from the live list after — see groupChats in
+    // web/src/components/NavTree.tsx, which is explicit that a retired
+    // sub-chat "is not shown AT ALL".
+    //
+    // THAT FIX OVERSHOT INTO A SECOND FALSE CLAIM, and this test pinned it:
+    // "There is NO card at spawn time". There is. `spawnCards`
+    // (web/src/lib/chat-mention.ts) pushes a `launch` entry as soon as the
+    // round exists — `if (r.ended_at === null) continue` skips the COMPLETION,
+    // not the launch — and one pair is drawn per round, so every
+    // `muxpad agent send` handover leaves another. An agent told otherwise
+    // tells the user their card does not exist while it is on screen.
     expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/sidebar with its own row/);
     expect(AGENT_INSTRUCTIONS_SEED).toMatch(/PILL at the end of YOUR row/);
-    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/NO card at spawn time/);
+    expect(AGENT_INSTRUCTIONS_SEED).not.toMatch(/NO card at spawn time/);
+    expect(AGENT_INSTRUCTIONS_SEED).toMatch(/A LAUNCH LEAVES A CARD IN YOUR CHAT/);
   });
 
   it('does not claim `agent wait` exit 1 means "not an agent pane"', () => {

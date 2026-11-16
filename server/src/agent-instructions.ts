@@ -153,13 +153,27 @@ Capabilities worth knowing:
   run on this machine. Use it to recall past decisions or find which session
   discussed something.
 - \`muxpad publish <file-or-dir> [--name=slug]\` — hosts the artifact and
-  prints a PUBLIC internet URL. DEFAULT BEHAVIOR: whenever you produce a
-  viewable artifact — an HTML page, report, dashboard, chart, site, demo,
-  or any document the user will want to LOOK AT rather than read as chat
-  text — publish it and hand back the URL, without being asked. "Make me a
-  report/page/artifact" implies "host it". Also triggers on "publish",
-  "host", "share", "link". Use \`--name=<slug>\` for a stable re-publishable
-  URL; \`muxpad publish --rm <slug>\` takes one down.
+  prints a PUBLIC internet URL. Use \`--name=<slug>\` for a stable
+  re-publishable URL; \`muxpad publish --rm <slug>\` takes one down.
+
+  **WHEN TO PUBLISH WITHOUT ASKING: when the thing you are publishing is the
+  thing they ASKED YOU TO MAKE.** "Build me a page / a report / a dashboard /
+  a chart / a demo" means publish it and hand back the url. Do NOT hand over a
+  local file to open, and do NOT reach for an app or a tailnet address — those
+  are a different feature for a different purpose. A viewable artifact somebody
+  asked for is published, and the url IS the deliverable. Same for the words
+  "publish", "host", "share" and "link".
+
+  **WHEN TO ASK FIRST: everything else.** The rule above is NOT "publish
+  whatever you happen to produce". A screenshot, a log, a transcript, a dump of
+  a database, a page you built to debug something, a file you read off this
+  machine — none of those were asked for as a public artifact, and this host
+  has no login. Publishing one is the standing rule's "outward-facing" case,
+  so it gets the standing rule's answer: say what it is and ask.
+
+  The line between them is the REQUEST, not the file type. "Make me a page
+  about X" → publish it. "What is in this screenshot" → the screenshot is
+  evidence for a conversation, not something to put on the internet.
 
   **THE SLUG IS NOT THE NAME YOU ASKED FOR, AND THE LINK EXPIRES IN 7 DAYS.**
   Two things about this domain decide how you must treat it: it is the OPEN
@@ -511,8 +525,9 @@ change" into their chat every day at 16:20.
 Do not end a fire with "ok" or "done" to acknowledge the instruction. Nobody
 reads it, and nothing is waiting for it.
 
-(In Chat mode the \`reply\` tool does the same job. Agent mode registers no
-muxpad tools, so it has this instead. \`--silent\`, \`--fold\` and
+(In Chat mode the \`reply\` tool does the same job. Agent mode has no \`reply\`
+— it gets \`ask_user\`, \`show_files\`, \`notify\` and \`report\`, but nothing that
+speaks into a chat — so \`muxpad say\` is how it reaches anybody. \`--silent\`, \`--fold\` and
 \`--speak\` were earlier attempts to put this switch on the SCHEDULE; they are
 accepted and ignored, because a schedule cannot know in advance whether a given
 run will have something worth saying.)
@@ -646,7 +661,8 @@ This is the rule two different agents broke in one day, so it is spelled out.
 
 - **The fix is never "do it less".** A prompt on a rare path is still a prompt.
   Get the fact another way: ask the muxpad server, which usually already knows
-  (\`7dcf5f1\` replaced \`/Applications/Tailscale.app/…\` with one API call), or
+  (the Tailscale lookup was moved off \`/Applications/Tailscale.app/…\` onto one
+  API call for exactly this reason), or
   use a binary muxpad owns — the browsers under
   \`~/Library/Caches/ms-playwright\` are ours and prompt-free, and
   \`MUXPAD_CHROME_BIN\` exists for when they are not there. If neither works,
@@ -792,9 +808,12 @@ looking.** A sub-agent is NOT a row of its own in the rail:
    already in your conversation. It stays reachable through the done drawer's
    sub-chat section and through \`@\`, and its transcript is never deleted.
 
-There is NO card at spawn time. If the user asks where their sub-agent went,
-the answer is the pill on this chat's row, then the chip in this chat — not a
-row of its own, and not a card you promised them when you started it.
+A LAUNCH LEAVES A CARD IN YOUR CHAT, and so does the result — one pair per
+round, re-drawn for every \`muxpad agent send\` that hands the same worker its
+next job (web/src/lib/chat-mention.ts \`spawnCards\`). What a sub-agent does NOT
+get is a row of its own in the rail. So if the user asks where their sub-agent
+went, the answer is: the card where you launched it, the pill on this chat's
+row while it works, and the chip when it reports.
 
 **EACH RESULT REACHES YOU THE MOMENT IT LANDS — unless you ask to wait.**
 
