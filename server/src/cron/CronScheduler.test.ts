@@ -822,6 +822,74 @@ describe('CronScheduler', () => {
     expect(sent).toHaveLength(1);
     expect(s.store.runs(a.id)).toHaveLength(1);
   });
+
+  // ── the run row stops lying about a --new-tab fire ───────────────────────
+  //
+  // `addRun` records what the SUBMIT answered, and for a `--new-tab` fire that
+  // is always `queued`: the worker's pane is still booting, so the message
+  // waits for its runner's hello. Nothing ever corrected it, so `cron show`
+  // read `queued` forever — long after the worker had done the work and closed
+  // its own tab.
+  //
+  // Not cosmetic. It is why this machine's notes recorded `--new-tab` as
+  // broken ("the run hangs queued and max_open wedges the schedule") and every
+  // watcher was steered onto `--pane`, which re-sends a whole conversation on
+  // each fire. Re-tested 2026-11-16: the runs were fine, the row was lying.
+
+  it('turns `queued` into `done` when the turn it started ends', async () => {
+    const s = scheduler();
+    s.start(); // the turn-end subscription lives in start()
+    const cron = makeCron(s, { target_kind: 'new-tab', target_pane: null, workspace_id: wsId });
+    runAt(cron);
+    await s.tick();
+    const run = s.store.runs(cron.id)[0];
+    // Whatever the submit answered — `sent` here, `queued` on a real new tab
+    // whose runner has not said hello yet. Both are in-flight answers.
+    expect(run?.outcome).toMatch(/^(sent|queued)$/);
+    const pane = new PaneStore(db).listByTab(run?.target_tab as string)[0];
+    events.emit({
+      type: 'agent_turn',
+      pane_id: pane?.id as string,
+      phase: 'done',
+      sid: null,
+      backend: 'x',
+    });
+    await vi.waitFor(() => expect(s.store.runs(cron.id)[0]?.outcome).toBe('done'));
+  });
+
+  it('records a crash as failed, not as done', async () => {
+    const s = scheduler();
+    s.start();
+    const cron = makeCron(s, { target_kind: 'new-tab', target_pane: null, workspace_id: wsId });
+    runAt(cron);
+    await s.tick();
+    const run = s.store.runs(cron.id)[0];
+    const pane = new PaneStore(db).listByTab(run?.target_tab as string)[0];
+    events.emit({
+      type: 'agent_turn',
+      pane_id: pane?.id as string,
+      phase: 'fatal',
+      sid: null,
+      backend: 'x',
+    });
+    await vi.waitFor(() => expect(s.store.runs(cron.id)[0]?.outcome).toBe('failed'));
+  });
+
+  it('leaves a row the reconciler already settled alone', () => {
+    // `kept` and `closed` are decisions with their own recorded reasons. A
+    // late turn-end must not overwrite one with a generic `done`.
+    const s = scheduler();
+    const cron = makeCron(s, { target_kind: 'new-tab', target_pane: null, workspace_id: wsId });
+    const kept = s.store.addRun({
+      cron_id: cron.id,
+      due_at: 1,
+      fired_at: 1,
+      outcome: 'kept',
+      detail: 'a question is pending',
+    });
+    s.store.finishRun(kept.id, 'done');
+    expect(s.store.runs(cron.id).find((r) => r.id === kept.id)?.outcome).toBe('kept');
+  });
 });
 
 describe('a one-off fires once and retires', () => {

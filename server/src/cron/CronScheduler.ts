@@ -141,6 +141,11 @@ export class CronScheduler {
    */
   private readonly inflight = new Map<string, string>();
   /** Panes whose finishing turn should close their (cron-created) tab. */
+  /** pane → the cron_runs row its current turn belongs to, so the row can be
+   *  corrected from `queued` when that turn ends. In memory like
+   *  `closeOnDone`: a restart loses the correction, which leaves a row
+   *  reading `queued` — the behaviour before this existed, never worse. */
+  private readonly runOfPane = new Map<string, string>();
   private readonly closeOnDone = new Map<string, { cronId: string; tabId: string }>();
   private unsubscribe: (() => void) | null = null;
 
@@ -169,6 +174,7 @@ export class CronScheduler {
       // "your job's target is gone" deserves a notification, not a silent drop.
       if (e.type === 'pane.removed') {
         this.inflight.delete(e.pane_id);
+        this.runOfPane.delete(e.pane_id);
         this.closeOnDone.delete(e.pane_id);
       }
     });
@@ -322,6 +328,15 @@ export class CronScheduler {
       outcome: result.outcome,
       detail: detail || null,
     });
+    // ── SO THE ROW CAN STOP SAYING `queued` ───────────────────────────────
+    // What is known at fire time is what the submit answered, and for a
+    // `--new-tab` fire that is always `queued`: the worker's pane is still
+    // booting, the message waits for its runner's hello, and nothing ever
+    // came back to correct the row. Every such run read `queued` forever —
+    // which is why `--new-tab` was written down on this machine as broken
+    // and watchers were steered onto `--pane`, re-sending a whole
+    // conversation every fire. The runs were fine; the row was lying.
+    if (!failed && result.targetPane) this.runOfPane.set(result.targetPane, run.id);
     // `last_status` records submitSend's answer VERBATIM where there was one —
     // 'sent' | 'queued' | 'rejected' — prefixed with error: when it failed, so
     // `cron list` shows the real reason instead of a summary of it.
@@ -613,6 +628,14 @@ export class CronScheduler {
 
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
     this.inflight.delete(paneId);
+    // The fire's own row, corrected now that the turn it started has ended.
+    // Deleted either way: a second turn in the same pane is the user talking
+    // to the worker, not the schedule firing again.
+    const runId = this.runOfPane.get(paneId);
+    if (runId) {
+      this.runOfPane.delete(paneId);
+      this.store.finishRun(runId, phase === 'fatal' ? 'failed' : 'done');
+    }
     const pending = this.closeOnDone.get(paneId);
     if (!pending) return;
     this.closeOnDone.delete(paneId);

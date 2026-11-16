@@ -318,6 +318,32 @@ export class CronStore {
     };
   }
 
+  /**
+   * The outcome a run turned out to have, once its turn ended.
+   *
+   * `addRun` records what the SUBMIT answered — 'sent' or 'queued' — because
+   * that is all that is known at fire time. For a `--new-tab` fire the answer
+   * is always 'queued' (the worker's pane is still booting), and nothing ever
+   * came back to say otherwise: every such run read `queued` forever, long
+   * after the worker had done the work and closed its own tab.
+   *
+   * That cost more than a wrong column. It is why `--new-tab` was recorded in
+   * this machine's notes as broken and watchers were steered to `--pane`
+   * instead, which re-sends a whole conversation on every fire. The runs were
+   * fine; the row was lying.
+   *
+   * Only ever moves a run that is still in flight, so a `kept`/`closed` row
+   * written by the reconciler is never overwritten by a late turn-end.
+   */
+  finishRun(runId: string, outcome: 'done' | 'failed', detail?: string | null): void {
+    this.db
+      .prepare(
+        `UPDATE cron_runs SET outcome = ?, detail = COALESCE(?, detail)
+         WHERE id = ? AND outcome IN ('sent', 'queued')`,
+      )
+      .run(outcome, detail ?? null, runId);
+  }
+
   runs(cronId: string, limit = CRON_RUNS_KEEP): CronRun[] {
     return this.db
       .prepare('SELECT * FROM cron_runs WHERE cron_id = ? ORDER BY fired_at DESC, id DESC LIMIT ?')
