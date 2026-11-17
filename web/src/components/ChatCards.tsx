@@ -1,7 +1,9 @@
 import { type ChatCard, cardIsStale } from '@muxpad/shared';
 import type React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { req } from '../api';
 import { subscribe, subscribeResync } from '../events';
+import { changeRequestDraft, removalFollowUp } from '../lib/card-actions';
 import { cardColorScheme } from '../lib/card-frame';
 import { cardLineMarkdown, cardLineText } from '../lib/card-line';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
@@ -409,7 +411,40 @@ function CardBody({
   return <div className="chat-card-text">{card.content}</div>;
 }
 
-export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
+/**
+ * Delete the card and answer with whoever still writes it.
+ *
+ * A failure answers `[]` rather than throwing: the card is either gone (and
+ * the event will redraw) or it is not, and a rejected promise here would be an
+ * unhandled one in a click handler. The writers are an enrichment; losing them
+ * costs a sentence in the chat, not the removal.
+ */
+async function removeCard(tabId: string, name: string): Promise<string[]> {
+  try {
+    const res = await req<{ writers?: string[] }>(
+      `/api/tabs/${encodeURIComponent(tabId)}/cards/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    );
+    return res?.writers ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function ChatCards({
+  tabId,
+  onChangeRequest,
+  onRemoved,
+}: {
+  tabId: string | null | undefined;
+  /** Fill the composer and let the person finish the sentence — see
+   *  lib/card-actions. Absent in the previews and the unit tests. */
+  onChangeRequest?: (text: string) => void;
+  /** Say in the chat that the card is gone and something still writes it.
+   *  Called only when there IS a writer; a hand-set card going away is not
+   *  worth a turn. */
+  onRemoved?: (text: string) => void;
+}) {
   const [cards, setCards] = useState<ChatCard[]>([]);
   // Re-rendered on a timer ONLY to age the timestamps — a card that says "4s
   // ago" forever is worse than no timestamp, and staleness is the signal the
@@ -566,6 +601,44 @@ export function ChatCards({ tabId }: { tabId: string | null | undefined }) {
             <span className={`chat-card-age${stale ? ' -stale' : ''}`}>
               {shortAge(now - card.updated_at)}
               {stale ? <span className="chat-card-sr">, overdue</span> : null}
+            </span>
+            {/* ── THE TWO THINGS TO DO TO A CARD THAT ARE NOT READING IT ──
+              Both stop the click: the whole card is one toggle target, and a
+              button inside it that also collapsed the thing you just acted on
+              would be the same bug the single-target rewrite fixed.
+
+              Shown on hover and focus (see the CSS) rather than always: a card
+              is its value, and two glyphs parked on every one of them is the
+              chrome this component spent three rewrites removing. */}
+            <span className="chat-card-acts">
+              <button
+                type="button"
+                className="chat-card-act"
+                title={`Request a change to the ${card.name} card`}
+                aria-label={`Request a change to the ${card.name} card`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChangeRequest?.(changeRequestDraft(card.name));
+                }}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="chat-card-act"
+                title={`Remove the ${card.name} card`}
+                aria-label={`Remove the ${card.name} card`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!tabId) return;
+                  void removeCard(tabId, card.name).then((writers) => {
+                    const say = removalFollowUp(card.name, writers);
+                    if (say) onRemoved?.(say);
+                  });
+                }}
+              >
+                ×
+              </button>
             </span>
             {showBody ? (
               // Unmounted, not hidden. An html card is a sandboxed iframe that

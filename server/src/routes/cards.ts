@@ -24,6 +24,28 @@ const SetSchema = z.object({
  * TabCardStore, so the HTTP door and any other caller get one answer. What
  * lives here is the tab check and the event.
  */
+/**
+ * The ENABLED schedules that write this card, by name.
+ *
+ * Enabled only: a paused or retired cron is not going to bring the card back,
+ * and naming it would send somebody to tidy up something already tidy.
+ */
+export function cardWriters(db: Database.Database, card: string): string[] {
+  try {
+    return (
+      (
+        db
+          .prepare('SELECT name FROM crons WHERE card = ? AND enabled = 1 ORDER BY name')
+          .all(card) as Array<{ name: string }> | undefined
+      )?.map((r) => r.name) ?? []
+    );
+  } catch {
+    // An older database with no `card` column must not break a deletion: the
+    // card still goes, the chat just hears nothing about writers.
+    return [];
+  }
+}
+
 export function cardsRoutes(deps: { db: Database.Database; events?: EventBus | undefined }): Hono {
   const app = new Hono();
   const cards = new TabCardStore(deps.db);
@@ -71,14 +93,28 @@ export function cardsRoutes(deps: { db: Database.Database; events?: EventBus | u
     return c.json(r.card, r.created ? 201 : 200);
   });
 
+  /**
+   * Remove a card — and say WHO STILL WRITES IT.
+   *
+   * A card is usually kept fresh by a schedule (`cron new --card=<name>`), and
+   * deleting the card alone leaves that running: the card returns on the next
+   * fire, which reads as the button being broken. The caller cannot know that
+   * on its own, and an agent sent looking for it will sometimes look wrong, so
+   * the deletion answers with the schedules carrying this card's name.
+   *
+   * 200 with a body rather than 204, because an answer with nothing in it was
+   * the old contract and the writers are the whole point of the new one.
+   */
   app.delete('/:tabId/cards/:name', (c) => {
     const tabId = c.req.param('tabId');
     if (!haveTab(tabId)) return c.json(bad('no such chat'), 404);
-    const gone = cards.clear(tabId, c.req.param('name'));
+    const name = c.req.param('name');
+    const gone = cards.clear(tabId, name);
     // Only on a real deletion: an event per no-op is a repaint per no-op on
     // every connected device.
     if (gone) announce(tabId);
-    return gone ? c.body(null, 204) : c.json(bad('no such card'), 404);
+    if (!gone) return c.json(bad('no such card'), 404);
+    return c.json({ writers: cardWriters(deps.db, name) });
   });
 
   return app;

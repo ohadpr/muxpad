@@ -6043,7 +6043,30 @@ export function ChatPane({
               that grows pushes the log up by precisely its own height, with no
               second measurement to keep in step. That is the whole reason it is
               a child here and not a sibling pinned at `bottom: composerH`. */}
-            <ChatCards tabId={tabId} />
+            <ChatCards
+              tabId={tabId}
+              // A change request FILLS the composer and stops: only the person
+              // knows what the change is, and a card that rewrote itself from
+              // one click would be a card nobody could predict.
+              onChangeRequest={(text) => {
+                setInput((cur) => (cur.trim() ? `${text}\n${cur}` : text));
+                // Focus it: a draft that appeared somewhere off the bottom of a
+                // phone screen with no caret in it reads as nothing happening.
+                (
+                  composerRef.current?.querySelector('[contenteditable]') as HTMLElement | null
+                )?.focus();
+              }}
+              // A removal SENDS, and only when something still writes the card.
+              // The alternative — leaving it in the composer — is a cron that
+              // keeps running whenever somebody dismisses a card and walks
+              // away, and the card reappearing on its next fire reads as the
+              // button not working. `deliver` is the same primitive the
+              // composer uses; if it cannot (no runner), the words fall back
+              // into the draft rather than being lost.
+              onRemoved={(text) => {
+                if (!deliver(text)) setInput((cur) => (cur.trim() ? cur : text));
+              }}
+            />
             {notice ? (
               <div className={`chat-notice${notice.tone === 'danger' ? ' -danger' : ''}`}>
                 {notice.text}

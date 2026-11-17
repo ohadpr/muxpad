@@ -576,3 +576,82 @@ it('keeps lower markdown lines out of the collapsed preview and shows them when 
   expect(host.querySelector('.chat-card-body')?.textContent).toContain('Details');
   expect(host.querySelector('.chat-card-body pre')?.textContent).toContain('Table row');
 });
+
+describe('the two actions on a card', () => {
+  /** Mount with the callbacks wired, and a fetch that answers the DELETE with
+   *  whatever writers the test wants. */
+  async function mountWithActs(writers: string[]) {
+    const card: ChatCard = {
+      id: 'c1',
+      tab_id: 't1',
+      name: 'market',
+      content: 'SPX +0.4%',
+      format: 'text',
+      every_ms: null,
+      updated_at: Date.now(),
+      created_at: Date.now(),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetched.push(`${init?.method ?? 'GET'} ${url}`);
+        if (init?.method === 'DELETE')
+          return { ok: true, json: async () => ({ writers }) } as Response;
+        return { ok: true, json: async () => ({ cards: [card] }) } as Response;
+      }),
+    );
+    const changes: string[] = [];
+    const removed: string[] = [];
+    const host = document.createElement('div');
+    document.body.append(host);
+    await act(async () => {
+      createRoot(host).render(
+        <ChatCards
+          tabId="t1"
+          onChangeRequest={(t) => changes.push(t)}
+          onRemoved={(t) => removed.push(t)}
+        />,
+      );
+    });
+    const [pencil, cross] = Array.from(host.querySelectorAll<HTMLButtonElement>('.chat-card-act'));
+    return { host, changes, removed, pencil, cross };
+  }
+
+  it('fills a change request without sending anything', async () => {
+    const { changes, removed, pencil } = await mountWithActs([]);
+    await act(async () => pencil?.click());
+    expect(changes[0]).toContain('`market`');
+    expect(removed, 'a change request is not a removal').toEqual([]);
+  });
+
+  it('removes the card, and says so when a schedule still writes it', async () => {
+    const { removed, cross } = await mountWithActs(['market-hourly']);
+    await act(async () => {
+      cross?.click();
+      await Promise.resolve();
+    });
+    expect(fetched.some((f) => f.startsWith('DELETE'))).toBe(true);
+    expect(removed[0]).toContain('`market-hourly`');
+  });
+
+  it('says NOTHING when nothing writes it', async () => {
+    // A hand-set card going away is not worth a turn.
+    const { removed, cross } = await mountWithActs([]);
+    await act(async () => {
+      cross?.click();
+      await Promise.resolve();
+    });
+    expect(fetched.some((f) => f.startsWith('DELETE'))).toBe(true);
+    expect(removed).toEqual([]);
+  });
+
+  it('does not toggle the card it is acting on', async () => {
+    // The whole card is one toggle target; a button inside it that also
+    // collapsed what you just acted on is the bug the single-target rewrite
+    // fixed. Both buttons stop the click.
+    const { host, pencil } = await mountWithActs([]);
+    const before = host.querySelector('.chat-card')?.className;
+    await act(async () => pencil?.click());
+    expect(host.querySelector('.chat-card')?.className).toBe(before);
+  });
+});

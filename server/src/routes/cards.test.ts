@@ -67,10 +67,15 @@ describe('cards routes', () => {
     expect(await res.json()).toMatchObject({ content: 'open: +0.4%', format: 'markdown' });
   });
 
-  it('deletes with 204, then 404, and announces only the real one', async () => {
+  it('deletes with its writers, then 404s, and announces only the real one', async () => {
     await put('build', { content: 'x' });
     seen.length = 0;
-    expect((await app.request('/t1/cards/build', { method: 'DELETE' })).status).toBe(204);
+    // 200 WITH A BODY, not 204: the writers are the point of the answer. A
+    // card whose schedule still names it comes back on the next fire, and the
+    // caller cannot know that on its own.
+    const del = await app.request('/t1/cards/build', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ writers: [] });
     expect((await app.request('/t1/cards/build', { method: 'DELETE' })).status).toBe(404);
     // A repaint on every device for a card that was already gone is noise.
     expect(seen).toEqual(['t1']);
@@ -139,5 +144,58 @@ describe('cards routes', () => {
     });
     expect(res.status).toBe(201);
     spy.mockRestore();
+  });
+
+  describe('who still writes a removed card', () => {
+    /**
+     * Deleting a card whose schedule still names it is a card that comes back on
+     * the next fire — which reads as the remove button not working. The answer
+     * carries the writers so the chat can say so, by name, rather than sending
+     * an agent to go looking for them.
+     */
+    const withCron = (over: Record<string, unknown> = {}) => {
+      db.prepare(
+        `INSERT INTO crons (id, name, schedule, tz, prompt, target_kind, enabled, catchup, overlap,
+           on_context, quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
+           fail_streak, created_at, once, fold, card)
+         VALUES ('c1', ?, '0 * * * *', 'UTC', 'p', 'new-tab', ?, 'once', 'skip', 'fire', 0, 0, 1, 1,
+           '[]', 0, 0, 0, 0, 0, ?)`,
+      ).run(over.name ?? 'market-hourly', over.enabled ?? 1, over.card ?? 'market');
+    };
+
+    it('names the schedule that keeps the card fresh', async () => {
+      withCron();
+      await app.request('/t1/cards/market', {
+        method: 'PUT',
+        body: JSON.stringify({ content: 'x' }),
+        headers: { 'content-type': 'application/json' },
+      });
+      const res = await app.request('/t1/cards/market', { method: 'DELETE' });
+      expect(await res.json()).toEqual({ writers: ['market-hourly'] });
+    });
+
+    it('says nothing about a schedule that is paused', async () => {
+      // A disabled cron is not going to bring the card back, and naming it sends
+      // somebody to tidy up something already tidy.
+      withCron({ enabled: 0 });
+      await app.request('/t1/cards/market', {
+        method: 'PUT',
+        body: JSON.stringify({ content: 'x' }),
+        headers: { 'content-type': 'application/json' },
+      });
+      const res = await app.request('/t1/cards/market', { method: 'DELETE' });
+      expect(await res.json()).toEqual({ writers: [] });
+    });
+
+    it('does not claim a schedule that writes a DIFFERENT card', async () => {
+      withCron({ card: 'build' });
+      await app.request('/t1/cards/market', {
+        method: 'PUT',
+        body: JSON.stringify({ content: 'x' }),
+        headers: { 'content-type': 'application/json' },
+      });
+      const res = await app.request('/t1/cards/market', { method: 'DELETE' });
+      expect(await res.json()).toEqual({ writers: [] });
+    });
   });
 });
