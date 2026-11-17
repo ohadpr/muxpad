@@ -580,7 +580,7 @@ it('keeps lower markdown lines out of the collapsed preview and shows them when 
 describe('the two actions on a card', () => {
   /** Mount with the callbacks wired, and a fetch that answers the DELETE with
    *  whatever writers the test wants. */
-  async function mountWithActs(writers: string[]) {
+  async function mountWithActs(writers: Array<{ name: string; enabled: boolean }>) {
     const card: ChatCard = {
       id: 'c1',
       tab_id: 't1',
@@ -625,7 +625,7 @@ describe('the two actions on a card', () => {
   });
 
   it('removes the card, and says so when a schedule still writes it', async () => {
-    const { removed, cross } = await mountWithActs(['market-hourly']);
+    const { removed, cross } = await mountWithActs([{ name: 'market-hourly', enabled: true }]);
     await act(async () => {
       cross?.click();
       await Promise.resolve();
@@ -634,15 +634,17 @@ describe('the two actions on a card', () => {
     expect(removed[0]).toContain('`market-hourly`');
   });
 
-  it('says NOTHING when nothing writes it', async () => {
-    // A hand-set card going away is not worth a turn.
+  it('STILL speaks when the database knew of no writer', async () => {
+    // The common case, measured: a card kept fresh by a script a cron runs
+    // leaves its name nowhere in the database. Silence here is silence
+    // exactly where the cleanup is most needed.
     const { removed, cross } = await mountWithActs([]);
     await act(async () => {
       cross?.click();
       await Promise.resolve();
     });
     expect(fetched.some((f) => f.startsWith('DELETE'))).toBe(true);
-    expect(removed).toEqual([]);
+    expect(removed[0]).toContain('cron list');
   });
 
   it('does not toggle the card it is acting on', async () => {

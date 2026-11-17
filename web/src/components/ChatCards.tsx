@@ -3,7 +3,7 @@ import type React from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { req } from '../api';
 import { subscribe, subscribeResync } from '../events';
-import { changeRequestDraft, removalFollowUp } from '../lib/card-actions';
+import { type CardWriter, changeRequestDraft, removalFollowUp } from '../lib/card-actions';
 import { cardColorScheme } from '../lib/card-frame';
 import { cardLineMarkdown, cardLineText } from '../lib/card-line';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
@@ -419,9 +419,9 @@ function CardBody({
  * unhandled one in a click handler. The writers are an enrichment; losing them
  * costs a sentence in the chat, not the removal.
  */
-async function removeCard(tabId: string, name: string): Promise<string[]> {
+async function removeCard(tabId: string, name: string): Promise<CardWriter[]> {
   try {
-    const res = await req<{ writers?: string[] }>(
+    const res = await req<{ writers?: CardWriter[] }>(
       `/api/tabs/${encodeURIComponent(tabId)}/cards/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
     );
@@ -440,9 +440,9 @@ export function ChatCards({
   /** Fill the composer and let the person finish the sentence — see
    *  lib/card-actions. Absent in the previews and the unit tests. */
   onChangeRequest?: (text: string) => void;
-  /** Say in the chat that the card is gone and something still writes it.
-   *  Called only when there IS a writer; a hand-set card going away is not
-   *  worth a turn. */
+  /** Say in the chat that the card is gone, and hand over the cleanup. Called
+   *  on EVERY removal: the writer is usually a script muxpad cannot see, so
+   *  staying quiet on an empty list is staying quiet in the common case. */
   onRemoved?: (text: string) => void;
 }) {
   const [cards, setCards] = useState<ChatCard[]>([]);
@@ -632,8 +632,7 @@ export function ChatCards({
                   e.stopPropagation();
                   if (!tabId) return;
                   void removeCard(tabId, card.name).then((writers) => {
-                    const say = removalFollowUp(card.name, writers);
-                    if (say) onRemoved?.(say);
+                    onRemoved?.(removalFollowUp(card.name, writers));
                   });
                 }}
               >

@@ -25,20 +25,42 @@ const SetSchema = z.object({
  * lives here is the tab check and the event.
  */
 /**
- * The ENABLED schedules that write this card, by name.
+ * The schedules muxpad can SEE that name this card.
  *
- * Enabled only: a paused or retired cron is not going to bring the card back,
- * and naming it would send somebody to tidy up something already tidy.
+ * Three ways a cron can be bound to a card, and the database holds only two
+ * of them: the `--card=` column, and a `muxpad card set <name>` written into
+ * the prompt. The third — a cron that runs a script which writes the card —
+ * leaves the card's name nowhere at all. Measured here: `nw-open` and
+ * `nw-close` keep the market card fresh by running `scripts/market_card.sh`,
+ * and a text search for "market" finds neither.
+ *
+ * So this is a HINT for the message, never an inventory, and the message says
+ * so rather than implying the list is the answer.
+ *
+ * PAUSED ONES COUNT. A disabled cron cannot bring the card back today, but it
+ * is litter named for something that no longer exists, and somebody resuming
+ * it later gets a job writing a card nobody kept. The caller is told which is
+ * which.
  */
-export function cardWriters(db: Database.Database, card: string): string[] {
+export function cardWriters(
+  db: Database.Database,
+  card: string,
+): Array<{ name: string; enabled: boolean }> {
   try {
+    // `_` and `%` are LIKE wildcards and both are legal in a card name, so the
+    // pattern escapes them — without this, a card called `a_b` would claim the
+    // schedules of `axb`.
+    const like = `%${card.replace(/([\\%_])/g, '\\$1')}%`;
     return (
-      (
-        db
-          .prepare('SELECT name FROM crons WHERE card = ? AND enabled = 1 ORDER BY name')
-          .all(card) as Array<{ name: string }> | undefined
-      )?.map((r) => r.name) ?? []
-    );
+      db
+        .prepare(
+          `SELECT name, enabled FROM crons
+             WHERE card = ?
+                OR prompt LIKE ? ESCAPE '\\'
+             ORDER BY enabled DESC, name`,
+        )
+        .all(card, like) as Array<{ name: string; enabled: number }>
+    ).map((r) => ({ name: r.name, enabled: r.enabled === 1 }));
   } catch {
     // An older database with no `card` column must not break a deletion: the
     // card still goes, the chat just hears nothing about writers.

@@ -171,12 +171,13 @@ describe('cards routes', () => {
         headers: { 'content-type': 'application/json' },
       });
       const res = await app.request('/t1/cards/market', { method: 'DELETE' });
-      expect(await res.json()).toEqual({ writers: ['market-hourly'] });
+      expect(await res.json()).toEqual({ writers: [{ name: 'market-hourly', enabled: true }] });
     });
 
-    it('says nothing about a schedule that is paused', async () => {
-      // A disabled cron is not going to bring the card back, and naming it sends
-      // somebody to tidy up something already tidy.
+    it('reports a PAUSED schedule too, flagged as paused', async () => {
+      // It cannot fire today, but it is litter named for something that no
+      // longer exists, and somebody resuming it later gets a job writing a
+      // card nobody kept. A manual cleanup removes these; so should this.
       withCron({ enabled: 0 });
       await app.request('/t1/cards/market', {
         method: 'PUT',
@@ -184,7 +185,21 @@ describe('cards routes', () => {
         headers: { 'content-type': 'application/json' },
       });
       const res = await app.request('/t1/cards/market', { method: 'DELETE' });
-      expect(await res.json()).toEqual({ writers: [] });
+      expect(await res.json()).toEqual({ writers: [{ name: 'market-hourly', enabled: false }] });
+    });
+
+    it('finds a cron that writes the card from its PROMPT, with no --card=', async () => {
+      // Measured on the real database: only 3 crons name a card with
+      // `--card=`; others write one from a `muxpad card set` in the prompt. A
+      // lookup that reads the column alone misses them.
+      withCron({ card: null, name: 'nightrun', prompt: 'at the end run muxpad card set market' });
+      await app.request('/t1/cards/market', {
+        method: 'PUT',
+        body: JSON.stringify({ content: 'x' }),
+        headers: { 'content-type': 'application/json' },
+      });
+      const res = await app.request('/t1/cards/market', { method: 'DELETE' });
+      expect(await res.json()).toEqual({ writers: [{ name: 'nightrun', enabled: true }] });
     });
 
     it('does not claim a schedule that writes a DIFFERENT card', async () => {
