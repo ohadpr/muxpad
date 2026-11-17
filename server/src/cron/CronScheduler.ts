@@ -122,6 +122,13 @@ export interface CronFireResult {
   defer?: boolean;
 }
 
+/** Did this fire actually reach a chat? `sent` and `queued` are both delivery
+ *  (a queued message drains on the runner's hello); everything else — a
+ *  deferral, a skip, an error — means nobody has seen it yet. */
+function delivered(r: CronFireResult): boolean {
+  return !r.defer && (r.outcome === 'sent' || r.outcome === 'queued');
+}
+
 export class CronScheduler {
   readonly store: CronStore;
   private readonly panes: PaneStore;
@@ -265,11 +272,19 @@ export class CronScheduler {
     // a typo: its output changes, and the agent is the right thing to show it
     // to. Swallowing it would be a watcher that goes silent exactly when the
     // thing it watches breaks.
+    //
+    // AND THE READING IS NOT BANKED UNTIL SOMEBODY HAS SEEN IT. Marking the
+    // change as observed here, before the fire, loses it outright when the
+    // fire does not go out: quiet hours defer, `max_open` skips, a dead pane
+    // errors — and the next tick then compares against the NEW hash, finds no
+    // change, and stays silent about something that did happen. The hash moves
+    // only once a fire has actually been delivered (below).
+    let seen = false;
     let watched: WatchReading | null = null;
     if (cron.watch_cmd) {
       watched = await this.readWatch(cron);
-      this.store.setWatchHash(cron.id, watched.hash);
       if (watched.hash === cron.watch_hash) {
+        this.store.setWatchHash(cron.id, watched.hash);
         // Not a run. One row per check would bury the fires that matter in a
         // history of nothing happening — the same argument as the quiet-hours
         // deferral above, which also records only a status.
@@ -286,6 +301,7 @@ export class CronScheduler {
       for (const due of fires) {
         const r = await this.fire(cron, due, 0, now, watched);
         this.record(cron, due, now, r, { capped });
+        if (delivered(r)) seen = true;
         last = r;
         if (r.defer) break;
       }
@@ -307,8 +323,13 @@ export class CronScheduler {
       const collapsed = cron.catchup === 'once' ? missed.length : 0;
       const r = await this.fire(cron, current, collapsed, now, watched);
       this.record(cron, current, now, r, { capped });
+      if (delivered(r)) seen = true;
       if (r.defer) return; // quiet hours — leave the anchor alone
     }
+    // Banked only now: somebody has the reading. A fire that was deferred,
+    // skipped or errored leaves the old hash in place, so the next tick sees
+    // the change again and tries once more.
+    if (watched && seen) this.store.setWatchHash(cron.id, watched.hash);
     // ── A ONE-OFF IS DONE ────────────────────────────────────────────────────
     // It fired; there is no next slot. Rolling it forward is what left two live
     // reminders armed for September 2027 — a dated expression recurs ANNUALLY

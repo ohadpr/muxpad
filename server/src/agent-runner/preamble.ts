@@ -1,5 +1,6 @@
 import {
   STANDING_RULES,
+  capsAllower,
   readAgentInstructions,
   wrapAgentInstructions,
 } from '../agent-instructions.js';
@@ -81,7 +82,16 @@ export function turnPreamble(opts: {
   standing?: string;
 }): string {
   const blocks: string[] = [];
-  const full = opts.instructions === undefined ? readAgentInstructions() : opts.instructions;
+  // THE CAPABILITY CUT REACHES EVERY BACKEND, not just Claude. This path is
+  // codex and cursor — the ones with no system-prompt mechanism, which get the
+  // document prepended to their first message — and it was reading the
+  // instructions with no policy, so a machine that may not use Slack was still
+  // handed Slack's manual. The commit that added the filter claimed the
+  // manuals "follow the machine"; they followed it on one backend out of three.
+  const full =
+    opts.instructions === undefined
+      ? readAgentInstructions(undefined, capsAllower(process.env.MUXPAD_CAPS))
+      : opts.instructions;
   const card = opts.standing ?? STANDING_RULES;
 
   if (!opts.instructionsInThread && full?.trim()) {

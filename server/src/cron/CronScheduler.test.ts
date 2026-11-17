@@ -942,6 +942,29 @@ describe('CronScheduler', () => {
     await s.tick();
     expect(s.store.getById(cron.id)?.next_due_at).toBeGreaterThan(now);
   });
+
+  it('does not bank a change nobody was shown', async () => {
+    // THE BUG THIS IS. The reading was marked observed BEFORE the fire, so a
+    // fire that never went out — quiet hours deferring, max_open skipping, a
+    // dead pane erroring — still moved the hash. The next tick compared
+    // against the NEW reading, found no change, and stayed silent about
+    // something that had actually happened. Losing the one event it exists
+    // for is the worst failure a watcher has.
+    let chatting = true;
+    const s = scheduler({ lastHumanSendAt: () => (chatting ? now - 60_000 : null) });
+    const cron = makeCron(s, { quiet_mins: 10, watch_cmd: 'printf changed-once' });
+    runAt(cron);
+    await s.tick();
+    expect(sent, 'the fire was deferred').toHaveLength(0);
+    expect(s.store.getById(cron.id)?.watch_hash, 'an unseen change must not be banked').toBeNull();
+
+    // …and once the chat is free the SAME output still counts as news.
+    chatting = false;
+    now += 60_000;
+    await s.tick();
+    expect(sent, 'the change is delivered on the next tick').toHaveLength(1);
+    expect(s.store.getById(cron.id)?.watch_hash).toBeTruthy();
+  });
 });
 
 describe('a one-off fires once and retires', () => {
