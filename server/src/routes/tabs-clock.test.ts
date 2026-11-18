@@ -146,6 +146,14 @@ describe('the chat clock on the wire', () => {
   it('a tab.updated carries the same lifecycle the list does', async () => {
     // Every emitter routes through decorateTab for exactly this reason: a
     // hand-built payload blanks the fields on the client until the next poll.
+    //
+    // ASSERTED AGAINST THE LIST, not against a hardcoded `done: true`. This
+    // used to mark the tab unread to trigger an emit and then expect it to be
+    // folded — which stopped being true when an UNREAD chat started being held
+    // in the live list (tab-clock.ts, ClockOverrides): silence is not the same
+    // as finished, and a result nobody has read is not abandoned. The thing
+    // this test is actually for — the emitted payload agreeing with the listed
+    // row — is unaffected either way, and is now what it checks.
     const t = await newTab('x');
     tabs.resetClock(t.id, Date.now() - CHAT_DECAY_MS - 1_000);
     const seen: Tab[] = [];
@@ -154,8 +162,12 @@ describe('the chat clock on the wire', () => {
     });
     await test.app.request(`/api/tabs/${t.id}/unread`, { method: 'POST' });
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.done).toBe(true);
-    expect(seen[0]?.clock?.fill).toBe(1);
+    const listed = (await listTabs()).find((r) => r.id === t.id) as Tab;
+    expect(seen[0]?.done).toBe(listed.done);
+    expect(seen[0]?.clock?.fill).toBe(listed.clock?.fill);
+    expect(seen[0]?.clock?.fill, 'the clock itself still ran out').toBe(1);
+    // …and the held-live rule is the reason it is not folded.
+    expect(listed.done, 'an unread chat stays in the live list').toBe(false);
   });
 
   it('the single-tab read carries the same lifecycle as the list', async () => {

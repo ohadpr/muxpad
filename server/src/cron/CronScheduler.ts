@@ -35,6 +35,7 @@ import { TabStore } from '../store/TabStore.js';
 import type { TabActivity } from '../tab-activity.js';
 import { CronStore } from './CronStore.js';
 import { firesDue } from './schedule.js';
+import { fireDiedUnstarted } from './stale-fire.js';
 import { type WatchReading, runWatch, withWatchReading } from './watch.js';
 
 /** Tick cadence. 30s granularity is ample for agent work and cheap: one
@@ -206,6 +207,12 @@ export class CronScheduler {
     if (now - this.bootAt < CRON_STARTUP_GRACE_MS) return;
     this.ticking = true;
     try {
+      // A fire whose worker never started leaves a row nothing ever corrects —
+      // see stale-fire.ts for the schedule that did this eight mornings
+      // running while reporting zero failures. Swept before firing, so a
+      // schedule that is broken this way reaches its fail limit instead of
+      // looking healthy forever.
+      this.sweepUnstartedFires(now);
       for (const cron of this.store.listDue(now)) {
         // Re-read: a long await earlier in this pass may have disabled or
         // deleted this row (auto-disable, a concurrent DELETE).
@@ -219,6 +226,48 @@ export class CronScheduler {
       console.error('[cron] tick failed', err);
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * Mark fires whose worker never came up, so a broken schedule can fail.
+   *
+   * Only the newest in-flight run of each enabled cron: older ones are
+   * history, and rewriting the whole table on a 30-second tick to correct
+   * something nobody is reading is work for nothing.
+   */
+  private sweepUnstartedFires(now: number): void {
+    for (const cron of this.store.list()) {
+      if (!cron.enabled) continue;
+      const run = this.store.runs(cron.id, 1)[0];
+      if (!run) continue;
+      const paneId = run.target_pane ?? null;
+      const verdict = fireDiedUnstarted({
+        outcome: run.outcome,
+        firedAt: run.fired_at,
+        now,
+        paneId,
+        paneExists: paneId ? this.panes.getById(paneId) !== null : false,
+        paneDead: paneId ? this.deps.cache.isDead(paneId) : false,
+      });
+      if (!verdict.dead) continue;
+      this.store.finishRun(run.id, 'failed', verdict.why);
+      // Through recordOutcome, so the streak moves and CRON_FAIL_LIMIT can
+      // retire it. A schedule that cannot start a worker is exactly what that
+      // limit is for, and it was the one failure it could not see.
+      const streak = this.store.recordOutcome(cron.id, {
+        at: now,
+        status: `error:${verdict.why}`,
+        ok: false,
+      });
+      console.error(`[cron] ${cron.name}: fire never started — ${verdict.why}`);
+      if (streak >= CRON_FAIL_LIMIT) {
+        this.store.setEnabled(cron.id, false);
+        this.deps.notify?.(
+          `cron ${cron.name} disabled`,
+          `${streak} fires never started — ${verdict.why}`,
+        );
+      }
     }
   }
 

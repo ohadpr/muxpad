@@ -356,4 +356,57 @@ describe('/api/crons', () => {
       expect(updated.tab.next_cron?.next_due_at).toBe(patched.next_due_at);
     }
   });
+
+  describe('moving a cron to another machine', () => {
+    /**
+     * A workspace carries a default node, so moving a cron between workspaces
+     * moves it between MACHINES. There was no way to do that but an UPDATE by
+     * hand, and the cost was measured: `trayo-dev-server-daily` fired for eight
+     * mornings into a workspace on the work machine while its script lived on
+     * the personal one, and every worker exited with "this pane belongs to
+     * another machine".
+     */
+    const otherWs = () => new WorkspaceStore(db).create({ name: 'Other' }).id;
+
+    it('repoints a new-tab cron and leaves its slot alone', async () => {
+      const made = await create({
+        name: 'mover',
+        target_kind: 'new-tab',
+        target_pane: undefined,
+        workspace_id: wsId,
+      });
+      const to = otherWs();
+      const res = await json<Cron>(`/api/crons/${made.body.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workspace_id: to }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.workspace_id).toBe(to);
+      expect(res.body.next_due_at, 'moving it does not move its slot').toBe(made.body.next_due_at);
+    });
+
+    it('refuses a workspace that does not exist', async () => {
+      const made = await create({
+        name: 'mover2',
+        target_kind: 'new-tab',
+        target_pane: undefined,
+        workspace_id: wsId,
+      });
+      const res = await json(`/api/crons/${made.body.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workspace_id: 'nope' }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('refuses to move a cron that targets a chat rather than a new tab', async () => {
+      // A --pane cron has no workspace to move; it has a chat.
+      const made = await create({ name: 'mover3' });
+      const res = await json(`/api/crons/${made.body.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workspace_id: otherWs() }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
 });

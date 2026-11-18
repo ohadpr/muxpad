@@ -168,7 +168,34 @@ export function hasDecayClock(index: ClockIndex, tabId: string): boolean {
  * from parent to child — there is nothing to propagate now that a sub-chat has
  * no clock of its own to stop.
  */
-export function resolveTabClock(index: ClockIndex, tabId: string, now: number): TabLifecycle {
+/**
+ * A chat the CLOCK would retire, that something else says is still live.
+ *
+ * Decay is a statement about silence — four days with nothing said — and
+ * silence is not the same as finished. A chat whose agent is still working, or
+ * that is blocked waiting on an answer, or that is holding a result nobody has
+ * read, has had nothing SAID in it and is the opposite of abandoned. Folding
+ * it into "older chats" hides exactly the row the owner needed to see.
+ *
+ * Injected rather than read here, for the reason the whole module exists: this
+ * file owns the POLICY and knows nothing about runners, questions or unread
+ * marks. tab-retire.ts already splits the same judgement the same way
+ * ("NOT FINISHED" / "FINISHED, ROW STAYS") and this is its time-based twin.
+ *
+ * It applies to DECAY ONLY. An explicitly archived chat stays archived — the
+ * person performed that, and a running process is not a reason to overrule
+ * them.
+ */
+export interface ClockOverrides {
+  heldLive?: ((tabId: string) => boolean) | undefined;
+}
+
+export function resolveTabClock(
+  index: ClockIndex,
+  tabId: string,
+  now: number,
+  overrides: ClockOverrides = {},
+): TabLifecycle {
   const self = index.get(tabId);
   // An unknown id (a tab deleted between the read and the decoration) is
   // reported LIVE with no clock. Nothing should render it, and if something
@@ -220,9 +247,10 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
   // A DECAYED chat was never stamped by anything — nothing performed it — so
   // the honest "when" is the moment its clock crossed, which is exactly what
   // `expires_at` is.
-  return chatClockDone(clock, now)
-    ? { done: true, done_reason: 'decayed', done_at: clock.expires_at, clock }
-    : { done: false, done_at: null, clock };
+  if (!chatClockDone(clock, now)) return { done: false, done_at: null, clock };
+  // …unless something in it is still live. See ClockOverrides.
+  if (overrides.heldLive?.(tabId) === true) return { done: false, done_at: null, clock };
+  return { done: true, done_reason: 'decayed', done_at: clock.expires_at, clock };
 }
 
 /**
@@ -240,7 +268,12 @@ export function resolveTabClock(index: ClockIndex, tabId: string, now: number): 
  * there is. Lists still pre-read the index once and pass it down, which is
  * cheaper again.
  */
-export function tabLifecycle(db: Database.Database, tabId: string, now: number): TabLifecycle {
+export function tabLifecycle(
+  db: Database.Database,
+  tabId: string,
+  now: number,
+  overrides: ClockOverrides = {},
+): TabLifecycle {
   const tabs = new TabStore(db);
   const self = tabs.clockRow(tabId);
   if (!self) return { done: false, done_at: null, clock: null };
@@ -255,15 +288,19 @@ export function tabLifecycle(db: Database.Database, tabId: string, now: number):
         ]
       : [[self.id, self]],
   );
-  return resolveTabClock(index, tabId, now);
+  return resolveTabClock(index, tabId, now, overrides);
 }
 
 /** Every tab currently out of the live list, by id. One pass, no per-row
  *  queries. */
-export function doneTabIds(index: ClockIndex, now: number): Set<string> {
+export function doneTabIds(
+  index: ClockIndex,
+  now: number,
+  overrides: ClockOverrides = {},
+): Set<string> {
   const out = new Set<string>();
   for (const id of index.keys()) {
-    if (resolveTabClock(index, id, now).done) out.add(id);
+    if (resolveTabClock(index, id, now, overrides).done) out.add(id);
   }
   return out;
 }

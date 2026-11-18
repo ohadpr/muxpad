@@ -858,22 +858,22 @@ and run from inside a chat it lands as a SUB-AGENT of yours automatically.
 **WHERE THE USER ACTUALLY SEES IT — say this correctly, because they will go
 looking.** A sub-agent is NOT a row of its own in the rail:
 
- · **While it works** it is a PILL at the end of YOUR row ("2 · 1 running"),
-   shut by default — forty workers would otherwise be forty rows. Your own
-   state mark wears the loudest state in the family, so a blocked worker still
-   reaches a glance. Expanding the pill shows the children, and that sticks.
+ · **While it works** it lives in the parent chat's WORK DRAWER, beside the
+   conversation that started it, with the running ones counted on that chat's
+   badge (web/src/components/NavTree.tsx — the rail lists CONVERSATIONS, and a
+   worker is a detail of one). Forty workers would otherwise be forty rows.
  · **When it reports** a \`⇤ N sub-agents reported\` chip lands in YOUR chat,
    carrying what it said and expanding to its final message.
  · **After that it retires** and leaves the live list entirely — its result is
-   already in your conversation. It stays reachable through the done drawer's
-   sub-chat section and through \`@\`, and its transcript is never deleted.
+   already in your conversation. It stays reachable from the parent's drawer
+   and through \`@\`, and its transcript is never deleted.
 
 A LAUNCH LEAVES A CARD IN YOUR CHAT, and so does the result — one pair per
 round, re-drawn for every \`muxpad agent send\` that hands the same worker its
 next job (web/src/lib/chat-mention.ts \`spawnCards\`). What a sub-agent does NOT
 get is a row of its own in the rail. So if the user asks where their sub-agent
-went, the answer is: the card where you launched it, the pill on this chat's
-row while it works, and the chip when it reports.
+went, the answer is: the card where you launched it, this chat's work drawer
+while it runs, and the chip when it reports.
 
 **EACH RESULT REACHES YOU THE MOMENT IT LANDS — unless you ask to wait.**
 

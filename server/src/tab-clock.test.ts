@@ -547,4 +547,39 @@ describe('tab-clock', () => {
     );
     expect(live).toBeTruthy();
   });
+
+  describe('silence is not the same as finished', () => {
+    /**
+     * The clock retires a chat after four days with nothing SAID in it. A chat
+     * whose agent is still working, that is blocked on a question, or that is
+     * holding a result nobody has read has had nothing said in it either — and
+     * folding those into "older chats" hides exactly the row worth looking at.
+     *
+     * The drawer itself stays. Without time-based folding the live list grows
+     * without bound, which is the failure this clock exists to prevent.
+     */
+    it('still folds a chat nobody is waiting on', () => {
+      const id = chat('quiet', 30);
+      expect(resolveTabClock(clockIndex(db), id, Date.now()).done).toBe(true);
+    });
+
+    it('keeps a chat that something says is still live', () => {
+      const id = chat('working', 30);
+      const held = resolveTabClock(clockIndex(db), id, Date.now(), { heldLive: () => true });
+      expect(held.done).toBe(false);
+      // The clock still rides along: the row shows its age, it just does not
+      // leave the list while there is work or an unread result in it.
+      expect(held.clock).not.toBeNull();
+    });
+
+    it('does NOT overrule an explicit archive', () => {
+      // Somebody performed that. A process still running is not a reason to
+      // undo it behind their back.
+      const id = chat('archived', 30);
+      tabs.retire(id, 'archived');
+      expect(resolveTabClock(clockIndex(db), id, Date.now(), { heldLive: () => true }).done).toBe(
+        true,
+      );
+    });
+  });
 });

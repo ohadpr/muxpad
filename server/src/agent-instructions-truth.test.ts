@@ -184,7 +184,12 @@ describe('the instructions name things that exist', () => {
     // `muxpad agent send` handover leaves another. An agent told otherwise
     // tells the user their card does not exist while it is on screen.
     expect(ALL_INSTRUCTION_TEXT).not.toMatch(/sidebar with its own row/);
-    expect(ALL_INSTRUCTION_TEXT).toMatch(/PILL at the end of YOUR row/);
+    // The rail lists CONVERSATIONS; a worker is a detail of one, and lives in
+    // its parent's WORK DRAWER (NavTree.tsx). The help used to say "a pill at
+    // the end of your row", which was the arrangement before sub-chats moved
+    // into the drawer — a sidebar review caught the two disagreeing.
+    expect(ALL_INSTRUCTION_TEXT).toMatch(/work drawer/i);
+    expect(ALL_INSTRUCTION_TEXT).not.toMatch(/PILL at the end of YOUR row/);
     expect(ALL_INSTRUCTION_TEXT).not.toMatch(/NO card at spawn time/);
     expect(ALL_INSTRUCTION_TEXT).toMatch(/A LAUNCH LEAVES A CARD IN YOUR CHAT/);
   });

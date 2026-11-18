@@ -1006,11 +1006,19 @@ export function decorateTab(
   // chat. Both fields are UNCONDITIONAL, even when false/fresh — clients
   // coalesce `tab.updated` onto their cached row, so a field omitted when
   // false would leave a stale `done: true` after a revival.
+  // ── SILENCE IS NOT THE SAME AS FINISHED ────────────────────────────────
+  // The clock retires a chat after four days with nothing SAID in it. A chat
+  // whose agent is still working, that is blocked on a question, or that is
+  // holding a result nobody has read has had nothing said in it either — and
+  // folding those into "older chats" hides the one row that needed looking at.
+  // The status rollup above has already answered this for these panes, so the
+  // override costs nothing extra.
+  const heldLive = () => status === 'working' || status === 'blocked' || unread;
   const lifecycle = clocks
-    ? resolveTabClock(clocks.index, tab.id, clocks.now)
+    ? resolveTabClock(clocks.index, tab.id, clocks.now, { heldLive })
     : // No pre-read (a single-row emit): resolve from at most two targeted row
       // reads rather than scanning the table. See tabLifecycle.
-      tabLifecycle(db, tab.id, Date.now());
+      tabLifecycle(db, tab.id, Date.now(), { heldLive });
   // `done_reason` is the one lifecycle field that IS conditional, and it can
   // be: it only ever appears alongside `done: true`, which is unconditional —
   // so a client coalescing a live row over a done one clears `done` in the

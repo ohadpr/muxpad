@@ -965,6 +965,29 @@ describe('CronScheduler', () => {
     expect(sent, 'the change is delivered on the next tick').toHaveLength(1);
     expect(s.store.getById(cron.id)?.watch_hash).toBeTruthy();
   });
+
+  it('fails a fire whose worker never started, so the streak can retire it', async () => {
+    // Measured: a schedule fired every morning for eight days, recorded ZERO
+    // failures and did no work, because nothing ever corrected a row that no
+    // turn had touched. The auto-disable could not see the one failure it
+    // exists for.
+    const s = scheduler();
+    const cron = makeCron(s, { target_kind: 'new-tab', target_pane: null, workspace_id: wsId });
+    runAt(cron);
+    await s.tick();
+    const run = s.store.runs(cron.id)[0];
+    const pane = new PaneStore(db).listByTab(run?.target_tab as string)[0];
+    expect(run?.outcome).toMatch(/^(sent|queued)$/);
+
+    // The worker's chat goes away without a turn ever happening.
+    new PaneStore(db).delete(pane?.id as string);
+    now += 11 * 60_000;
+    await s.tick();
+
+    const after = s.store.runs(cron.id).find((r) => r.id === run?.id);
+    expect(after?.outcome, 'the row stops claiming it is still in flight').toBe('failed');
+    expect(s.store.getById(cron.id)?.fail_streak, 'and the streak moves').toBeGreaterThan(0);
+  });
 });
 
 describe('a one-off fires once and retires', () => {

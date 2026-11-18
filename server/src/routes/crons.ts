@@ -217,6 +217,17 @@ export function cronsRoutes(deps: {
         prompt: z.string().min(1).max(8000).optional(),
         schedule: z.string().min(1).optional(),
         tz: z.string().optional(),
+        /**
+         * Move a new-tab cron to another workspace — which is to say, to
+         * another MACHINE, since a workspace carries a default node.
+         *
+         * There was no way to do this but SQL, and the cost was measured:
+         * `trayo-dev-server-daily` spent eight mornings firing into a
+         * workspace on the work machine while its script lived on this one.
+         * Every worker exited with "this pane belongs to another machine", and
+         * the only fix available was an UPDATE by hand.
+         */
+        workspace_id: z.string().optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -232,6 +243,13 @@ export function cronsRoutes(deps: {
     }
     const tz = body.tz ?? cron.tz;
     if (!isValidTimezone(tz)) return c.json(bad(`unknown timezone "${tz}"`), 400);
+    if (body.workspace_id !== undefined) {
+      if (cron.target_kind !== 'new-tab')
+        return c.json(bad('only a --new-tab cron has a workspace to move'), 400);
+      if (!workspaces.getById(body.workspace_id))
+        return c.json(bad(`workspace ${body.workspace_id} not found`), 400);
+      s.setWorkspace(cron.id, body.workspace_id);
+    }
     if (body.prompt !== undefined || body.schedule !== undefined || body.tz !== undefined) {
       // Re-anchors (and recomputes the jitter, whose cap depends on the
       // interval), so an edit takes effect at the next real slot instead of

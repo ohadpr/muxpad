@@ -350,6 +350,18 @@ export class CronStore {
       .run(outcome, detail ?? null, runId);
   }
 
+  /**
+   * Move a new-tab cron to another workspace — and therefore, usually, to
+   * another machine.
+   *
+   * Separate from `reschedule` because it changes WHERE the work happens, not
+   * WHEN: the anchor and the jitter are untouched, so a daily job stays on its
+   * slot. See the route for the eight mornings this cost.
+   */
+  setWorkspace(id: string, workspaceId: string): void {
+    this.db.prepare('UPDATE crons SET workspace_id = ? WHERE id = ?').run(workspaceId, id);
+  }
+
   /** Remember what the watch command's output hashed to, so the next slot can
    *  tell whether anything happened. Written whether or not it fired: the
    *  point of reference is the LAST OBSERVATION, not the last fire. */
