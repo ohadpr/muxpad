@@ -7,9 +7,10 @@ import { z } from 'zod';
 import { type BrowserAppState, ensureBrowserApp, listBrowserApps } from '../browser/BrowserApps.js';
 import { type BrowserEvent, BrowserEvents } from '../browser/BrowserEvents.js';
 import { BrowserOwner } from '../browser/BrowserOwner.js';
-import { browserJarPath, normalizeProfileName } from '../browser/BrowserProfile.js';
+import { browserAppSlug, browserJarPath, normalizeProfileName } from '../browser/BrowserProfile.js';
 import { browserViewerLink, parseBrowserProxyPath } from '../browser/BrowserProxy.js';
 import { browserShotPath, saveBrowserShot } from '../browser/BrowserShots.js';
+import { tierOf, upgrade } from '../browser/BrowserTier.js';
 import {
   BrowserAttention,
   BrowserWheel,
@@ -304,7 +305,14 @@ export function browsersRoutes(deps: {
   const attention = new BrowserAttention(deps.db);
   const events = new BrowserEvents(deps.db);
   const owner = new BrowserOwner(deps.db);
-  const chromeFor = deps.chromePath ?? (() => findChrome());
+  // WHICH BINARY THIS PROFILE GETS. Light until a site refuses it — see
+  // BrowserTier.ts for why the heavy one cannot be the default and why the
+  // upgrade is forgotten when the browser stops.
+  const chromeFor = (profile?: string) => {
+    if (deps.chromePath) return deps.chromePath();
+    const prefer = profile && tierOf(deps.dataDir, profile) === 'real' ? 'real' : 'light';
+    return findChrome({ prefer });
+  };
 
   const view = (state: BrowserAppState): BrowserView => ({
     ...state,
@@ -439,7 +447,7 @@ export function browsersRoutes(deps: {
     // body is read as a to-do list, and "point it at /Applications" is exactly
     // the habit that put a TCC dialog on somebody's screen. The reason lives in
     // findChrome.ts, where the next person to edit discovery will read it.
-    const chrome = chromeFor();
+    const chrome = chromeFor(profile);
     if (!chrome) {
       return c.json(
         {
@@ -640,6 +648,36 @@ export function browsersRoutes(deps: {
     }
   });
 
+  /**
+   * The host reporting that this page refused the browser it is driving.
+   *
+   * Upgrades the session to the full browser and restarts it, so the agent's
+   * next navigation is made by something the site will talk to. Idempotent:
+   * a page that says it three times upgrades once.
+   *
+   * Refusing past the cap is a 200, not an error — nothing went wrong, there
+   * is simply no memory for a third heavy browser, and the caller's job is to
+   * SAY so rather than retry.
+   */
+  app.post('/:profile/walled', async (c) => {
+    const profile = profileParam(c.req.param('profile'));
+    if (!profile) return c.json({ error: 'invalid profile name' }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as { why?: unknown; url?: unknown };
+    const why =
+      typeof body.why === 'string' && body.why.trim()
+        ? body.why.trim().slice(0, 120)
+        : 'the site refused this browser';
+    const done = upgrade(deps.dataDir, profile, why);
+    if (!done.ok) return c.json({ upgraded: false, reason: done.reason });
+    if (done.already) return c.json({ upgraded: false, reason: 'already on the full browser' });
+    console.log(`[browser] ${profile} upgraded to the full browser — ${why}`);
+    // Restart so the new binary is the one running. The host's own command is
+    // rebuilt from the tier on start, which is the hook this whole feature
+    // hangs off.
+    await deps.registry.stop(browserAppSlug(profile)).catch(() => undefined);
+    return c.json({ upgraded: true, why });
+  });
+
   app.get('/:profile/cdp/*', async (c) => {
     const profile = profileParam(c.req.param('profile'));
     if (!profile) return c.json({ error: 'invalid profile name' }, 400);
@@ -649,7 +687,7 @@ export function browsersRoutes(deps: {
     // to discovery, which is how the POST route finds one. Reading the raw dep
     // here made this the only route that could not find a browser the rest of
     // the server was already using.
-    const chrome = chromeFor();
+    const chrome = chromeFor(profile);
     if (!chrome) return c.json({ error: 'no browser muxpad can own' }, 503);
 
     const state = await ensureBrowserApp(profile, {

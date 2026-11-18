@@ -46,6 +46,9 @@ import { join } from 'node:path';
 export const CHROME_BIN_ENV = 'MUXPAD_CHROME_BIN';
 
 export interface FindChromeDeps {
+  /** `real` searches for the FULL browser first — see the note in findChrome.
+   *  Absent means light, which is what every caller wanted before tiers. */
+  prefer?: 'light' | 'real' | undefined;
   env?: NodeJS.ProcessEnv;
   home?: string;
   /** Directory listing, injected for tests. Returns [] for a missing dir. */
@@ -166,6 +169,26 @@ export function findChrome(deps: FindChromeDeps = {}): FoundChrome | null {
   const env = deps.env ?? process.env;
   const home = deps.home ?? homedir();
   const list = deps.list ?? defaultList;
+  // ── THE FULL BROWSER, WHEN A SITE HAS ALREADY REFUSED THE SHELL ────────
+  //
+  // Same search, opposite order. The shell is right until something turns it
+  // away for being obviously automated (BotWall.ts), and then the only thing
+  // that gets through is a browser that is not the shell — measured: on Chrome
+  // for Testing `navigator.webdriver` is false, the client hints stop naming
+  // HeadlessChrome, and Cloudflare's own demo issues a token unprompted.
+  //
+  // It is never the default: 1,338 MB against 20 MB, times a dozen sessions.
+  // BrowserTier.ts decides who gets one and how many may hold one at a time.
+  const order: ReadonlyArray<readonly [string, string]> =
+    deps.prefer === 'real'
+      ? ([
+          ['chromium', 'playwright chromium (upgraded)'],
+          [HEADLESS_SHELL, 'playwright headless shell'],
+        ] as const)
+      : ([
+          [HEADLESS_SHELL, 'playwright headless shell'],
+          ['chromium', 'playwright chromium'],
+        ] as const);
 
   // 1. An explicit path wins outright and is NOT verified. Somebody may point
   //    this at a browser inside a bundle, and stat-ing to check would raise the
@@ -178,10 +201,7 @@ export function findChrome(deps: FindChromeDeps = {}): FoundChrome | null {
   //    for an install that has no shell downloaded, not the preference.
   const cache = join(home, 'Library', 'Caches', 'ms-playwright');
   const entries = list(cache);
-  for (const [prefix, source] of [
-    [HEADLESS_SHELL, 'playwright headless shell'],
-    ['chromium', 'playwright chromium'],
-  ] as const) {
+  for (const [prefix, source] of order) {
     const newest = newestPlaywrightChromium(entries, prefix);
     if (!newest) continue;
     const revisionDir = join(cache, newest);

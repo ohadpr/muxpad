@@ -1192,3 +1192,42 @@ describe("answering a summons: I'm done, and Skip", () => {
     expect(resumed).toEqual([]);
   });
 });
+
+describe('a site that refuses this browser', () => {
+  /**
+   * muxpad drives the light browser because it raises no macOS prompt; some
+   * sites refuse it for being obviously automated. The upgrade is automatic
+   * and per session, because the full browser is 1,338 MB against 20 MB
+   * (measured) and a dozen sessions of it is an 18 GB machine.
+   */
+  it('upgrades the session once and restarts its browser', async () => {
+    const res = await post('/api/browsers/shopping/walled', { why: 'cloudflare refused with 403' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ upgraded: true, why: 'cloudflare refused with 403' });
+    expect(
+      registry.stop.mock.calls.flat(),
+      'the browser restarts so the new binary is the one running',
+    ).toContain('browser-shopping');
+  });
+
+  it('is idempotent — a page that says it three times upgrades once', async () => {
+    await post('/api/browsers/shopping/walled', { why: 'first' });
+    const again = await post('/api/browsers/shopping/walled', { why: 'second' });
+    expect(await again.json()).toEqual({
+      upgraded: false,
+      reason: 'already on the full browser',
+    });
+  });
+
+  it('refuses past the cap with a 200 and a reason, not an error', async () => {
+    // Nothing went wrong; there is simply no memory for a third heavy
+    // browser. The caller's job is to SAY so, not to retry.
+    await post('/api/browsers/a/walled', { why: 'x' });
+    await post('/api/browsers/b/walled', { why: 'x' });
+    const third = await post('/api/browsers/c/walled', { why: 'x' });
+    expect(third.status).toBe(200);
+    const body = (await third.json()) as { upgraded: boolean; reason: string };
+    expect(body.upgraded).toBe(false);
+    expect(body.reason).toContain('limit 2');
+  });
+});

@@ -6,6 +6,12 @@ import { join } from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { AgentCdpGate, bridgeAgentCdp } from '../AgentCdp.js';
 import {
+  type PageEvidence,
+  WALL_CHECK_DELAY_MS,
+  botWallVerdict,
+  pageEvidenceExpression,
+} from '../BotWall.js';
+import {
   type KeyInput,
   type MouseInput,
   type TouchInput,
@@ -315,6 +321,49 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     }).catch(() => undefined);
   };
 
+  /**
+   * A SITE THAT TURNS THIS BROWSER AWAY GETS A BETTER ONE.
+   *
+   * muxpad drives the headless shell because it has no app surface to raise a
+   * macOS prompt about; the cost is that it announces itself as automated and
+   * some sites refuse it. Rather than making that somebody's setting, the
+   * refusal is NOTICED and this session is upgraded to the full browser —
+   * which is 1.3 GB, which is why it happens per session and only on evidence.
+   *
+   * Read AFTER a beat, because the text of a challenge page arrives a moment
+   * after the navigation does, and once per page: a wall that is still a wall
+   * on reload is the same wall.
+   */
+  let wallReported: string | null = null;
+  const checkForWall = (): void => {
+    if (!opts.apiUrl || !isBrowsingUrl(currentUrl) || wallReported === currentUrl) return;
+    const url = currentUrl;
+    setTimeout(() => {
+      if (currentUrl !== url) return; // moved on; whatever it was is gone
+      void (async () => {
+        try {
+          const seen = await cdp.send('Runtime.evaluate', {
+            expression: pageEvidenceExpression(),
+            returnByValue: true,
+          });
+          const evidence = (seen as { result?: { value?: unknown } })?.result?.value;
+          const verdict = botWallVerdict((evidence ?? {}) as PageEvidence);
+          if (!verdict.walled) return;
+          wallReported = url;
+          log(`[browser] ${url} refused this browser — ${verdict.why}`);
+          await fetch(`${opts.apiUrl}/api/browsers/${encodeURIComponent(opts.profile)}/walled`, {
+            method: 'POST',
+            headers: apiHeaders({ 'content-type': 'application/json' }),
+            body: JSON.stringify({ why: verdict.why, url }),
+          });
+        } catch {
+          // Noticing a wall is a courtesy. It must never be able to take the
+          // browser down with it.
+        }
+      })();
+    }, WALL_CHECK_DELAY_MS).unref?.();
+  };
+
   cdp.on('Page.frameNavigated', ((p: { frame: { parentId?: string; url: string } }) => {
     if (p.frame.parentId) return;
     currentUrl = p.frame.url;
@@ -322,6 +371,7 @@ export async function startBrowserHost(opts: BrowserHostOptions): Promise<Browse
     // including ones the AGENT made, which is most of them.
     announceUrl();
     announceFirstPage();
+    checkForWall();
   }) as never);
 
   const viewers = new Set<WsSocket>();

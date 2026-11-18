@@ -29,6 +29,7 @@ import { browserAppSlug, browserProfileDir } from './browser/BrowserProfile.js';
 import { DEFAULT_BROWSER_PROFILES } from './browser/BrowserProfile.js';
 import { parseBrowserProxyPath } from './browser/BrowserProxy.js';
 import { clearBrowserShots } from './browser/BrowserShots.js';
+import { clearTier } from './browser/BrowserTier.js';
 import { BrowserWheel } from './browser/BrowserWheel.js';
 import { shouldStopIdleBrowser } from './browser/IdleStop.js';
 import {
@@ -1036,6 +1037,10 @@ const stopIdleBrowsers = async () => {
       const appRow = new AppStore(db).getBySlug(row.slug);
       if (!appRow) continue;
       await appRegistry.stop(appRow.id);
+      // AND IT GOES BACK TO THE LIGHT BROWSER. A session upgraded because one
+      // site refused it does not need 1.3 GB tomorrow; being refused again
+      // costs one upgrade and a reload. See BrowserTier.ts.
+      clearTier(config.dataDir, row.profile);
       console.log(
         `[browser] stopped '${row.profile}' — idle ${Math.round(idle.idleMs / 60_000)}m, nobody attached`,
       );
