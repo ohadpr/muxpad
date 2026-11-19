@@ -1855,6 +1855,38 @@ const MIGRATIONS: Migration[] = [
       if (!has('watch_hash')) db.exec('ALTER TABLE crons ADD COLUMN watch_hash TEXT');
     },
   },
+  {
+    // WHICH CHAT REGISTERED AN APP.
+    //
+    // ⌘K lists apps and published artifacts, so "where is the thing I made"
+    // is answerable without asking an agent to go and look. The other half of
+    // that question is "and which conversation made it", and the two kinds
+    // already answered it differently:
+    //
+    //   ARTIFACTS ALREADY DO. `muxpad publish` sends its pane, and the route
+    //   writes a chat_actions row with `ref = 'publish:<slug>'` — the card
+    //   that appears in the chat that published it. That record is indexed,
+    //   private, and already covers everything published since it shipped, so
+    //   a table here would have been a second copy of it. (It could not have
+    //   gone in the slug directory either: everything under a slug is served
+    //   to the open internet, so a sidecar naming the chat would publish the
+    //   chat.)
+    //
+    //   APPS DID NOT. `muxpad app add` writes no card and the apps table has
+    //   never known who registered it. Hence this one column.
+    //
+    // Nullable and NOT backfilled: every app registered before this, and any
+    // added from an ordinary shell, has no origin. An origin inferred from a
+    // timestamp would be a wrong chat stated confidently. Not a foreign key
+    // either — deleting a chat leaves the app alone, because the app is still
+    // running and still yours.
+    version: 57,
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(apps)').all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'origin_tab'))
+        db.exec('ALTER TABLE apps ADD COLUMN origin_tab TEXT');
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

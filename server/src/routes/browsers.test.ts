@@ -2,9 +2,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { browserTestDb } from '../test-helpers/browserTestDb.js';
 import { OPENED_QUIET_MS, browsersRoutes } from './browsers.js';
 
 /**
@@ -54,16 +55,9 @@ beforeEach(() => {
   };
   handbackCalls = 0;
   summonsChanges = [];
-  db = new Database(':memory:');
-  db.exec(`CREATE TABLE apps (
-    id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-    cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
-    autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
-    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-    CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE panes (id TEXT PRIMARY KEY, tab_id TEXT NOT NULL,
-                        kind TEXT NOT NULL DEFAULT 'shell',
-                        created_at INTEGER NOT NULL);`);
+  // The REAL schema — see test-helpers/browserTestDb. A hand-rolled subset
+  // here is what made one new `apps` column fail this whole file.
+  db = browserTestDb();
   // The real AppRegistry.start ENABLES the row; a fake that does not model
   // that makes every ensure() look like a fresh launch, which is exactly the
   // signal the "opened" event is keyed on.
@@ -125,6 +119,31 @@ async function ensure(opts: { profile?: string; tabId?: string } | string = 'sho
 }
 
 const get = (path: string) => app.request(path);
+
+/**
+ * A chat with an agent pane in it, for the summons tests.
+ *
+ * Positional `INSERT INTO panes VALUES (?,?,?,?)` was repeated four times and
+ * broke the moment the real schema arrived under it — `panes` has sixteen
+ * columns. Named columns, in one place, and a workspace and tab for the pane
+ * to belong to: foreign keys are enforced, which is the schema saying a pane
+ * with no conversation is not a thing.
+ */
+function seedAgentPane(d: Database.Database): void {
+  d.prepare(
+    'INSERT OR IGNORE INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,0,0)',
+  ).run('ws-TAB1', 'ws-tab1', 'W');
+  d.prepare(
+    `INSERT OR IGNORE INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at)
+     VALUES (?,?,?,?,?,0,0)`,
+  ).run('TAB1', 'tab1', 'TAB1', JSON.stringify('pane-9'), 'ws-TAB1');
+  d.prepare('INSERT OR IGNORE INTO panes (id, tab_id, kind, created_at) VALUES (?,?,?,?)').run(
+    'pane-9',
+    'TAB1',
+    'agent',
+    1,
+  );
+}
 
 describe('creating', () => {
   it('hands a person a link on muxpad’s own origin, not a loopback port', async () => {
@@ -894,7 +913,7 @@ describe('handing the browser back wakes the agent that asked', () => {
   const handoff = async (opts: { pane?: boolean } = {}) => {
     await ensure({ profile: 'shopping', tabId: 'TAB1' });
     if (opts.pane !== false) {
-      db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+      seedAgentPane(db);
     }
     await post('/api/browsers/shopping/needs-you', { reason: 'Amazon needs a login' });
     await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
@@ -918,7 +937,7 @@ describe('handing the browser back wakes the agent that asked', () => {
   it('says nothing when nobody was asked for', async () => {
     // Somebody took the wheel to look at something. They interrupted nothing.
     await ensure({ profile: 'shopping', tabId: 'TAB1' });
-    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    seedAgentPane(db);
     await post('/api/browsers/shopping/wheel/take', { by: 'viewer-shopping' });
     await del('/api/browsers/shopping/wheel', { by: 'viewer-shopping' });
     expect(resumed).toEqual([]);
@@ -927,7 +946,7 @@ describe('handing the browser back wakes the agent that asked', () => {
   it('says nothing when an agent releases its own wheel', async () => {
     // It is the thing being told. Telling it would be a loop.
     await ensure({ profile: 'shopping', tabId: 'TAB1' });
-    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    seedAgentPane(db);
     await post('/api/browsers/shopping/needs-you', { reason: 'a login' });
     await post('/api/browsers/shopping/wheel/claim', { by: 'pane-9' });
     await del('/api/browsers/shopping/wheel', { by: 'pane-9' });
@@ -1096,7 +1115,7 @@ describe("answering a summons: I'm done, and Skip", () => {
    */
   const summoned = async () => {
     await ensure({ profile: 'shopping', tabId: 'TAB1' });
-    db.prepare('INSERT INTO panes VALUES (?,?,?,?)').run('pane-9', 'TAB1', 'agent', 1);
+    seedAgentPane(db);
     await post('/api/browsers/shopping/needs-you', { reason: 'Cloudflare check before Pay' });
   };
 

@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ArtifactSchema } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { Funnel } from '../funnel.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
@@ -66,6 +68,44 @@ describe('GET /api/publish — the shape the web is written against', () => {
     const body = (await (await test.app.request('/api/publish')).json()) as Record<string, unknown>;
     expect(array, 'the client must name an array').toBeTruthy();
     expect(Array.isArray(body[array]), `the route answers with \`${array}\``).toBe(true);
+  });
+
+  it('answers something ArtifactSchema accepts, name and expiry included', async () => {
+    // The schema is the OTHER half of this file's subject. `req<T>` casts
+    // rather than parses, so a field the route sends and the schema does not
+    // name is a field every client has to guess at — which is how `name`,
+    // `expires` and `expired` came to be returned for months while the type
+    // said nothing about them. ⌘K ranks artifacts by `name` and labels them
+    // by `expired`, so they are now declared, and this is what keeps the
+    // declaration honest.
+    const dir = join(srcDir, 'site');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'index.html'), 'hello');
+    expect(
+      (
+        await test.app.request('/api/publish', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: dir, name: 'shape' }),
+        })
+      ).status,
+    ).toBe(201);
+
+    const body = (await (await test.app.request('/api/publish')).json()) as {
+      publishes: unknown;
+    };
+    const parsed = z.array(ArtifactSchema).safeParse(body.publishes);
+    expect(parsed.success ? null : parsed.error.issues, 'ArtifactSchema rejected the route').toBe(
+      null,
+    );
+    const first = parsed.success ? parsed.data[0] : undefined;
+    // The READABLE half of the slug, which is what a person typed and the only
+    // part they will ever remember — the eight random characters exist because
+    // the public host has no index and no login.
+    expect(first?.name).toBe('shape');
+    expect(first?.slug.startsWith('shape-')).toBe(true);
+    expect(first?.expired).toBe(false);
+    expect(typeof first?.expires).toBe('number');
   });
 
   it('names every field the drawer reads off a row', async () => {

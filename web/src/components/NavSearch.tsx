@@ -1,6 +1,7 @@
 import { fallbackTabIcon } from '@muxpad/shared';
 import { Fragment } from 'react';
 import { type TabMatch, snippetParts, splitHighlight } from '../lib/nav-search';
+import type { OutputMatch } from '../lib/output-search';
 import type { MessageRow } from '../lib/use-session-search';
 import './NavSearch.css';
 
@@ -153,6 +154,138 @@ export function MessageResult({
           {row.hit.host ? <span className="navsearch-row-host"> · {row.hit.host}</span> : null}
         </span>
       </span>
+    </div>
+  );
+}
+
+/**
+ * A THING YOU MADE — a hosted app, or a published artifact.
+ *
+ * Two labels carry everything that is not the name, and both are facts a title
+ * cannot imply: whether it is on the open internet or the tailnet only, and
+ * whether pressing Enter will actually show it to you. An artifact whose link
+ * has lapsed says so and stays in the list, because the bytes are still there
+ * and `muxpad publish --extend` revives it — hiding the row would be telling
+ * somebody their artifact is gone when it is not.
+ *
+ * The COPY button is the other half of the point. Half the time the question
+ * is not "show me" but "give me the link to send" — which is the question that
+ * got asked three times in five days about one games portal.
+ */
+export function OutputResult({
+  match,
+  id,
+  selected,
+  onHover,
+  onPick,
+  onCopy,
+  origin,
+}: {
+  match: OutputMatch;
+  id: string;
+  selected: boolean;
+  onHover: () => void;
+  onPick: () => void;
+  onCopy: () => void;
+  /** The NAME of the chat that made it, already resolved — the row is handed
+   *  a word, not an id to go and look up. Absent for the common case of a
+   *  thing made outside a chat, or one whose chat is gone. */
+  origin?: string | undefined;
+}) {
+  const { output, field, range } = match;
+  const lapsed = output.kind === 'artifact' && output.expired === true;
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: same combobox keyboard path as the rows above.
+    <div
+      className="navsearch-row navsearch-row-output"
+      id={id}
+      // biome-ignore lint/a11y/useSemanticElements: an <option> cannot hold a second line, a chip and a button.
+      role="option"
+      tabIndex={-1}
+      aria-selected={selected}
+      data-cursor={selected ? 'true' : undefined}
+      data-kind={output.kind}
+      onMouseMove={onHover}
+      onClick={onPick}
+    >
+      <span className="navsearch-row-icon" aria-hidden="true">
+        {output.kind === 'app' ? '▦' : '◈'}
+      </span>
+      <span className="navsearch-row-text">
+        <span className="navsearch-row-title" dir="auto">
+          <Highlight text={output.title} range={field === 'title' ? range : undefined} />
+        </span>
+        <span className="navsearch-row-sub" dir="auto">
+          {/* WHICH KIND, then where it can be reached from. "Artifact ·
+              public" and "App · tailnet only" are the same two words the
+              Artifacts and Apps pages carry, so a result and its page read
+              alike. */}
+          <span className="navsearch-row-ws">
+            {output.kind === 'app' ? 'App · tailnet only' : 'Artifact · public'}
+          </span>
+          {lapsed && (
+            <>
+              <span className="navsearch-row-dot" aria-hidden="true">
+                ·
+              </span>
+              {/* Not styled as an error: an expired link is a link with a
+                  shelf life that ran out, which is what every new one has. */}
+              <span className="navsearch-row-lapsed">link expired</span>
+            </>
+          )}
+          {field === 'slug' && (
+            <>
+              <span className="navsearch-row-dot" aria-hidden="true">
+                ·
+              </span>
+              <Highlight text={output.slug} range={range} />
+            </>
+          )}
+          {/* A CWD MATCH SAYS SO. It is the one field that is matched and not
+              shown — the path is long and it is not what the thing is called —
+              and a row that appeared for a reason the user cannot see reads as
+              a wrong result. `tom-romy-surfers` is exactly this case: the
+              words are in the directory and nowhere else. */}
+          {field === 'cwd' && (
+            <>
+              <span className="navsearch-row-dot" aria-hidden="true">
+                ·
+              </span>
+              <span className="navsearch-row-why">matched its folder</span>
+            </>
+          )}
+          {/* WHICH CHAT MADE IT. Last on the line, because it is the answer to
+              a question you only ask once you have found the thing. Shown as a
+              name and not a link: the row's one action is opening the thing
+              itself, and a second target in a list driven entirely by the
+              keyboard would be a target the keyboard cannot reach. */}
+          {origin && (
+            <>
+              <span className="navsearch-row-dot" aria-hidden="true">
+                ·
+              </span>
+              <span className="navsearch-row-origin">from {origin}</span>
+            </>
+          )}
+        </span>
+      </span>
+      {output.url && (
+        <button
+          type="button"
+          className="navsearch-row-copy"
+          // The row itself opens, so this button must not: a click that both
+          // copied and navigated would close the palette on the way to the
+          // clipboard.
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopy();
+          }}
+          title={`Copy ${output.url}`}
+          aria-label={`Copy the link to ${output.title}`}
+        >
+          Copy
+        </button>
+      )}
     </div>
   );
 }

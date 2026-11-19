@@ -17,6 +17,15 @@ vi.mock('../api', () => ({
     listAllTabs: () => listAllTabs(),
     searchMessages: () => new Promise<{ hits: ArchiveSearchHit[] }>(() => {}),
   },
+  // The hosted-outputs tier reaches for `req` (lib/hosted). Answered empty:
+  // this file is about the shortcut and the list, and the tier has its own
+  // tests.
+  req: (path: string) =>
+    path === '/api/apps'
+      ? Promise.resolve({ apps: [] })
+      : path === '/api/publish'
+        ? Promise.resolve({ publishes: [], base: null })
+        : Promise.reject(new Error(path)),
 }));
 vi.mock('../events', () => ({
   subscribe: (_h: (e: MuxpadEvent) => void) => () => {},
@@ -33,6 +42,7 @@ vi.mock('../lib/search-jump', () => ({ requestSearchJump: () => {} }));
 
 const { CommandPalette } = await import('./CommandPalette');
 const { resetAllTabsCache } = await import('../lib/all-tabs');
+const { resetOutputsCache } = await import('../lib/outputs-corpus');
 
 let host: HTMLDivElement;
 let root: Root;
@@ -44,6 +54,7 @@ function setPlatform(value: string) {
 
 beforeEach(() => {
   resetAllTabsCache();
+  resetOutputsCache();
   navigate.mockClear();
   SERVER = [{ id: 'w1', slug: 'personal', name: 'Personal', tabs: [tab('investing', 'p')] }];
   host = document.createElement('div');

@@ -527,6 +527,39 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     db.close();
   });
 
+  /**
+   * 57 — which chat registered an app.
+   *
+   * Only apps. An artifact's origin is already recorded as the `publish:<slug>`
+   * chat action written when it was published, so a column for it would have
+   * been a second copy — and it could not have lived in the slug directory,
+   * which is served to the open internet.
+   */
+  describe('57 — app provenance', () => {
+    it('adds origin_tab to apps, nullable, with existing rows left alone', () => {
+      const db = new Database(':memory:');
+      runMigrations(db, { upTo: 56 });
+      db.prepare(
+        `INSERT INTO apps (id, slug, name, cwd, command, url, autostart, enabled, pane_id,
+           created_at, updated_at)
+         VALUES ('a1','notes','Notes','/n','./s','http://x',0,1,NULL,1,1)`,
+      ).run();
+      runMigrations(db);
+      const row = db.prepare('SELECT * FROM apps WHERE id = ?').get('a1') as {
+        origin_tab: string | null;
+      };
+      // NOT backfilled. An origin guessed from a timestamp is a wrong chat
+      // stated confidently.
+      expect(row.origin_tab).toBeNull();
+    });
+
+    it('is idempotent — re-running finds the column already there', () => {
+      const db = new Database(':memory:');
+      runMigrations(db);
+      expect(() => runMigrations(db)).not.toThrow();
+    });
+  });
+
   it('records the latest schema version', () => {
     const db = new Database(':memory:');
     runMigrations(db);
@@ -536,7 +569,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
     // Bumped with the migration that adds it, deliberately: a number that
     // tracks the list automatically would make this assertion say nothing.
-    expect(LATEST_SCHEMA_VERSION).toBe(56);
+    expect(LATEST_SCHEMA_VERSION).toBe(57);
   });
 
   /**

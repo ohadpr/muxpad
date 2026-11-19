@@ -1,5 +1,6 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { browserTestDb } from '../test-helpers/browserTestDb.js';
 import { SUMMONS_HOLD_MS, awaitingPanes, liveSummonsAt } from './AwaitingPerson.js';
 import { BrowserEvents } from './BrowserEvents.js';
 
@@ -25,23 +26,39 @@ describe('when a summons is still holding its chat', () => {
 
 describe('which panes are parked', () => {
   const db = () => {
-    const d = new Database(':memory:');
-    d.exec(`CREATE TABLE apps (
-      id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-      cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
-      autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE TABLE globals (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE panes (id TEXT PRIMARY KEY, tab_id TEXT NOT NULL,
-                          kind TEXT NOT NULL DEFAULT 'shell', created_at INTEGER NOT NULL);`);
-    return d;
+    // The REAL schema — see test-helpers/browserTestDb.
+    return browserTestDb();
   };
   const browser = (d: Database.Database, profile: string, tab: string, pane: string) => {
+    // COLUMNS NAMED, not positional. `INSERT INTO apps VALUES (…)` broke the
+    // moment the table gained a column — which is the same brittleness as
+    // hand-rolling the schema, one layer down.
     d.prepare(
-      `INSERT INTO apps VALUES (?, ?, ?, '/', 'x', 'http://127.0.0.1:1', 0, 1, NULL, 0, 0)`,
+      `INSERT INTO apps (id, slug, name, cwd, command, url, autostart, enabled, pane_id,
+         created_at, updated_at)
+       VALUES (?, ?, ?, '/', 'x', 'http://127.0.0.1:1', 0, 1, NULL, 0, 0)`,
     ).run(`app-${profile}`, `browser-${profile}`, `browser ${profile}`);
-    d.prepare('INSERT INTO globals VALUES (?, ?)').run(`browser_owner_${profile}`, tab);
-    d.prepare('INSERT INTO panes VALUES (?,?,?,?)').run(pane, tab, 'agent', 1);
+    d.prepare('INSERT INTO globals (key, value) VALUES (?, ?)').run(
+      `browser_owner_${profile}`,
+      tab,
+    );
+    // A WORKSPACE AND A TAB FOR THE PANE TO BELONG TO. The fixture used to
+    // insert a dangling pane; on the real schema that is a foreign key
+    // violation, which is the schema telling the truth about a pane with no
+    // conversation.
+    d.prepare(
+      'INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,0,0)',
+    ).run(`ws-${tab}`, `ws-${tab}`, 'W');
+    d.prepare(
+      `INSERT INTO tabs (id, slug, name, layout, workspace_id, created_at, updated_at)
+       VALUES (?,?,?,?,?,0,0)`,
+    ).run(tab, tab.toLowerCase(), tab, JSON.stringify(pane), `ws-${tab}`);
+    d.prepare('INSERT INTO panes (id, tab_id, kind, created_at) VALUES (?,?,?,?)').run(
+      pane,
+      tab,
+      'agent',
+      1,
+    );
   };
 
   it('is the agent pane of every chat whose browser is waiting on a person', () => {

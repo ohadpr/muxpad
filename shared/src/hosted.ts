@@ -94,6 +94,18 @@ export const AppSchema = z.object({
    *  has never been materialised (added with --no-start, or stopped). This is
    *  also the LOGS handle — the pane's terminal is the app's log. */
   pane_id: z.string().nullable(),
+  /**
+   * The CHAT that registered it, when one did — so a ⌘K result can say where
+   * a thing came from, and going back to the conversation is one more place to
+   * go. `muxpad app add` sends the tab it is run from.
+   *
+   * Null for every app registered before this existed, and for one added from
+   * outside a pane. Deliberately NOT backfilled: an origin guessed from a
+   * timestamp is a wrong chat stated confidently. It is also not a foreign key
+   * — a deleted chat leaves the app alone, because the app is still running
+   * and still yours.
+   */
+  origin_tab: z.string().nullable().default(null),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -140,9 +152,43 @@ export type ArtifactVersion = z.infer<typeof ArtifactVersionSchema>;
 
 export const ArtifactSchema = z.object({
   slug: z.string(),
+  /**
+   * The READABLE half of the slug — `muxpad-sidebar-evidence` out of
+   * `muxpad-sidebar-evidence-gwdgbm8a`. Every slug carries eight random
+   * characters because the public host has no index and no login, so a
+   * readable slug alone would be a guessable door; this is the part a person
+   * actually chose, and the part worth searching and listing by.
+   *
+   * The route has returned it since links got a shelf life. It is declared
+   * here now because a second reader needed it: ⌘K ranks artifacts by it, and
+   * a field the server sends but the schema does not name is one every client
+   * has to guess at.
+   */
+  name: z.string(),
   files: z.number().int().nonnegative(),
   bytes: z.number().int().nonnegative(),
   created: z.number(),
+  /** When the link stops answering, or null for one that never does
+   *  (everything published before links had a shelf life). A time in the PAST
+   *  is reported as-is rather than hidden: the bytes are still here and
+   *  `--extend` brings the link back. */
+  expires: z.number().nullable(),
+  /** `expires` is in the past. Carried rather than derived so every client
+   *  agrees with the server about where "now" is. */
+  expired: z.boolean(),
+  /**
+   * The CHAT that published it, when one did.
+   *
+   * Read from the `publish:<slug>` chat action the publish route already
+   * writes — the card that appears in the conversation that made it — rather
+   * than from a record of its own, which would be a second copy of the same
+   * fact. Null for anything published from an ordinary shell, for anything
+   * published before that card existed, and for a chat since deleted.
+   *
+   * It is a LABEL. Nothing here depends on the chat existing: the artifact is
+   * still published and still yours either way.
+   */
+  origin_tab: z.string().nullable().default(null),
   /** Public URL of the CURRENT version, when a public base is known. */
   url: z.string().nullable(),
   versions: z.array(ArtifactVersionSchema),

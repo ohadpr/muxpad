@@ -123,3 +123,53 @@
 .navsearch-row-state[data-state="dead"] {
   background: var(--status-dead);
 }
+
+/* ─── A thing you MADE — a hosted app or a published artifact ─────────────────
+   The same row as a chat's, deliberately: one result list should not have two
+   visual languages in it. What it adds is a Copy button in the trailing track
+   the chat rows leave to a state dot, and two quiet labels on the second line.
+
+   The glyphs (▦ app, ◈ artifact) sit in the icon column a chat's emoji uses,
+   so the left edge the eye scans down stays one column. */
+.navsearch-row-copy {
+  /* The row OPENS and this COPIES, so it has to read as a separate target
+     while the row is highlighted — a borderless word inside a filled row
+     looks like part of the label. */
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: var(--chrome-size-sm);
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: var(--nt-pill, 6px);
+  cursor: pointer;
+}
+.navsearch-row-copy:hover {
+  color: var(--fg);
+  border-color: var(--fg-faint);
+}
+.navsearch-row[data-cursor="true"] .navsearch-row-copy {
+  color: var(--accent-fg);
+  border-color: color-mix(in srgb, var(--accent-fg) 45%, transparent);
+}
+/* An expired link, and NOT in an error colour: every new link has a shelf life
+   and this one's ran out. The bytes are still there and `--extend` revives it,
+   so the label is a fact about the link rather than a fault. */
+.navsearch-row-lapsed,
+.navsearch-row-why {
+  color: var(--fg-faint);
+  font-style: italic;
+}
+.navsearch-row[data-cursor="true"] .navsearch-row-lapsed,
+.navsearch-row[data-cursor="true"] .navsearch-row-why {
+  color: var(--accent-fg);
+}
+/* WHICH CHAT MADE IT. The quietest thing on the line — it is the answer to a
+   question you only ask once you have already found the thing. */
+.navsearch-row-origin {
+  color: var(--fg-faint);
+}
+.navsearch-row[data-cursor="true"] .navsearch-row-origin {
+  color: var(--accent-fg);
+}

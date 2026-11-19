@@ -13,6 +13,8 @@ import {
   recentTabs,
   toSearchableTabs,
 } from '../lib/nav-search';
+import { MAX_OUTPUT_RESULTS, type OutputMatch, rankOutputs } from '../lib/output-search';
+import { cachedOutputs, loadOutputs, subscribeOutputs } from '../lib/outputs-corpus';
 import { requestSearchJump } from '../lib/search-jump';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
@@ -83,6 +85,9 @@ export interface SessionSearch {
    *  needs this for the row's heading and for not printing a "type to search"
    *  placeholder over a list it just filled. */
   showingRecents: boolean;
+  /** Tier 1b — the things you MADE: hosted apps and published artifacts,
+   *  ranked and capped. Under the chats, above the message hits. */
+  outputRows: OutputMatch[];
   /** Tier 2, already de-duplicated by session and capped. */
   messageRows: MessageRow[];
   /** A request is in flight — only so an empty state can tell "nothing
@@ -92,7 +97,15 @@ export interface SessionSearch {
   active: boolean;
   /** tabMatches + messageRows, for cursor clamping. */
   rowCount: number;
-  /** Fetch the full tab corpus. Call on focus/open — the corpus is lazy. */
+  /**
+   * tab ID → chat NAME, for the one caller that has an id and needs a word:
+   * an output row saying which chat made it. Built from the corpus this hook
+   * already holds, so the server is not asked to join a name onto every row
+   * of a polled listing to answer a question one surface asks.
+   */
+  tabNames: Map<string, string>;
+  /** Fetch the full tab corpus AND the hosted outputs. Call on focus/open —
+   *  both are lazy, and neither is fetched until somebody goes looking. */
   loadCorpus: () => void;
 }
 
@@ -138,6 +151,10 @@ export function useSessionSearch(
   // whole corpus on every keystroke — which is the kind of thing that gets
   // "fixed" with a suppression comment instead.
   const loadCorpus = useCallback(() => {
+    // The outputs ride along with the tab corpus rather than having their own
+    // trigger: there is one moment that means "the user is looking for
+    // something", and two half-loaded tiers would be two ways to be empty.
+    void loadOutputs();
     void loadAllTabs().then((groups) => {
       // An empty answer is a real answer (no workspaces), but it must not
       // REPLACE a usable fallback when it came from a failed request — see
@@ -155,6 +172,18 @@ export function useSessionSearch(
     () => rankTabs(corpus, query, { limit: MAX_TAB_RESULTS }),
     [corpus, query],
   );
+  // ── Tier 1b: the things you made ───────────────────────────────────────
+  // FOLLOWED, not snapshotted, for the same reason the tab corpus is: the
+  // first keystroke can arrive before the fetch lands, and a tier that only
+  // read its cache at mount would stay empty for the whole session that
+  // triggered the load.
+  const [outputs, setOutputs] = useState(() => cachedOutputs() ?? []);
+  useEffect(() => subscribeOutputs(setOutputs), []);
+  const outputRows = useMemo(
+    () => rankOutputs(outputs, query, { limit: MAX_OUTPUT_RESULTS }),
+    [outputs, query],
+  );
+
   // ── Tier 0: the empty query ────────────────────────────────────────────
   // Where recency lives now that the rail's duplicate "Recently active" band
   // is gone (see `recentTabs`). It is the SAME row type and the same array as
@@ -222,6 +251,7 @@ export function useSessionSearch(
   }, [query, messagesAvailable]);
 
   const panes = useMemo(() => paneIndex(corpus), [corpus]);
+  const tabNames = useMemo(() => new Map(corpus.map((t) => [t.tabId, t.tabName])), [corpus]);
   const messageRows = useMemo<MessageRow[]>(() => {
     const out: MessageRow[] = [];
     const seenSid = new Set<string>();
@@ -245,10 +275,12 @@ export function useSessionSearch(
   return {
     tabMatches,
     showingRecents,
+    outputRows,
+    tabNames,
     messageRows,
     searching,
     active: query.trim().length > 0,
-    rowCount: tabMatches.length + messageRows.length,
+    rowCount: tabMatches.length + outputRows.length + messageRows.length,
     loadCorpus,
   };
 }

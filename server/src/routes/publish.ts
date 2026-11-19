@@ -32,6 +32,7 @@ import {
   setLifespan,
 } from '../publish-expiry.js';
 import { indexForFiles } from '../publish-index.js';
+import { publishOriginTabs } from '../publish-origins.js';
 import {
   type TunnelEnsureResult,
   noteTunnelDown,
@@ -736,6 +737,11 @@ export function publishRoutes(deps: {
     // A loopback fallback is not a shareable link, so it is reported as no link
     // at all rather than something that looks copyable and isn't.
     const baseUrl = resolved.source === 'local' ? null : resolved.baseUrl;
+    // WHICH CHAT PUBLISHED EACH SLUG — one query for the page, not one per
+    // row: this route is polled, and a per-row lookup would be its hottest
+    // statement. The record already exists (see publishOriginTabs); nothing is
+    // written here.
+    const origins = publishOriginTabs(deps.db);
     const publishes = entries
       // `.staging-*` / `.retired-*` are a republish's in-flight scratch dirs
       // (see POST); SLUG_RE can't produce a leading dot, so filtering by it
@@ -760,6 +766,7 @@ export function publishRoutes(deps: {
           // hidden: the bytes are still here and `--extend` brings it back.
           expires,
           expired: expires !== null && expires <= Date.now(),
+          origin_tab: origins.get(e.name) ?? null,
           url: baseUrl ? `${baseUrl}/${e.name}/` : null,
           versions: listVersionDirs(publicDir, e.name).map((n) => {
             const vdir = join(publicDir, versionDirName(e.name, n));

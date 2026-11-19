@@ -5476,6 +5476,11 @@ USAGE
   [ -n "$FLAG_slug" ] && body="$body,\"slug\":$(json_string "$FLAG_slug")"
   [ -n "$start_flag" ] && body="$body,\"start\":false"
   [ -n "$autostart_flag" ] && body="$body,\"autostart\":false"
+  # WHICH CHAT REGISTERED IT, so a ⌘K result can say where it came from. The
+  # TAB rather than the pane: a chat is a tab, and `muxpad publish` records a
+  # pane only because its own record is a card inside the conversation.
+  # Absent outside a pane, which is an ordinary way to run this.
+  [ -n "${MUXPAD_TAB_ID:-}" ] && body="$body,\"origin_tab\":$(json_string "$MUXPAD_TAB_ID")"
   body="$body}"
 
   local res

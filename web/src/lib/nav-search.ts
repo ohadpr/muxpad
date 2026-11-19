@@ -77,7 +77,7 @@ export interface TabMatch {
  * The answer is to stop having ties, not to re-order them: a band now has room
  * for the three things that genuinely separate two equally-typed matches.
  */
-const SCORE = {
+export const SCORE = {
   nameExact: 200,
   namePrefix: 180,
   /** A prefix of a WORD inside the name — "inv" in "My Investing notes". Sits
@@ -143,7 +143,7 @@ export function escapeRegExp(s: string): string {
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
-interface FieldHit {
+export interface FieldHit {
   range: readonly [number, number];
   /** 'exact' | 'prefix' | 'word' | 'sub' — the strongest placement found. */
   kind: 'exact' | 'prefix' | 'word' | 'sub';
@@ -152,15 +152,46 @@ interface FieldHit {
 /**
  * Best placement of `query` inside `text`, case-insensitively.
  *
+ * Exported for lib/output-search, which ranks hosted artifacts and apps in the
+ * same palette and must agree with this one about what counts as a prefix, a
+ * word boundary and a mid-word hit — two rankers in one list that disagreed
+ * about that would produce an order nobody could explain.
+ *
  * Matches with a RegExp against the ORIGINAL string rather than comparing
  * lowercased copies: `toLowerCase()` is not length-preserving for every
  * codepoint (İ → i̇ is one char becoming two), so offsets taken from a
  * lowercased haystack can land mid-grapheme in the real one and the highlight
  * slices the wrong characters. The `i` flag folds case without moving indices.
  */
-function findBest(text: string, query: string): FieldHit | null {
+export function findBest(
+  text: string,
+  query: string,
+  opts?: {
+    /**
+     * TREAT SPACES, HYPHENS, UNDERSCORES AND SLASHES AS THE SAME THING.
+     *
+     * For hosted outputs, where the haystack is a slug or a path and the query
+     * is what a person says out loud. The case that forced it is the one the
+     * whole feature exists for: the family games portal lives in
+     * `tom-romy-surfers`, and it was asked for as "Tom Romy" — three times in
+     * five days. A literal match finds nothing, because the space is not a
+     * hyphen.
+     *
+     * Only the RUNS BETWEEN words are loosened; the words themselves are
+     * escaped literally, so this cannot turn a query into a wildcard. And it
+     * still matches against the original string, so the offsets a highlight is
+     * painted at stay true.
+     *
+     * Not used for chat names, deliberately: those are prose, and this is a
+     * rule about identifiers.
+     */
+    loose?: boolean | undefined;
+  },
+): FieldHit | null {
   if (!text || !query) return null;
-  const re = new RegExp(escapeRegExp(query), 'gi');
+  const source = opts?.loose ? looseSource(query) : escapeRegExp(query);
+  if (!source) return null;
+  const re = new RegExp(source, 'gi');
   let best: FieldHit | null = null;
   const rank = { exact: 3, prefix: 2, word: 1, sub: 0 } as const;
   for (let m = re.exec(text); m !== null; m = re.exec(text)) {
@@ -183,7 +214,17 @@ function findBest(text: string, query: string): FieldHit | null {
   return best;
 }
 
-function nameScore(kind: FieldHit['kind']): number {
+export /** Each run of separators in the query becomes "one or more separators", and
+ *  every other character stays literal. An all-separator query (" - ") yields
+ *  nothing rather than a pattern that matches every path on the machine. */
+function looseSource(query: string): string {
+  const SEP = /[\s\-_/]+/g;
+  const words = query.split(SEP).filter((w) => w.length > 0);
+  if (words.length === 0) return '';
+  return words.map(escapeRegExp).join('[\\s\\-_/]+');
+}
+
+export function nameScore(kind: FieldHit['kind']): number {
   if (kind === 'exact') return SCORE.nameExact;
   if (kind === 'prefix') return SCORE.namePrefix;
   if (kind === 'word') return SCORE.nameWord;

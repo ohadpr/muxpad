@@ -112,6 +112,13 @@ export function appsRoutes(deps: {
         /** Register without bringing it up. Lands as enabled = 0 — a real
          *  "stopped", not an enabled row with no process behind it. */
         start: z.boolean().optional(),
+        /** The chat this was registered from, so a ⌘K result can say where it
+         *  came from. Sent by `muxpad app add` out of MUXPAD_TAB_ID, absent
+         *  when the CLI ran outside a pane. NOT validated against the tabs
+         *  table: an id that does not resolve renders as no origin at all,
+         *  which is the same as not having one, and refusing the registration
+         *  over it would fail an app for a label. */
+        origin_tab: z.string().max(64).optional(),
       })
       .safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success)
@@ -143,6 +150,7 @@ export function appsRoutes(deps: {
       url: body.url,
       autostart: body.autostart ?? true,
       enabled: shouldStart,
+      ...(body.origin_tab ? { origin_tab: body.origin_tab } : {}),
     });
     if (shouldStart) await deps.registry.materialize(created.id);
     deps.status?.invalidate(created.id);

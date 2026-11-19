@@ -1,9 +1,12 @@
+import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useId, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { PALETTE_OPEN_EVENT, isMacPlatform } from '../lib/command-palette';
 import { tabSlugFromPath } from '../lib/nav-search';
+import { noticeFromError } from '../lib/notice-store';
+import type { SearchableOutput } from '../lib/output-search';
 import { useSearchResultOpener, useSessionSearch } from '../lib/use-session-search';
-import { MessageResult, TabResult } from './NavSearch';
+import { MessageResult, OutputResult, TabResult } from './NavSearch';
 import './CommandPalette.css';
 
 /**
@@ -49,8 +52,18 @@ export function CommandPalette() {
   // after opening, and an effect would show the chat you are standing on for
   // one frame and then drop it out from under the cursor.
   const here = tabSlugFromPath(window.location.pathname);
-  const { tabMatches, showingRecents, messageRows, searching, active, rowCount, loadCorpus } =
-    useSessionSearch(query, { exclude: here });
+  const {
+    tabMatches,
+    showingRecents,
+    outputRows,
+    tabNames,
+    messageRows,
+    searching,
+    active,
+    rowCount,
+    loadCorpus,
+  } = useSessionSearch(query, { exclude: here });
+  const navigate = useNavigate();
   const openResult = useSearchResultOpener();
 
   // Clamp rather than reset: the list shrinks under the cursor whenever a
@@ -125,6 +138,44 @@ export function CommandPalette() {
 
   if (!open) return null;
 
+  /**
+   * GOING TO A THING YOU MADE, and the two kinds go to different places.
+   *
+   * An APP opens inside muxpad — its own full-screen route, which is also
+   * where the logs and the start/stop controls are, so a stopped one lands
+   * somewhere that can fix it rather than on a connection error.
+   *
+   * An ARTIFACT opens in a NEW TAB, because it is a public page and not part
+   * of this app: navigating muxpad itself to it would replace the cockpit with
+   * a static report and leave the back button as the only way home.
+   */
+  const openOutput = (output: SearchableOutput) => {
+    if (output.kind === 'app') {
+      void navigate({ to: '/hosted/a/$slug', params: { slug: output.slug } });
+      return;
+    }
+    if (output.url) window.open(output.url, '_blank', 'noopener,noreferrer');
+  };
+
+  /**
+   * Tab ID → the chat's NAME, out of the corpus this palette already holds.
+   *
+   * Resolved HERE rather than on the server, because the server would have to
+   * join a name onto every row of a polled listing to answer a question only
+   * this one surface asks. An id that resolves to nothing renders as no
+   * origin, which is right: a chat that has been deleted is not a place to go
+   * back to, and naming it would offer one.
+   */
+  const originName = (tabId: string | undefined): string | undefined =>
+    tabId ? tabNames.get(tabId) : undefined;
+
+  const copyOutput = (output: SearchableOutput) => {
+    if (!output.url) return;
+    void navigator.clipboard
+      .writeText(output.url)
+      .catch((err: unknown) => noticeFromError("Couldn't copy the link.", err));
+  };
+
   const openRow = (i: number) => {
     const tabRow = tabMatches[i];
     if (tabRow) {
@@ -132,7 +183,13 @@ export function CommandPalette() {
       setOpen(false);
       return;
     }
-    const msgRow = messageRows[i - tabMatches.length];
+    const outputRow = outputRows[i - tabMatches.length];
+    if (outputRow) {
+      openOutput(outputRow.output);
+      setOpen(false);
+      return;
+    }
+    const msgRow = messageRows[i - tabMatches.length - outputRows.length];
     if (!msgRow) return;
     openResult(msgRow.tab, { paneId: msgRow.paneId, hit: msgRow.hit, query });
     setOpen(false);
@@ -255,6 +312,30 @@ export function CommandPalette() {
             />
           ))}
 
+          {outputRows.length > 0 && (
+            <div className="cmdk-divider">
+              <span>Artifacts &amp; apps</span>
+            </div>
+          )}
+
+          {outputRows.map((row, k) => {
+            const i = tabMatches.length + k;
+            return (
+              <OutputResult
+                key={`${row.output.kind}:${row.output.slug}`}
+                match={row}
+                id={`${listId}-r${i}`}
+                selected={i === safeCursor}
+                onHover={() => setCursor(i)}
+                onPick={() => openRow(i)}
+                onCopy={() => copyOutput(row.output)}
+                {...(originName(row.output.originTab)
+                  ? { origin: originName(row.output.originTab) }
+                  : {})}
+              />
+            );
+          })}
+
           {messageRows.length > 0 && (
             <div className="cmdk-divider">
               <span>In messages</span>
@@ -262,7 +343,7 @@ export function CommandPalette() {
           )}
 
           {messageRows.map((row, k) => {
-            const i = tabMatches.length + k;
+            const i = tabMatches.length + outputRows.length + k;
             return (
               <MessageResult
                 key={`${row.hit.sid}:${row.hit.ts}`}

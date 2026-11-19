@@ -14,6 +14,7 @@ interface AppRow {
   autostart: number;
   enabled: number;
   pane_id: string | null;
+  origin_tab: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -65,6 +66,9 @@ export class AppStore {
     url: string;
     autostart?: boolean;
     enabled?: boolean;
+    /** The chat that registered it. Absent when `muxpad app add` ran outside
+     *  a pane, which is a normal way to use it. */
+    origin_tab?: string | null;
   }): App {
     const id = ulid();
     const now = Date.now();
@@ -72,7 +76,7 @@ export class AppStore {
     const enabled = input.enabled ?? true;
     this.db
       .prepare(
-        'INSERT INTO apps (id, slug, name, cwd, command, url, autostart, enabled, pane_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)',
+        'INSERT INTO apps (id, slug, name, cwd, command, url, autostart, enabled, pane_id, origin_tab, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)',
       )
       .run(
         id,
@@ -83,6 +87,7 @@ export class AppStore {
         input.url,
         autostart ? 1 : 0,
         enabled ? 1 : 0,
+        input.origin_tab ?? null,
         now,
         now,
       );
@@ -96,6 +101,7 @@ export class AppStore {
       autostart,
       enabled,
       pane_id: null,
+      origin_tab: input.origin_tab ?? null,
       created_at: now,
       updated_at: now,
     };
@@ -209,6 +215,7 @@ function row(r: AppRow): App {
     autostart: !!r.autostart,
     enabled: !!r.enabled,
     pane_id: r.pane_id ?? null,
+    origin_tab: r.origin_tab ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };

@@ -20,6 +20,16 @@ vi.mock('../api', () => ({
     searchMessages: (q: string) =>
       new Promise<{ hits: ArchiveSearchHit[] }>((resolve) => searches.push({ q, resolve })),
   },
+  // The hosted-outputs tier reaches for `req` (lib/hosted). Answered rather
+  // than stubbed to throw: the tier is meant to cost the search NOTHING when
+  // it has nothing, and a rejection here would be the only way to tell a real
+  // regression from a missing mock. The outputs tier has its own tests.
+  req: (path: string) =>
+    path === '/api/apps'
+      ? Promise.resolve({ apps: [] })
+      : path === '/api/publish'
+        ? Promise.resolve({ publishes: [], base: null })
+        : Promise.reject(new Error(path)),
 }));
 
 const handlers = new Set<(e: MuxpadEvent) => void>();
@@ -45,12 +55,14 @@ vi.mock('../lib/search-jump', () => ({
 const { CommandPalette } = await import('./CommandPalette');
 const { openCommandPalette } = await import('../lib/command-palette');
 const { resetAllTabsCache } = await import('../lib/all-tabs');
+const { resetOutputsCache } = await import('../lib/outputs-corpus');
 
 let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
   resetAllTabsCache();
+  resetOutputsCache();
   searches.length = 0;
   requestSearchJump.mockClear();
   navigate.mockClear();

@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppStore } from '../store/AppStore.js';
+import { browserTestDb } from '../test-helpers/browserTestDb.js';
 import {
   browserHostCommand,
   cdpPortFromViewerUrl,
@@ -35,12 +36,8 @@ function deps(overrides: Partial<Parameters<typeof ensureBrowserApp>[1]> = {}) {
 }
 
 beforeEach(() => {
-  db = new Database(':memory:');
-  db.exec(`CREATE TABLE apps (
-    id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-    cwd TEXT NOT NULL, command TEXT NOT NULL, url TEXT NOT NULL,
-    autostart INTEGER NOT NULL, enabled INTEGER NOT NULL, pane_id TEXT,
-    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+  // The REAL schema — see test-helpers/browserTestDb.
+  db = browserTestDb();
   // The real AppRegistry.start ENABLES the row and stop disables it. A fake
   // that does neither makes every row look permanently stopped, which silently
   // skips the branches keyed on it — the command-drift restart, for one.
