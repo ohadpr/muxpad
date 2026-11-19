@@ -957,7 +957,32 @@ export function decorateTab(
     // says it is stuck — the fact lives on the tab, as `spawn_report_state`.
     // Without this the signal reaches only the drawer, which you have to open
     // to read, and a sub-chat is not a row anywhere else.
-    if (clocks?.index.get(childId)?.spawn_report_state === 'awaiting') childWork.push('blocked');
+    //
+    // ── ONLY WHILE NOBODY HAS BEEN TOLD ──────────────────────────────────
+    // `awaiting` is detected by reading the worker's last message
+    // (chat/awaiting.ts), DELIBERATELY generously: "let me know", "your call",
+    // and even "nothing implemented" all count, because an investigation that
+    // recommends and then says it changed nothing has handed the decision
+    // back. That is right for the drawer's label and wrong as a permanent
+    // claim on a person's attention, because of WHEN it lands: retirement
+    // happens at turn-end and the report is written up to thirty seconds
+    // later, so a worker retires `delivered` and is THEN flagged `awaiting`.
+    // Nothing ever revisits it — `clearSpawnReport` only runs when work
+    // RESUMES, and a finished worker never resumes.
+    //
+    // Measured on the live cockpit: four sub-chats, one of them eight hours
+    // old, each retired `delivered` with a written report, each still pushing
+    // `blocked` onto its parent's row. Reported as "a sub chat that thinks
+    // it's waiting for user action but it's not".
+    //
+    // So the claim expires when the report is DELIVERED. At that moment the
+    // question has a reader — the parent, whose own instructions are to
+    // review the report and send the worker back — and the row stops asking
+    // for a human. The drawer still says `awaiting`, which stays true: it did
+    // hand a decision back. What it no longer does is demand attention
+    // forever for a job that landed.
+    const child = clocks?.index.get(childId);
+    if (child?.spawn_report_state === 'awaiting' && child.owes_report) childWork.push('blocked');
     const childPanes = childPanesByTab?.get(childId) ?? [];
     for (const p of childPanes) {
       const s = cache.getStatus(p.id, p.unread === true);

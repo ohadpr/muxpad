@@ -111,7 +111,9 @@ export interface SpawnReportWrite {
 const CLOCK_COLUMNS = `tabs.id, tabs.spawned_by, tabs.pinned, tabs.clock_started_at,
     tabs.retired_at, tabs.retired_reason, tabs.spawn_report_state,
     EXISTS (SELECT 1 FROM panes p
-             WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent`;
+             WHERE p.tab_id = tabs.id AND p.startup_cmd LIKE 'muxpad agent%') AS has_agent,
+    EXISTS (SELECT 1 FROM spawn_rounds r
+             WHERE r.tab_id = tabs.id AND r.delivered_at IS NULL) AS owes_report`;
 
 interface RawClockRow {
   id: string;
@@ -122,6 +124,7 @@ interface RawClockRow {
   retired_reason: string | null;
   spawn_report_state: string | null;
   has_agent: number;
+  owes_report: number;
 }
 
 function toClockRow(r: RawClockRow): TabClockRow {
@@ -132,6 +135,7 @@ function toClockRow(r: RawClockRow): TabClockRow {
     clock_started_at: r.clock_started_at,
     retired_at: r.retired_at,
     spawn_report_state: r.spawn_report_state,
+    owes_report: r.owes_report === 1,
     // Anything unrecognised reads as a hand archive: it is the conservative
     // one (it claims only that a person did this), and the alternative would
     // be a row that is retired for no stated reason at all.
@@ -172,6 +176,19 @@ export interface TabClockRow {
    * drawer — which you have to open to see.
    */
   spawn_report_state: string | null;
+  /**
+   * THIS CHAT HAS A ROUND NOBODY HAS BEEN TOLD ABOUT.
+   *
+   * `spawn_rounds.delivered_at IS NULL` — the delivery queue's own condition
+   * (chat/report-delivery.ts), which reads "this round's result is not yet
+   * settled with respect to its parent".
+   *
+   * It rides this row because `spawn_report_state = 'awaiting'` is a claim on
+   * a PERSON'S attention, and a claim like that has to be able to expire. See
+   * its one reader in ptyd-cache: a worker that handed a decision back and has
+   * since had its report delivered to its parent is not waiting on anybody.
+   */
+  owes_report: boolean;
   /**
    * Is there an AGENT in this tab — something a message could be sent to?
    *

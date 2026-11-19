@@ -733,6 +733,19 @@ function SheetRail({
             onNavigate={onNavigate}
           />
         ))}
+        {/* ─── ARTIFACTS AND APPS, ON THE SURFACE YOU ARE ACTUALLY ON ──────
+            They were reachable on a phone only through the WORKSPACE PICKER —
+            tap the workspace name, scroll past every workspace, and there
+            they were at the bottom. Two taps deep, inside a list whose
+            question is "which workspace", for the two destinations that
+            belong to NO workspace. (That predates the Artifacts/Apps split;
+            the single `Hosted` entry was in the same wrong place, and the
+            comment on the rail's copy claimed "rendered in both variants, so
+            the mobile sheet reaches them too" — it reached the picker.)
+
+            Here instead: the foot of the sheet's own list, past the same
+            hairline as the rail's, one tap from where you already are. */}
+        <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
       </div>
     </nav>
   );
@@ -840,11 +853,12 @@ function WorkspacePickList({
       >
         {creating ? 'Creating…' : '+ New workspace'}
       </button>
-      {/* Deliberately NOT workspace rows: artifacts and apps belong to no
-          workspace and occupy no tab. They sit past a hairline, at the foot of
-          the one surface that lists destinations — never in the chat list,
-          which contains chats and nothing else. */}
-      <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
+      {/* NO ARTIFACTS/APPS FOOT HERE ANY MORE — see the sheet's own list, which
+          is where it moved to. This list answers "which workspace", and it is
+          a detour you come straight back from; two destinations that belong to
+          no workspace were the one thing on it that was not an answer to its
+          question, and putting them here is what made them two taps deep on a
+          phone. */}
     </div>
   );
 }

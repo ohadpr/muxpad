@@ -198,6 +198,16 @@ describe('living sidebar — tab ordering + pinning', () => {
       ).id;
     const spawn = (childId: string, parentId: string) =>
       db.prepare('UPDATE tabs SET spawned_by = ? WHERE id = ?').run(parentId, childId);
+    /** A closed round for this child, undelivered or delivered. A worker that
+     *  stopped to ask has one; whether it is DELIVERED is what decides
+     *  whether its `awaiting` still counts (see ptyd-cache). */
+    const round = (childId: string, opts: { delivered: boolean }) =>
+      db
+        .prepare(
+          `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, delivered_at)
+           VALUES (?, ?, 1, 2, ?)`,
+        )
+        .run(`r-${childId}-${opts.delivered ? 'd' : 'u'}`, childId, opts.delivered ? 3 : null);
     const rowFor = async (name: string) =>
       (await list()).find((t) => t.name === name) as Tab & { status?: string; agents?: number };
 
@@ -252,10 +262,49 @@ describe('living sidebar — tab ordering + pinning', () => {
       spawn(child.id, parent.id);
       expect((await rowFor('P')).status).toBe('idle');
       db.prepare("UPDATE tabs SET spawn_report_state = 'awaiting' WHERE id = ?").run(child.id);
+      // UNDELIVERED: nobody has been told, so the question is still owed to a
+      // person and the parent's row says so.
+      round(child.id, { delivered: false });
       expect((await rowFor('P')).status).toBe('blocked');
       // A worker that reported normally says nothing.
       db.prepare("UPDATE tabs SET spawn_report_state = 'ok' WHERE id = ?").run(child.id);
       expect((await rowFor('P')).status).toBe('idle');
+    });
+
+    it('stops saying so once the report has been DELIVERED', async () => {
+      // THE BUG, as it was measured. `awaiting` is detected by reading the
+      // worker's last message, and that happens up to thirty seconds AFTER
+      // the turn-end that retires the worker — so a sub-chat retires
+      // `delivered`, is then flagged `awaiting`, and nothing revisits it:
+      // `clearSpawnReport` runs when work RESUMES and a finished worker never
+      // resumes. Four of them were on the live cockpit, one eight hours old,
+      // each pinning `blocked` to its parent's row for a job that had landed.
+      //
+      // Delivery is the moment the claim expires: the question has a reader.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      await paneOf(child.id);
+      spawn(child.id, parent.id);
+      db.prepare("UPDATE tabs SET spawn_report_state = 'awaiting' WHERE id = ?").run(child.id);
+      round(child.id, { delivered: true });
+      expect((await rowFor('P')).status).toBe('idle');
+    });
+
+    it('a second, still-undelivered round brings the claim back', async () => {
+      // The expiry is about THIS round being settled, not about the worker
+      // having ever delivered anything. A worker sent back, which asks again,
+      // is waiting again.
+      const parent = await makeTab('P');
+      const child = await makeTab('C');
+      await paneOf(parent.id);
+      await paneOf(child.id);
+      spawn(child.id, parent.id);
+      db.prepare("UPDATE tabs SET spawn_report_state = 'awaiting' WHERE id = ?").run(child.id);
+      round(child.id, { delivered: true });
+      expect((await rowFor('P')).status).toBe('idle');
+      round(child.id, { delivered: false });
+      expect((await rowFor('P')).status).toBe('blocked');
     });
 
     it('a sub-chat whose agent GAVE UP says so on the parent', async () => {

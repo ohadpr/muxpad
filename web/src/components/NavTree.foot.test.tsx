@@ -13,11 +13,12 @@ import { expect, it, vi } from 'vitest';
  * server up" are the questions people actually arrive with, and neither was
  * answered by that word. The reasoning in full is in pages/HostedView.
  *
- * TWO SURFACES mount it — the desktop rail and the sheet's workspace picker —
- * and the sheet's copy was its own duplicated block that has been forgotten
- * in a change before. The rail's is rendered and read; the sheet's is
- * asserted on the source, because reaching it means driving the picker open
- * and the subject here is the destinations, not that interaction.
+ * BOTH SURFACES are rendered and read here — the desktop rail and the mobile
+ * sheet. That is only possible because the sheet's copy MOVED: it used to sit
+ * in the workspace picker, so on a phone these were two taps deep inside a
+ * list whose question is "which workspace", and a render of the sheet found no
+ * foot at all. It is now at the foot of the sheet's own list, which is also
+ * why this file can assert it rather than grep for it.
  */
 vi.mock('@tanstack/react-router', () => ({
   // An <a> with a real href here, unlike the span stub the row tests use: the
@@ -62,24 +63,30 @@ const foot = (variant: 'sidebar' | 'sheet') => {
   }));
 };
 
-it('lists Artifacts then Apps', () => {
+it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps on the %s', (variant) => {
   // ARTIFACTS FIRST: it is the half reached by the question that gets asked
   // (the same portal was asked for three times in five days), and the half
   // whose contents expire — a reason to meet the list rather than recall it.
-  expect(foot('sidebar')).toEqual([
+  //
+  // THE SHEET CASE IS THE REGRESSION. It answered with an empty list while
+  // the foot lived in the workspace picker, which is exactly what "where do I
+  // see artifacts on mobile" turned out to mean.
+  expect(foot(variant)).toEqual([
     { href: '/artifacts', text: 'Artifacts' },
     { href: '/apps', text: 'Apps' },
   ]);
 });
 
 it('no longer offers a single "Hosted" entry', () => {
-  expect(foot('sidebar').map((l) => l.text)).not.toContain('Hosted');
-  expect(foot('sidebar').map((l) => l.href)).not.toContain('/hosted');
+  for (const variant of ['sidebar', 'sheet'] as const) {
+    expect(foot(variant).map((l) => l.text)).not.toContain('Hosted');
+    expect(foot(variant).map((l) => l.href)).not.toContain('/hosted');
+  }
 });
 
-it('is mounted by both surfaces, from one definition', () => {
-  // One component, two mounts. It was two copies of the same markup, and a
-  // duplicated foot is how one surface keeps an entry the other dropped.
+it('is mounted twice and no more — the rail and the sheet, not the picker', () => {
+  // One component, two mounts. A THIRD would be the workspace picker getting
+  // it back, which is where it was hiding on mobile.
   const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
   expect(src.match(/<HostedFoot/g) ?? []).toHaveLength(2);
   expect(src).not.toContain('to="/hosted"');
