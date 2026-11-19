@@ -1,55 +1,73 @@
 /**
  * What a sidebar tab drag is allowed to MEAN.
  *
- * Drag-to-reorder is a pinned-only gesture. It began as a consequence: the
- * unpinned block was auto-sorted (attention → recency) and re-derived on every
- * poll, so any order you dragged it into evaporated seconds later. Earlier
- * rounds papered over that by PINNING whatever unpinned tab you dropped — a
- * gesture that silently changed a tab's category to make the drag mean
- * something. It surprised more than it helped, so:
+ * Two gestures share the row, and they are told apart by where you drop:
  *
- *   - PINNED tab dragged → reorder within the pinned block, nothing else.
- *   - UNPINNED tab dragged → a MOVE only: drop it on another workspace to
- *     re-home it. Dropping it anywhere in its own list does nothing at all.
- *   - Pinning stays explicit (the row's pin affordance / ⋯ menu).
+ *   - ONTO ANOTHER ROW IN THE SAME BLOCK → reorder, persisted.
+ *   - ONTO A WORKSPACE HEADER            → move it there (WorkspaceNode).
+ *
+ * ── REORDER USED TO BE PINNED-ONLY, AND THAT WAS A CONSEQUENCE ──────────────
+ * The unpinned block was auto-sorted (attention → recency) and re-derived on
+ * every poll, so any order you dragged it into evaporated seconds later.
+ * Earlier rounds papered over that by PINNING whatever unpinned tab you
+ * dropped — a gesture that silently changed a tab's category to make the drag
+ * mean something, and it surprised more than it helped.
+ *
+ * The block is stable now (shared/tab-order), so a dragged order survives, and
+ * without this the order was two-thirds of a design: no recency, no drag,
+ * therefore permanently "oldest first" with no way to arrange it.
+ *
+ * ── A DROP ACROSS A BLOCK BOUNDARY IS STILL REFUSED ─────────────────────────
+ * Pinned ↔ unpinned, and live ↔ done. Not an oversight: dropping an unpinned
+ * row onto a pinned one is the "it silently pins it" gesture coming back, and
+ * dropping a live chat into the done drawer is a retirement performed by
+ * accident. Both of those are explicit acts with their own affordances. What
+ * the two blocks DO share is the persisted order, so a reorder writes the
+ * whole list.
  */
 import { reorderByDrop } from './reorder';
 
 export interface DraggableTab {
   id: string;
   pinned?: boolean | undefined;
+  /** Finished — archived, decayed, or a worker that delivered. These live in
+   *  their own drawer, which is its own block. */
+  done?: boolean | undefined;
+}
+
+/** Which block a row belongs to. Two rows may only be reordered against each
+ *  other when these agree. */
+function blockOf(t: DraggableTab): string {
+  return `${t.pinned ? 'pin' : 'free'}:${t.done ? 'done' : 'live'}`;
 }
 
 /**
- * The order to apply after dropping pinned tab `from` onto pinned tab `to`.
+ * The order to apply after dropping `from` onto `to`.
  *
- * Returns null when the drop is not a pinned-block reorder (either end
- * unpinned or unknown) — the caller must then do nothing, which is the whole
- * point: an unpinned tab cannot be reordered, and dropping ONTO one can't
- * define a manual position either.
+ * Returns null when the drop is not a legal reorder — a different block at
+ * either end, an unknown id, or a row dropped on itself — and the caller must
+ * then do nothing.
  *
- * `pinnedIds` is what gets persisted; `allIds` is the optimistic client-side
- * order, with the unpinned block left exactly as the server last returned it.
- *
- * NOTE THAT THE ORIGINAL REASON HAS EXPIRED. The unpinned block is no longer
- * auto-sorted — it is the stored manual order (shared/tab-order) — so an order
- * dragged into it would now survive. Extending the gesture is a real option;
- * it is not what this function does, and the restriction above should be read
- * as a decision from here on rather than as a consequence.
+ * `ids` is the WHOLE list in its new display order, which is what gets
+ * persisted: `POST /api/tabs/reorder` writes `position = index` for every id
+ * it is given, so passing one block alone would leave the other block's
+ * positions describing an order nobody is looking at. It is also what the
+ * client applies optimistically, so the two cannot disagree.
  */
-export function orderAfterPinnedDrop(
+export function orderAfterDrop(
   tabs: DraggableTab[],
   from: string,
   to: string,
-): { pinnedIds: string[]; allIds: string[] } | null {
+): { ids: string[] } | null {
+  if (from === to) return null;
   const dragged = tabs.find((t) => t.id === from);
   const target = tabs.find((t) => t.id === to);
-  if (!dragged?.pinned || !target?.pinned) return null;
-  const pinnedIds = tabs.filter((t) => t.pinned).map((t) => t.id);
-  const nextPinned = reorderByDrop(pinnedIds, from, to);
-  if (nextPinned === pinnedIds) return null; // from === to, or a stale id
-  const rest = tabs.filter((t) => !t.pinned).map((t) => t.id);
-  return { pinnedIds: nextPinned, allIds: [...nextPinned, ...rest] };
+  if (!dragged || !target) return null;
+  if (blockOf(dragged) !== blockOf(target)) return null;
+  const ids = tabs.map((t) => t.id);
+  const next = reorderByDrop(ids, from, to);
+  if (next === ids) return null; // a stale id the list no longer holds
+  return { ids: next };
 }
 
 // `paneDropAction` lived here: it decided whether a PANE dragged from the tab

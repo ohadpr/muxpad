@@ -15,7 +15,7 @@ import { noticeFromError } from '../lib/notice-store';
 import { activeAge } from '../lib/short-age';
 
 import { reorderByDrop } from '../lib/reorder';
-import { orderAfterPinnedDrop } from '../lib/tab-drag';
+import { orderAfterDrop } from '../lib/tab-drag';
 import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
 import { useArmed } from '../lib/use-armed';
@@ -165,6 +165,18 @@ function useListReorder(
      *  cede their middle band to the merge-into affordance); a declined row
      *  also clears its own drop-edge highlight so the two never coexist. */
     claimOver?: (e: React.DragEvent) => boolean;
+    /**
+     * Would a drop of `draggedId` onto `overId` actually be ACCEPTED?
+     *
+     * The list may hold rows the persist step will refuse — the tab list
+     * holds every chat, and a drop across a block boundary (pinned ↔
+     * unpinned, live ↔ done) is turned down by `orderAfterDrop`. Without
+     * this the row still lit a drop line and then nothing happened, which is
+     * the interface offering a gesture it will not honour. Caught by dragging
+     * `security` over a pinned row in a real browser: the line appeared, the
+     * drop did nothing.
+     */
+    canDrop?: (draggedId: string, overId: string) => boolean;
   },
 ): (id: string) => DragItemProps {
   const [dragId, setDragId] = useState<string | null>(null);
@@ -195,6 +207,13 @@ function useListReorder(
       },
       onDragOver: (e: React.DragEvent) => {
         if (!dragId || dragId === id) return;
+        // A DROP THAT WOULD BE REFUSED GETS NO LINE AND NO CURSOR. Declining
+        // the dragover (rather than accepting and doing nothing) is also what
+        // makes the browser show "no drop" instead of a move cursor.
+        if (opts?.canDrop && !opts.canDrop(dragId, id)) {
+          if (overId === id) setOverId(null);
+          return;
+        }
         if (opts?.claimOver && !opts.claimOver(e)) {
           if (overId === id) setOverId(null);
           return;
@@ -1412,62 +1431,50 @@ export function TabList({
   // sticks across the remounts a sidebar sees all day. There are no workers in
   // this list to fold: they are in their parent chat's work drawer.
 
-  // Drag-to-reorder is PINNED-ONLY (see lib/tab-drag for why). The hook is
-  // fed just the pinned ids, so an unpinned row can neither be dragged into
-  // the manual block nor serve as a drop target for one — there is no
-  // implicit "dropping it pins it" left. Reorder claims only the EDGE bands
-  // of a row; the middle band belongs to merge-into (see TabRow), so one row
-  // hosts both gestures without the drop-line and the merge ring fighting.
+  // DRAG-TO-REORDER, FOR EVERY ROW — not just the pinned ones.
+  //
+  // It was pinned-only, and that was a CONSEQUENCE rather than a choice: the
+  // unpinned block was auto-sorted by attention then recency and re-derived on
+  // every poll, so an order dragged into it evaporated seconds later. The
+  // block is stable now (shared/tab-order), and without the gesture the order
+  // was two-thirds of a design — no recency, no drag, therefore permanently
+  // oldest-first with no way to arrange it.
+  //
+  // THE HOOK IS FED EVERY ID, in display order, and `orderAfterDrop` refuses a
+  // drop whose two ends are in different blocks (pinned ↔ unpinned, live ↔
+  // done). That is deliberate: dropping an unpinned row onto a pinned one is
+  // the old "it silently pins it" gesture coming back, and dropping a live
+  // chat into the done drawer is a retirement performed by accident.
+  //
+  // Reorder claims only the EDGE bands of a row; the middle band belonged to
+  // merge-into, which is gone, so the whole row is a target — which is also
+  // what it looks like.
   const tabDnd = useListReorder(
-    tabs.filter((t) => t.pinned).map((t) => t.id),
+    tabs.map((t) => t.id),
     (_ids, draggedId, targetId) => {
-      const next = orderAfterPinnedDrop(tabs, draggedId, targetId);
-      if (!next) return; // not a pinned→pinned drop: nothing to persist
-      applyTabOrder(workspace.id, next.allIds); // move now; the refresh reconciles
+      const next = orderAfterDrop(tabs, draggedId, targetId);
+      if (!next) return; // a drop across a block boundary, or a stale id
+      applyTabOrder(workspace.id, next.ids); // move now; the refresh reconciles
       void (async () => {
         try {
-          await api.reorderTabs(next.pinnedIds);
+          await api.reorderTabs(next.ids);
         } catch (err) {
           console.error('reorder tabs failed', err);
         }
         await refreshTabs(workspace.id);
       })();
     },
-    // No `claimOver` any more. It existed to leave the row's MIDDLE band free
-    // for merge-into-this-tab, so reorder only claimed the edges. With merging
-    // gone the whole row is a reorder target, which is also what it looks like.
-  );
-
-  // An UNPINNED row is still draggable, but the drag can only MOVE it: drop
-  // it on another workspace (WorkspaceNode's group target) to re-home it. It
-  // gets no reorder handlers, so no drop line appears inside the unpinned
-  // block.
-  //
-  // THAT RESTRICTION IS NOW A CHOICE RATHER THAN A CONSEQUENCE. It existed
-  // because the block was auto-sorted, so any order you dragged into it
-  // evaporated on the next poll. The block is stable now (shared/tab-order),
-  // so a dragged order WOULD stick — reorder-on-drop for unpinned rows is a
-  // thing that could be added, deliberately not added here, and this note
-  // exists so the next reader does not take the old reason for a live one.
-  const [movingTabId, setMovingTabId] = useState<string | null>(null);
-  const moveOnlyDnd = (id: string): DragItemProps => ({
-    draggable: true,
-    onDragStart: (e: React.DragEvent) => {
-      setMovingTabId(id);
-      e.dataTransfer.effectAllowed = 'move';
-      // Some browsers refuse to start a drag with an empty dataTransfer.
-      try {
-        e.dataTransfer.setData('text/plain', id);
-      } catch {
-        /* noop */
-      }
+    {
+      // Ask the SAME rule the drop will apply, so a line never appears where
+      // the gesture would be turned down.
+      canDrop: (draggedId, overId) => orderAfterDrop(tabs, draggedId, overId) !== null,
     },
-    onDragOver: () => {},
-    onDragLeave: () => {},
-    onDrop: () => {},
-    onDragEnd: () => setMovingTabId(null),
-    ...(movingTabId === id ? { 'data-dragging': 'true' as const } : {}),
-  });
+  );
+  // `moveOnlyDnd` lived here: a drag-only variant for unpinned rows, which
+  // could be moved to another workspace but not reordered. Both halves of its
+  // reason are gone. Reordering is allowed now, and the cross-workspace MOVE
+  // was never its doing — `TabRow` stamps the typed payload on top of
+  // whichever dnd it is handed, so the reorder dnd has always carried it too.
 
   /**
    * The event is OPTIONAL because three surfaces archive and only one of them
@@ -1530,7 +1537,7 @@ export function TabList({
         // child. Nothing nests in the rail any more, so the gate was always
         // open — and `parent` is now a DIFFERENT variable in an enclosing
         // scope, which is how deleting the prop silently changed behaviour.
-        variant === 'sidebar' ? (t.pinned ? tabDnd(t.id) : moveOnlyDnd(t.id)) : undefined
+        variant === 'sidebar' ? tabDnd(t.id) : undefined
       }
     />
   );

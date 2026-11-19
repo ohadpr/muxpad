@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppTheme } from '../lib/app-theme';
 import { isEmbedded, shellChrome } from '../lib/embed';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { keepsShell } from '../lib/shell-routes';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
 import { useWindowAttention } from '../use-window-attention';
@@ -63,10 +64,32 @@ export function AppLayout() {
   // is the navigation; a second sidebar in a 600px iframe would be muxpad's
   // whole cockpit competing with the app that framed it. See lib/embed.
   const embedded = isEmbedded();
-  const chrome = shellChrome({ isMobile, inWorkspace: !!wsSlug, embedded });
+  /**
+   * A DESTINATION THAT BELONGS TO NO WORKSPACE BUT IS STILL INSIDE THE APP.
+   *
+   * Artifacts and Apps. `inWorkspace` below decides whether the top bar is
+   * absorbed into the rail, and these want the same answer a chat gets: the
+   * rail has the brand and the settings, so a second top bar would be a strip
+   * of duplicated chrome above a page that already has a header.
+   */
+  const shellRoute = keepsShell(pathname);
+  const chrome = shellChrome({ isMobile, inWorkspace: !!wsSlug || shellRoute, embedded });
   const sidebarMode = chrome.sidebar;
   const sidenavRef = useRef<HTMLElement>(null);
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
+  /**
+   * WHICH WORKSPACE THE RAIL SHOULD LOOK LIKE on a destination route.
+   *
+   * The tree takes an active slug and uses it for two things — which group is
+   * expanded, and which row wears "you are here". Standing on Artifacts you
+   * are in NEITHER, and the honest rendering of that is the workspace you
+   * came FROM with no row selected: you have opened a destination, not left
+   * your work.
+   *
+   * Last visited, falling back to the first visible workspace for a cold open
+   * straight to `/artifacts` (a bookmark, a published link's sibling tab).
+   */
+  const lastWsSlug = [...visitedWsSlugs].at(-1) ?? visibleWorkspaces(workspaces)[0]?.slug ?? '';
   useEffect(() => {
     if (!wsSlug) return;
     setVisitedWsSlugs((prev) => {
@@ -119,7 +142,7 @@ export function AppLayout() {
           <SettingsMenu />
         </header>
       )}
-      {wsSlug ? (
+      {wsSlug || (shellRoute && sidebarMode) ? (
         <div className="app-body">
           {sidebarMode && (
             <aside
@@ -137,7 +160,7 @@ export function AppLayout() {
               </div>
               <NavTree
                 variant="sidebar"
-                activeWorkspaceSlug={wsSlug}
+                activeWorkspaceSlug={wsSlug ?? lastWsSlug}
                 activeTabSlug={activeTabSlug}
               />
               <SidenavResizeHandle asideRef={sidenavRef} />
@@ -172,7 +195,20 @@ export function AppLayout() {
               The band is back at the top of the rail (NavTree), inside the
               scroller, which is where the phone sheet has had it all along. */}
           <div className="workspace-column">
-            <div className="workspace-hosts">
+            {/* ── A DESTINATION RENDERS *BESIDE* THE KEPT-ALIVE WORKSPACES ──
+                Not instead of them. The hosts below stay mounted and hidden
+                exactly as they do when you switch workspace, so opening
+                Artifacts and going back to your chat unmounts nothing — no
+                re-fetch, no terminal re-attach, no scroll position lost.
+                Replacing the column (which is what `{wsSlug ? … : <Outlet/>}`
+                did) threw all of that away every time, which is a large part
+                of why these two pages felt like leaving the app. */}
+            {shellRoute && (
+              <div className="workspace-host-slot">
+                <Outlet />
+              </div>
+            )}
+            <div className="workspace-hosts" hidden={shellRoute} aria-hidden={shellRoute}>
               {[...visitedWsSlugs].map((slug) => (
                 <div
                   key={slug}

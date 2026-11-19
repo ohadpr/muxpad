@@ -2001,6 +2001,14 @@ select:focus {
   display: flex;
   flex-direction: column;
 }
+/* HIDDEN WITHOUT BEING UNMOUNTED, which is the whole point of the stack: a
+   destination route (Artifacts, Apps) renders in the same column while every
+   workspace host stays alive behind it, so coming back costs nothing. The
+   attribute needs the rule — `display: flex` above beats the UA's own
+   `[hidden] { display: none }`, which is why the slot below states it too. */
+.workspace-column > .workspace-hosts[hidden] {
+  display: none;
+}
 .workspace-host-slot {
   flex: 1;
   min-height: 0;
