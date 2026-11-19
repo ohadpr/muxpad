@@ -173,6 +173,52 @@ export class SpawnRoundStore {
    * rounds predate this table finishes turns with nothing to close, and that has
    * to be a no-op rather than an invented round with no beginning.
    */
+  /**
+   * CLOSE EVERY ROUND WHOSE ASKER IS GONE, however it went.
+   *
+   * A round is a question — "what did this worker produce for the chat that
+   * asked?" — and nothing closes one but the SUB-CHAT lifecycle. A chat that
+   * is no longer a sub-chat never reaches that code again, so its round stays
+   * `ended_at IS NULL` for ever.
+   *
+   * `TabStore.delete` already closes the rounds of the children it orphans,
+   * and that is the right place for the common case. This is the backstop, for
+   * two reasons that are both real:
+   *
+   *   · ITS OWN COMMENT NAMES THREE DOORS — the tab delete, the workspace
+   *     delete looping over tabs, and AppRegistry dropping a tab whose last
+   *     pane went away — and says that three hand-written copies of one rule
+   *     is how two of them end up disagreeing. A door that forgets leaves a
+   *     round open and nothing notices.
+   *
+   *   · A FIX DOES NOT REPAIR THE ROWS THAT PROVOKED IT. The delete-path fix
+   *     was written against a round that had been open 945 hours. That round
+   *     is still open — 46 days when this was written — because the fix only
+   *     runs on future deletions. One sweep settles it and every other like it.
+   *
+   * Marked delivered as well as ended, for the reason the delete path gives:
+   * there is nobody left to deliver to, and an undelivered round is what the
+   * delivery sweep looks for every minute. Any report already written stays on
+   * the row; what ends is the claim that somebody is waiting for it.
+   *
+   * `spawned_by IS NULL` counts as gone, and so does a `spawned_by` naming a
+   * tab that no longer exists — the two shapes an orphan comes in, since there
+   * is no foreign key by design (migrations v27).
+   */
+  closeOrphaned(at: number = Date.now()): number {
+    return this.db
+      .prepare(
+        `UPDATE spawn_rounds SET ended_at = ?, delivered_at = COALESCE(delivered_at, ?)
+          WHERE ended_at IS NULL
+            AND tab_id IN (
+              SELECT t.id FROM tabs t
+               WHERE t.spawned_by IS NULL
+                  OR NOT EXISTS (SELECT 1 FROM tabs p WHERE p.id = t.spawned_by)
+            )`,
+      )
+      .run(at, at).changes;
+  }
+
   close(tabId: string, at: number, write?: SpawnReportWrite | null): boolean {
     const open = this.openRound(tabId);
     if (!open) return false;

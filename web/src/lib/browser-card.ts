@@ -1,3 +1,4 @@
+import { SUMMONS_HOLD_MS } from '@muxpad/shared';
 import { injectByTime } from './log-window';
 /**
  * What a browser card says, and what its button does.
@@ -102,11 +103,14 @@ export interface BrowserCardView {
 }
 
 /**
- * How long an unanswered summons keeps its buttons — the same hold the server
- * keeps the chat parked and the browser alive for (AwaitingPerson.ts). Past it
- * the errand is abandoned, and an old card must not wake an agent about it.
+ * How long an unanswered summons keeps its buttons — the SAME hold the server
+ * keeps the chat parked and the browser alive for. One definition now
+ * (shared/browser-summons); this was a second copy of the number, and the two
+ * disagreeing is how a card wakes an agent about an errand the server has
+ * already written off. Re-exported because this module's own tests and
+ * callers name it here.
  */
-export const SUMMONS_HOLD_MS = 2 * 60 * 60 * 1000;
+export { SUMMONS_HOLD_MS };
 
 /**
  * Whether to open the stream in a modal or a new tab.

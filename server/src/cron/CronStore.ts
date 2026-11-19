@@ -23,6 +23,8 @@ interface CronRow {
   target_kind: string;
   target_pane: string | null;
   workspace_id: string | null;
+  /** Nullable on every row written before migration 58. */
+  result_tab: string | null;
   cwd: string | null;
   model: string | null;
   backend: string | null;
@@ -57,6 +59,8 @@ export interface CronCreateInput {
   target_kind: 'pane' | 'new-tab';
   target_pane?: string | null;
   workspace_id?: string | null;
+  /** Where results go — see `Cron.result_tab`. Independent of where it runs. */
+  result_tab?: string | null;
   cwd?: string | null;
   model?: string | null;
   backend?: string | null;
@@ -99,8 +103,8 @@ export class CronStore {
            cwd, model, backend, mode, enabled, catchup, overlap, on_context,
            quiet_mins, jitter_ms, max_open, close_when_done, open_tabs, next_due_at,
            last_fire_at, last_status, fail_streak, created_at, once, fold, card,
-           watch_cmd
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?, ?, ?, ?)`,
+           watch_cmd, result_tab
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, NULL, 0, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -131,6 +135,7 @@ export class CronStore {
         input.fold ? 1 : 0,
         input.card ?? null,
         input.watch_cmd ?? null,
+        input.result_tab ?? null,
       );
     return this.getById(id) as Cron;
   }
@@ -321,6 +326,10 @@ export class CronStore {
       target_tab: run.target_tab ?? null,
       outcome: run.outcome,
       detail: run.detail ?? null,
+      // A fresh run has nothing to deliver yet: the result is captured at
+      // turn-end and the receipt is stamped after a send is accepted.
+      result: null,
+      delivered_at: null,
     };
   }
 
@@ -348,6 +357,116 @@ export class CronStore {
          WHERE id = ? AND outcome IN ('sent', 'queued')`,
       )
       .run(outcome, detail ?? null, runId);
+  }
+
+  /**
+   * STORE WHAT A FIRE ASKED TO HAVE DELIVERED, for a run still in flight.
+   *
+   * Guarded the same way `finishRun` is, and for the same reason: a `kept` or
+   * `closed` row written by the reconciler is a settled verdict, and a late
+   * turn-end must not reopen it by hanging a result on it.
+   *
+   * Idempotent on content: two turn-ends for one run (which the catch-up path
+   * can produce) write the same text rather than appending it twice.
+   */
+  setRunResult(runId: string, result: string): void {
+    this.db
+      .prepare(
+        `UPDATE cron_runs SET result = ?
+          WHERE id = ? AND outcome IN ('sent', 'queued') AND delivered_at IS NULL`,
+      )
+      .run(result, runId);
+  }
+
+  /**
+   * THE OUTBOX — results captured and not yet handed over.
+   *
+   * `result IS NOT NULL AND delivered_at IS NULL`, joined to the schedule for
+   * its destination. Ordered oldest first so a backlog drains in the order the
+   * fires happened; a person reading two mornings of a watcher at once wants
+   * yesterday above today.
+   *
+   * A run whose cron has since lost its `result_tab` (or been deleted) is NOT
+   * returned, and that is deliberate: the destination is the schedule's, so a
+   * schedule that no longer declares one has nowhere for this to go. The row
+   * keeps its text and stays undelivered, which is the honest record.
+   */
+  outbox(
+    limit = 20,
+  ): Array<{ runId: string; cronId: string; cronName: string; tabId: string; result: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT r.id AS runId, c.id AS cronId, c.name AS cronName,
+                c.result_tab AS tabId, r.result AS result
+           FROM cron_runs r
+           JOIN crons c ON c.id = r.cron_id
+          WHERE r.result IS NOT NULL
+            AND r.delivered_at IS NULL
+            AND c.result_tab IS NOT NULL
+          ORDER BY r.fired_at ASC, r.id ASC
+          LIMIT ?`,
+      )
+      .all(limit) as Array<{
+      runId: string;
+      cronId: string;
+      cronName: string;
+      tabId: string;
+      result: string;
+    }>;
+    return rows;
+  }
+
+  /**
+   * THE RECEIPT. Stamped only once a send has been ACCEPTED.
+   *
+   * Separate from `finishRun` because they answer different questions, and
+   * conflating them is the bug this feature exists for: `opening-review` logged
+   * `sent` every morning for nine days — the submit had succeeded — while
+   * nobody ever read a word of it. "The turn ended" and "the result arrived"
+   * are two facts, and only one of them was ever recorded.
+   */
+  markDelivered(runId: string, at: number = Date.now()): void {
+    this.db
+      .prepare('UPDATE cron_runs SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
+      .run(at, runId);
+  }
+
+  /** One run, by id — for the turn-end that needs to know which schedule and
+   *  which fire it belongs to. Cast straight across like `runs()` beside it:
+   *  the columns and the type have the same names. */
+  runById(id: string): CronRun | null {
+    return (
+      (this.db.prepare('SELECT * FROM cron_runs WHERE id = ?').get(id) as CronRun | undefined) ??
+      null
+    );
+  }
+
+  /**
+   * THE RESULT COULD NOT BE HANDED OVER — mark the run, however it ended.
+   *
+   * NOT `finishRun`, and that distinction is the whole reason this exists.
+   * `finishRun` only moves a row still reading `sent`/`queued`, because its
+   * job is to correct what the submit answered once the turn it started has
+   * ended. By the time a delivery has been retried and given up on, that
+   * correction has already happened and the row says `done` — so routing this
+   * through `finishRun` would silently do nothing, and the schedule would go
+   * on looking healthy while nobody heard from it. Which is the bug.
+   *
+   * Guarded on `delivered_at IS NULL` instead: a result that DID land can
+   * never be marked failed by a late sweep.
+   */
+  failDelivery(runId: string, detail: string): void {
+    this.db
+      .prepare(
+        `UPDATE cron_runs SET outcome = 'failed', detail = ?
+          WHERE id = ? AND delivered_at IS NULL`,
+      )
+      .run(detail, runId);
+  }
+
+  /** Set (or clear) where a schedule's results go. */
+  setResultTab(id: string, tabId: string | null): void {
+    this.db.prepare('UPDATE crons SET result_tab = ? WHERE id = ?').run(tabId, id);
   }
 
   /**
@@ -404,6 +523,7 @@ function rowToCron(r: CronRow): Cron {
     target_kind: r.target_kind === 'new-tab' ? 'new-tab' : 'pane',
     target_pane: r.target_pane,
     workspace_id: r.workspace_id,
+    result_tab: r.result_tab ?? null,
     cwd: r.cwd,
     model: r.model,
     backend: r.backend,

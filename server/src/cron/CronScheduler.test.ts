@@ -1,4 +1,7 @@
-import { type Cron, parseCronMarker } from '@muxpad/shared';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type Cron, parseCronMarker, renderSaid, setSayKey } from '@muxpad/shared';
 // Policy tests for the cron tick. Everything here runs against a real
 // in-memory SQLite (the schema IS the design) with a FAKE injection primitive,
 // a fake ptyd and a driven clock — no sleeping, no daemon, no ~/.muxpad.
@@ -7,10 +10,11 @@ import { type Cron, parseCronMarker } from '@muxpad/shared';
 // and never thrown away (docs/plans/2026-08-14-muxpad-cron.md §6 risk 1), and
 // every "don't fire" decision must leave a record saying why.
 import type Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../events.js';
 import { PtydCache } from '../ptyd-cache.js';
 import type { PtydClient } from '../ptyd-client/PtydClient.js';
+import { AgentSessionStore } from '../store/AgentSessionStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -987,6 +991,217 @@ describe('CronScheduler', () => {
     const after = s.store.runs(cron.id).find((r) => r.id === run?.id);
     expect(after?.outcome, 'the row stops claiming it is still in flight').toBe('failed');
     expect(s.store.getById(cron.id)?.fail_streak, 'and the streak moves').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A FIRE'S RESULT, CAPTURED AT TURN-END.
+ *
+ * `opening-review` fired every morning from 21 to 29 October, logged `sent`
+ * nine times, and talked to nobody: it wrote ordinary prose into a worker that
+ * was then deleted. The capture is the first half of the fix — the delivery is
+ * tested next door (cron/result-delivery.test) — and what matters here is the
+ * ORDERING, because that is what lost those nine mornings. The only durable
+ * record of a spoken block is the worker's transcript, and `close_when_done`
+ * deletes the pane that owns it.
+ */
+describe('capturing what a fire asked to have delivered', () => {
+  let db: Database.Database;
+  let cache: PtydCache;
+  let events: EventBus;
+  let wsId: string;
+  let dir: string;
+  let now: number;
+  const KEY = 'a1b2c3d4e5f60718';
+  const SID = 'fire-sid';
+
+  const agentPane = (name: string) => {
+    const tabs = new TabStore(db);
+    const panes = new PaneStore(db);
+    const tab = tabs.create({ name, layout: '', workspace_id: wsId });
+    const pane = panes.create({
+      tab_id: tab.id,
+      shell: '/bin/zsh',
+      cwd: '/tmp',
+      startup_cmd: 'muxpad agent',
+      face: 'chat',
+    });
+    tabs.update(tab.id, { layout: pane.id });
+    return { tabId: tab.id, paneId: pane.id };
+  };
+
+  /** A transcript holding one spoken block, as `muxpad say` leaves it. */
+  const transcriptSpeaking = (paneId: string, text: string, ts: number) => {
+    new AgentSessionStore(db).attachRunner({
+      pane_id: paneId,
+      session_id: SID,
+      assistant: 'codex',
+    });
+    mkdirSync(join(dir, 'agent-transcripts'), { recursive: true });
+    writeFileSync(
+      join(dir, 'agent-transcripts', `${SID}.jsonl`),
+      `${JSON.stringify({
+        kind: 'tool_result',
+        id: 't1',
+        ts,
+        toolUseId: 'u1',
+        ok: true,
+        text: renderSaid(text, KEY),
+      })}\n`,
+    );
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-cron-capture-'));
+    process.env.MUXPAD_DATA_DIR = dir;
+    setSayKey(KEY);
+    db = openDb(':memory:');
+    cache = new PtydCache();
+    events = new EventBus();
+    wsId = new WorkspaceStore(db).create({ name: 'W' }).id;
+    now = T0;
+  });
+
+  afterEach(() => {
+    setSayKey(null);
+    // `Reflect.deleteProperty`, not `= undefined` and not `delete`.
+    //
+    // `process.env.X = undefined` stores the STRING "undefined" — measured,
+    // not assumed — so the next test to read MUXPAD_DATA_DIR would take
+    // "undefined" for a directory and write a transcript into ./undefined/.
+    // `delete` is the correct operation and is what the lint rule objects to,
+    // so this is the same operation by its function form.
+    Reflect.deleteProperty(process.env, 'MUXPAD_DATA_DIR');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const scheduler = () =>
+    new CronScheduler({
+      db,
+      ptyd: fakePtyd(),
+      cache,
+      events,
+      submitSend: () => ({ status: 'sent' as const }),
+      now: () => now,
+    });
+
+  it('stores the spoken text on the run, for a schedule with a destination', async () => {
+    const s = scheduler();
+    s.start();
+    const dest = agentPane('dest');
+    const worker = agentPane('worker');
+    const cron = s.store.create({
+      name: 'opening-review',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'read the market',
+      target_kind: 'pane',
+      target_pane: worker.paneId,
+      result_tab: dest.tabId,
+      next_due_at: T0,
+    });
+    const run = s.store.addRun({
+      cron_id: cron.id,
+      due_at: now,
+      fired_at: now,
+      target_pane: worker.paneId,
+      outcome: 'sent',
+    });
+    transcriptSpeaking(worker.paneId, 'SPX +0.4% · VIX 13.1', now + 10);
+    // Teach the scheduler which run this pane's turn belongs to, the way a
+    // real fire does.
+    (s as unknown as { runOfPane: Map<string, string> }).runOfPane.set(worker.paneId, run.id);
+
+    events.emit({
+      type: 'agent_turn',
+      pane_id: worker.paneId,
+      phase: 'done',
+      sid: null,
+      backend: 'x',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(s.store.runById(run.id)?.result).toBe('SPX +0.4% · VIX 13.1');
+  });
+
+  it('stores NOTHING when the schedule has no destination', async () => {
+    // Not a read-and-discard: the transcript is never opened. A schedule that
+    // has not asked for a destination is the overwhelmingly common case, and
+    // reading a file to find nothing to do with it is work for its own sake.
+    const s = scheduler();
+    s.start();
+    const worker = agentPane('worker');
+    const cron = s.store.create({
+      name: 'quiet-watcher',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'check',
+      target_kind: 'pane',
+      target_pane: worker.paneId,
+      next_due_at: T0,
+    });
+    const run = s.store.addRun({
+      cron_id: cron.id,
+      due_at: now,
+      fired_at: now,
+      target_pane: worker.paneId,
+      outcome: 'sent',
+    });
+    transcriptSpeaking(worker.paneId, 'something', now + 10);
+    (s as unknown as { runOfPane: Map<string, string> }).runOfPane.set(worker.paneId, run.id);
+
+    events.emit({
+      type: 'agent_turn',
+      pane_id: worker.paneId,
+      phase: 'done',
+      sid: null,
+      backend: 'x',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(s.store.runById(run.id)?.result).toBeNull();
+  });
+
+  it('still settles the run when the capture finds nothing', async () => {
+    // (start() is what subscribes to the turn bus.)
+    // A result is a courtesy; the cron's own bookkeeping is not allowed to
+    // depend on one. This is the regression that would turn every silent fire
+    // into a `queued` row forever — the exact shape of the bug the
+    // never-started sweep was built for.
+    const s = scheduler();
+    s.start();
+    const dest = agentPane('dest');
+    const worker = agentPane('worker');
+    const cron = s.store.create({
+      name: 'silent',
+      schedule: HOURLY,
+      tz: 'UTC',
+      prompt: 'check',
+      target_kind: 'pane',
+      target_pane: worker.paneId,
+      result_tab: dest.tabId,
+      next_due_at: T0,
+    });
+    const run = s.store.addRun({
+      cron_id: cron.id,
+      due_at: now,
+      fired_at: now,
+      target_pane: worker.paneId,
+      outcome: 'sent',
+    });
+    (s as unknown as { runOfPane: Map<string, string> }).runOfPane.set(worker.paneId, run.id);
+
+    events.emit({
+      type: 'agent_turn',
+      pane_id: worker.paneId,
+      phase: 'done',
+      sid: null,
+      backend: 'x',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(s.store.runById(run.id)?.result).toBeNull();
+    expect(s.store.runById(run.id)?.outcome).toBe('done');
   });
 });
 

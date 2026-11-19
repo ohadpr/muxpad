@@ -1887,6 +1887,51 @@ const MIGRATIONS: Migration[] = [
         db.exec('ALTER TABLE apps ADD COLUMN origin_tab TEXT');
     },
   },
+  {
+    // WHERE A SCHEDULED JOB'S RESULT GOES, AND WHETHER IT ARRIVED.
+    //
+    // A cron already says where it RUNS (`target_kind`, `target_pane`,
+    // `workspace_id`). It has never said where its OUTPUT goes, and the gap is
+    // not theoretical: `opening-review` ran every morning from 21 to 29
+    // October, logged `sent` every time, and talked to nobody — it wrote
+    // ordinary prose in a disposable worker that was then deleted. The job's
+    // own prompt now shouts "DELIVER THE WHOLE REPORT WITH `muxpad say`",
+    // which protects that one job and nothing else. Two other watchers
+    // hardcode `muxpad agent send <paneId>` in their prompts to forward their
+    // own results, with the destination frozen into the text.
+    //
+    //   crons.result_tab   the CHAT a result belongs in, resolved to a live
+    //                      pane at send time rather than frozen into a prompt.
+    //                      Null means today's behaviour exactly: whatever the
+    //                      worker says stays in the worker's own chat.
+    //
+    //   cron_runs.result   what the worker asked to be delivered, captured at
+    //                      turn-end, and the queue's content.
+    //   cron_runs.delivered_at
+    //                      THE RECEIPT. Stamped only once a send has been
+    //                      accepted — which is a different fact from "the turn
+    //                      ended", and the one `opening-review` needed. NULL
+    //                      with a non-null `result` is the outbox.
+    //
+    // No backfill and no default destination. A job that has not asked for one
+    // keeps being silent, because the alternative — routing every cron's final
+    // prose somewhere — is what turns a "no change" watcher into a daily
+    // message, and intentional silence is a feature of this scheduler.
+    version: 58,
+    apply: (db) => {
+      const cronCols = db.prepare('PRAGMA table_info(crons)').all() as Array<{ name: string }>;
+      if (!cronCols.some((c) => c.name === 'result_tab'))
+        db.exec('ALTER TABLE crons ADD COLUMN result_tab TEXT');
+      const runCols = db.prepare('PRAGMA table_info(cron_runs)').all() as Array<{ name: string }>;
+      if (!runCols.some((c) => c.name === 'result'))
+        db.exec('ALTER TABLE cron_runs ADD COLUMN result TEXT');
+      if (!runCols.some((c) => c.name === 'delivered_at'))
+        db.exec('ALTER TABLE cron_runs ADD COLUMN delivered_at INTEGER');
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS cron_runs_outbox ON cron_runs(delivered_at) WHERE result IS NOT NULL',
+      );
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

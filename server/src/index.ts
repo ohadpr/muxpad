@@ -46,6 +46,7 @@ import { paneAwaitsUser } from './chat/awaiting.js';
 import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
 import { ReportDelivery } from './chat/report-delivery.js';
+import { ResultDelivery } from './cron/result-delivery.js';
 import { paneCarryover } from './chat/summarize.js';
 import { transcriptIsLocal } from './chat/transcript-access.js';
 import { loadConfig, voiceApiKey } from './config.js';
@@ -1151,6 +1152,19 @@ spawnReports.recoverStuck();
 // restart mid-fan-out resumes instead of dropping it.
 reportDelivery.start();
 reportDelivery.sweep();
+
+// AND A SCHEDULED JOB'S RESULT, into the chat its schedule names. Same shape
+// and the same reason: the outbox is a column, so a result captured before
+// this process's predecessor went down is still there to hand over. The
+// immediate sweep is what makes a restart between capture and delivery
+// invisible rather than lossy.
+const cronResults = new ResultDelivery({
+  db,
+  store: cronScheduler.store,
+  submitSend: (paneId, text) => agentBridge.submitSend(paneId, text),
+});
+cronResults.start();
+cronResults.sweep();
 
 // One-time repair of headlines written before the shape check existed — the
 // generation that answered the conversation ("I'm not familiar with muxpad —

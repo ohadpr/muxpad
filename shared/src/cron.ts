@@ -60,6 +60,26 @@ export const CronSchema = z.object({
    *  updated it and said nothing renders nothing in the conversation. */
   card: z.string().nullable().default(null),
   /**
+   * WHERE THIS JOB'S RESULT GOES — a chat (tab) id, or null.
+   *
+   * A cron has always said where it RUNS. It has never said where its OUTPUT
+   * belongs, and the two are different questions the moment a job runs in a
+   * fresh, disposable worker: `opening-review` fired every morning from 21 to
+   * 29 October, logged `sent` every time, and talked to nobody, because its
+   * prose stayed in a chat that was then deleted.
+   *
+   * Resolved to a live pane at SEND time, which is the other half of the fix:
+   * two watchers currently forward their own results with a pane id frozen
+   * into their prompt text, so the destination is only correct until that pane
+   * is replaced.
+   *
+   * Null means exactly today's behaviour — whatever the worker says stays in
+   * the worker's own chat. There is deliberately no default: routing every
+   * cron's final prose somewhere is what turns a "no change" watcher into a
+   * daily message, and silence is a feature of this scheduler.
+   */
+  result_tab: z.string().nullable().default(null),
+  /**
    * Fire ONCE, then retire.
    *
    * Set explicitly (`--once`) or inferred at creation from a DATED expression —
@@ -115,6 +135,26 @@ export const CronRunSchema = z.object({
    *  `rejected`), else our own verdict (`skipped` | `missed` | `error`). */
   outcome: z.string(),
   detail: z.string().nullable(),
+  /**
+   * What this fire asked to have delivered — the text it spoke with
+   * `muxpad say` — or null for the overwhelmingly common case of a fire that
+   * had nothing to report.
+   *
+   * Null is not a failure. A watcher that checks something every weekday
+   * should say nothing on the days nothing happened, and that is what null
+   * records: not "we lost it", but "there was nothing".
+   */
+  result: z.string().nullable().default(null),
+  /**
+   * THE RECEIPT, and the reason this feature is not just forwarding.
+   *
+   * Stamped once a send has been ACCEPTED by the destination — a different
+   * fact from "the turn ended", which is all a run row has ever carried.
+   * `result IS NOT NULL AND delivered_at IS NULL` is the outbox: a result that
+   * could not be handed over stays there and makes the run FAIL, rather than
+   * logging `sent` at a reader that does not exist.
+   */
+  delivered_at: z.number().nullable().default(null),
 });
 export type CronRun = z.infer<typeof CronRunSchema>;
 

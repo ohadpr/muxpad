@@ -240,8 +240,18 @@ export class ReportDelivery {
   sweep(): Flushed {
     const total = nothing();
     try {
+      const rounds = new SpawnRoundStore(this.db);
+      // A ROUND WHOSE ASKER IS GONE IS NOT PENDING, IT IS OVER. Closed here
+      // and not only at the delete that orphaned it, because that is one of
+      // three doors (see `closeOrphaned`) and because a fix on the delete path
+      // cannot repair the rows written before it existed — one on this machine
+      // had been open 46 days. Costs one UPDATE per sweep and is normally a
+      // no-op.
+      const settled = rounds.closeOrphaned(this.now());
+      if (settled > 0)
+        console.warn(`[report-delivery] closed ${settled} round(s) whose asking chat is gone`);
       // Only parents that actually have something pending.
-      const parents = new SpawnRoundStore(this.db).parentsWithUndelivered(this.orphanedBefore());
+      const parents = rounds.parentsWithUndelivered(this.orphanedBefore());
       for (const parentId of parents) {
         const r = this.flushParent(parentId);
         total.delivered += r.delivered;

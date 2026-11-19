@@ -1,3 +1,4 @@
+import { SUMMONS_HOLD_MS } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { listBrowserApps } from './BrowserApps.js';
 import { BrowserEvents } from './BrowserEvents.js';
@@ -26,13 +27,13 @@ import { agentPaneForTab, outstandingSummons } from './ResumeAfterHandback.js';
 /**
  * How long an unanswered summons holds its chat — and its browser — waiting.
  *
- * The person came back after 41 minutes on the evening this was built for, so
- * the 30 minutes another harness uses would have lost that page too. Two hours
- * covers a dinner; past that a summons nobody answered is abandoned, and a
- * chat shouting "blocked" for a day, with a Chrome held open for it, is a
- * worse failure than an errand that has to be redone.
+ * ONE DEFINITION, in shared, because the web had a second copy of the same
+ * number deciding whether the card still offers Done — see the note there for
+ * what the two disagreeing would cost. Re-exported rather than moved outright
+ * so the readers that already import it from here keep working, and so this
+ * file still names the policy it enforces.
  */
-export const SUMMONS_HOLD_MS = 2 * 60 * 60 * 1000;
+export { SUMMONS_HOLD_MS } from '@muxpad/shared';
 
 /** When the outstanding summons went up, or null — honouring the hold. */
 export function liveSummonsAt(

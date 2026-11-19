@@ -4266,7 +4266,7 @@ cmd_cron_new() {
   # Pre-strip the flags parse_flags can't take: BARE mode flags (it would eat
   # the next argument as their value) and hyphenated names (it evals
   # FLAG_<name>=, and `FLAG_on-context` is not a legal shell variable).
-  local a rest=() target='new-tab' pane_ref='' close_flag='' on_context='' max_open='' legacy_voice_flag='' card_name='' watch_cmd=''
+  local a rest=() target='new-tab' pane_ref='' close_flag='' on_context='' max_open='' legacy_voice_flag='' card_name='' watch_cmd='' result_to=''
   for a in "$@"; do
     case "$a" in
       --pane) target=pane ;;
@@ -4274,6 +4274,7 @@ cmd_cron_new() {
       --new-tab) target=new-tab ;;
       --silent|--fold|--speak) legacy_voice_flag=1 ;;
       --card=*) card_name="${a#*=}" ;;
+      --to=*) result_to="${a#--to=}" ;;
       --watch=*) watch_cmd="${a#--watch=}" ;;
       --no-close) close_flag=false ;;
       --close) close_flag=true ;;
@@ -4367,6 +4368,18 @@ USAGE
   # the job runs. A fire that updated its card and said nothing renders nothing
   # in the conversation; the card's freshness rail is the liveness signal.
   [ -n "$card_name" ] && body+=",\"card\":\"$card_name\""
+  # --to declares WHICH CHAT THE RESULT BELONGS IN, which is a third fact
+  # again: where it runs, what card it writes, and who hears about it. A fresh
+  # worker's prose dies with the worker — `opening-review` logged `sent` for
+  # nine mornings and talked to nobody — and the two watchers that forward
+  # their own results do it by freezing a pane id into their prompt text.
+  # Defaults to THIS chat when the flag is given no value, because "tell me"
+  # is the overwhelmingly common thing to mean.
+  if [ -n "${result_to:-}" ]; then
+    [ "$result_to" = "here" ] && result_to="${MUXPAD_TAB_ID:-}"
+    [ -n "$result_to" ] || { echo 'muxpad: --to=here needs a chat — run it from inside one' >&2; exit 1; }
+    body+=",\"result_tab\":$(json_string "$result_to")"
+  fi
   # --watch makes the due slot a CHECK: the server runs this command and only
   # wakes an agent when its output changed. The alternative is a model turn
   # per interval to discover that nothing happened.
@@ -4421,6 +4434,7 @@ cmd_cron_show() {
     "id:        \(.id)",
     "schedule:  \(.schedule)  (\(.tz))",
     "target:    \(if .target_kind == "pane" then "chat " + (.target_pane // "?") else "new-tab in workspace " + (.workspace_id // "?") end)",
+    "result to: \(.result_tab // "nowhere — whatever it says stays in the run\u0027s own chat")",
     "enabled:   \(.enabled)",
     "policies:  catchup=\(.catchup) overlap=\(.overlap) on_context=\(.on_context) quiet=\(.quiet_mins)m" +
       (if .target_kind == "new-tab" then " max_open=\(.max_open) close_when_done=\(.close_when_done)" else "" end),
@@ -4434,7 +4448,14 @@ cmd_cron_show() {
     "runs:"'
   printf '%s' "$res" | jq -r '.runs // [] |
     if length == 0 then "  (none yet)"
-    else .[] | "  \(.fired_at / 1000 | strflocaltime("%d %b %H:%M"))  \(.outcome)\(if .detail then "  — " + .detail else "" end)"
+    else .[] | "  \(.fired_at / 1000 | strflocaltime("%d %b %H:%M"))  \(.outcome)" +
+      # THE RECEIPT, beside the outcome, because they are different facts and
+      # conflating them is the bug this column exists for: nine mornings of
+      # `opening-review` read `sent` while nobody had read a word.
+      (if .result == null then ""
+       elif .delivered_at then "  → delivered \(.delivered_at / 1000 | strflocaltime("%H:%M"))"
+       else "  → RESULT UNDELIVERED" end) +
+      (if .detail then "  — " + .detail else "" end)
     end'
 }
 

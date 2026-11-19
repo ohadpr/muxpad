@@ -15,6 +15,7 @@ import type { EventBus } from '../events.js';
 import type { PtydCache } from '../ptyd-cache.js';
 import { safeCwd } from '../safe-cwd.js';
 import { PaneStore } from '../store/PaneStore.js';
+import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 
 /**
@@ -33,6 +34,7 @@ export function cronsRoutes(deps: {
   const app = new Hono();
   const panes = new PaneStore(deps.db);
   const workspaces = new WorkspaceStore(deps.db);
+  const tabs = new TabStore(deps.db);
   // The scheduler owns the store; without one (HTTP-only tests) the routes
   // still work — they just can't fire.
   const store = () => deps.scheduler?.store ?? null;
@@ -62,6 +64,13 @@ export function cronsRoutes(deps: {
         target_kind: z.enum(['pane', 'new-tab']),
         target_pane: z.string().optional(),
         workspace_id: z.string().optional(),
+        /**
+         * WHERE THIS JOB'S RESULT GOES — a chat id, independent of where it
+         * RUNS. See `Cron.result_tab`: nine mornings of `opening-review`
+         * logged `sent` at nobody, because a fresh worker's prose dies with
+         * the worker.
+         */
+        result_tab: z.string().optional(),
         cwd: z.string().optional(),
         // Baked into the pane's startup command (a shell string) — same gate
         // as POST /api/tabs.
@@ -169,6 +178,7 @@ export function cronsRoutes(deps: {
       target_kind: body.target_kind,
       target_pane: body.target_pane ?? null,
       workspace_id: body.workspace_id ?? null,
+      result_tab: body.result_tab ?? null,
       cwd: body.cwd ? safeCwd(body.cwd) : null,
       model: body.model ?? null,
       backend: body.backend ?? null,
@@ -228,6 +238,15 @@ export function cronsRoutes(deps: {
          * the only fix available was an UPDATE by hand.
          */
         workspace_id: z.string().optional(),
+        /**
+         * Where results go, or null to go back to silence.
+         *
+         * NULLABLE on the edit path and not on create, which is the
+         * difference between "did not ask for one" and "stop sending them".
+         * A schedule that has been routing results somewhere needs a way to
+         * stop without being recreated.
+         */
+        result_tab: z.string().nullable().optional(),
       })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(bad(parsed.error.issues[0]?.message ?? 'invalid body'), 400);
@@ -249,6 +268,16 @@ export function cronsRoutes(deps: {
       if (!workspaces.getById(body.workspace_id))
         return c.json(bad(`workspace ${body.workspace_id} not found`), 400);
       s.setWorkspace(cron.id, body.workspace_id);
+    }
+    if (body.result_tab !== undefined) {
+      // VALIDATED, unlike the app's `origin_tab`: this one is a DESTINATION,
+      // and a chat that does not exist is a result that will be retried three
+      // times and then marked failed. Refusing here costs one error message;
+      // accepting it costs a schedule that looks healthy and delivers nothing,
+      // which is the exact failure this feature exists to end.
+      if (body.result_tab !== null && !tabs.getById(body.result_tab))
+        return c.json(bad(`chat ${body.result_tab} not found`), 400);
+      s.setResultTab(cron.id, body.result_tab);
     }
     if (body.prompt !== undefined || body.schedule !== undefined || body.tz !== undefined) {
       // Re-anchors (and recomputes the jitter, whose cap depends on the

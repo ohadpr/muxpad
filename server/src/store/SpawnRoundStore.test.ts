@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { SpawnRoundStore } from './SpawnRoundStore.js';
 import { TabStore } from './TabStore.js';
 import { WorkspaceStore } from './WorkspaceStore.js';
+import { openDb } from './db.js';
 import { runMigrations } from './migrations.js';
 
 /**
@@ -276,5 +277,107 @@ describe('SpawnRoundStore', () => {
       expect(all[1]?.ended_at).toBeNull();
       expect(all[1]?.report).toBeNull();
     });
+  });
+});
+
+/**
+ * A ROUND WHOSE ASKER IS GONE. Nothing closes a round but the sub-chat
+ * lifecycle, and a chat that is no longer a sub-chat never reaches that code
+ * again — so these rows sit `ended_at IS NULL` for ever. One on this machine
+ * was open for 46 days, written before the delete-path fix existed and never
+ * repaired by it.
+ */
+describe('closeOrphaned', () => {
+  const T = 1_800_000_000_000;
+  let db: Database.Database;
+  let rounds: SpawnRoundStore;
+
+  const ws = (id: string) =>
+    db
+      .prepare('INSERT INTO workspaces (id, slug, name, created_at, updated_at) VALUES (?,?,?,0,0)')
+      .run(id, id, id);
+  const tab = (id: string, spawnedBy: string | null) =>
+    db
+      .prepare(
+        `INSERT INTO tabs (id, slug, name, layout, workspace_id, spawned_by, created_at, updated_at)
+         VALUES (?,?,?,'"p"','w',?,0,0)`,
+      )
+      .run(id, id.toLowerCase(), id, spawnedBy);
+  const open = (tabId: string) => rounds.open(tabId, T, 1);
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+    rounds = new SpawnRoundStore(db);
+    ws('w');
+  });
+
+  const roundOf = (tabId: string) =>
+    db.prepare('SELECT * FROM spawn_rounds WHERE tab_id = ?').get(tabId) as {
+      ended_at: number | null;
+      delivered_at: number | null;
+      report: string | null;
+    };
+
+  it('closes a round whose chat has NO parent at all', () => {
+    tab('ROOT', null);
+    open('ROOT');
+    expect(rounds.closeOrphaned(T + 5)).toBe(1);
+    expect(roundOf('ROOT')).toMatchObject({ ended_at: T + 5, delivered_at: T + 5 });
+  });
+
+  it('closes a round whose parent no longer exists — a dangling spawned_by', () => {
+    // There is no foreign key, by design (migrations v27), so this is the
+    // other shape an orphan comes in and the one `spawned_by IS NULL` misses.
+    tab('CHILD', 'GONE');
+    open('CHILD');
+    expect(rounds.closeOrphaned(T + 5)).toBe(1);
+    expect(roundOf('CHILD').ended_at).toBe(T + 5);
+  });
+
+  it('leaves a live sub-chat alone — its round is a real question', () => {
+    tab('PARENT', null);
+    tab('CHILD', 'PARENT');
+    open('CHILD');
+    expect(rounds.closeOrphaned(T + 5)).toBe(0);
+    expect(roundOf('CHILD').ended_at).toBeNull();
+  });
+
+  it('does not touch a round that already ended', () => {
+    // Including one that ended and has NOT been delivered: that is the
+    // delivery queue's business, not this sweep's.
+    tab('ROOT', null);
+    open('ROOT');
+    rounds.close('ROOT', T + 1);
+    expect(rounds.closeOrphaned(T + 9)).toBe(0);
+    expect(roundOf('ROOT')).toMatchObject({ ended_at: T + 1, delivered_at: null });
+  });
+
+  it('keeps any report that was already written', () => {
+    // Nothing is lost by closing it. What ends is the claim that somebody is
+    // waiting for it.
+    tab('PARENT', null);
+    tab('CHILD', 'PARENT');
+    open('CHILD');
+    rounds.close('CHILD', T + 1, { report: 'found two dead rules', state: 'ok' });
+    db.prepare('UPDATE spawn_rounds SET ended_at = NULL WHERE tab_id = ?').run('CHILD');
+    db.prepare('DELETE FROM tabs WHERE id = ?').run('PARENT');
+    rounds.closeOrphaned(T + 9);
+    expect(roundOf('CHILD').report).toBe('found two dead rules');
+  });
+
+  it('is idempotent, so running it every sweep costs nothing', () => {
+    tab('ROOT', null);
+    open('ROOT');
+    expect(rounds.closeOrphaned(T + 5)).toBe(1);
+    expect(rounds.closeOrphaned(T + 6)).toBe(0);
+    expect(roundOf('ROOT').ended_at).toBe(T + 5);
+  });
+
+  it('settles several at once and reports how many', () => {
+    for (const id of ['A', 'B', 'C']) {
+      tab(id, null);
+      open(id);
+    }
+    expect(rounds.closeOrphaned(T + 5)).toBe(3);
   });
 });

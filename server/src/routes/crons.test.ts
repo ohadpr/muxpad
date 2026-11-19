@@ -126,6 +126,79 @@ describe('/api/crons', () => {
     expect(body.max_open).toBe(1);
   });
 
+  describe('where a result goes', () => {
+    /**
+     * A cron has always said where it RUNS and never where its OUTPUT belongs.
+     * `opening-review` fired every morning from 21 to 29 October, logged
+     * `sent` nine times and talked to nobody, because a fresh worker's prose
+     * dies with the worker. See `Cron.result_tab`.
+     */
+    const tabOf = async () => {
+      const t = (await (
+        await test.app.request('/api/tabs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspace_id: wsId, bootstrap: 'agent' }),
+        })
+      ).json()) as { id: string };
+      return t.id;
+    };
+    const patch = (ref: string, body: unknown) =>
+      test.app.request(`/api/crons/${ref}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('defaults to NOWHERE, which is silence', async () => {
+      // There is deliberately no default destination: routing every cron's
+      // prose somewhere is what turns a "no change" watcher into a daily
+      // message.
+      const { body } = await create();
+      expect(body.result_tab).toBeNull();
+    });
+
+    it('takes a destination at creation', async () => {
+      const dest = await tabOf();
+      const { body } = await create({ result_tab: dest } as never);
+      expect(body.result_tab).toBe(dest);
+    });
+
+    it('can be pointed somewhere later, and back to silence', async () => {
+      // A schedule that has been routing results needs a way to STOP without
+      // being recreated — which is why the edit path takes null and create
+      // does not.
+      const dest = await tabOf();
+      const { body } = await create();
+      expect((await patch(body.id, { result_tab: dest })).status).toBe(200);
+      expect(scheduler.store.getById(body.id)?.result_tab).toBe(dest);
+      expect((await patch(body.id, { result_tab: null })).status).toBe(200);
+      expect(scheduler.store.getById(body.id)?.result_tab).toBeNull();
+    });
+
+    it('refuses a destination that does not exist', async () => {
+      // Costs one error message. Accepting it costs a schedule that looks
+      // healthy and delivers nothing, which is the failure this feature
+      // exists to end — so the validation is the point, not politeness.
+      const { body } = await create();
+      const res = await patch(body.id, { result_tab: 'no-such-chat' });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toContain(
+        'not found',
+      );
+      expect(scheduler.store.getById(body.id)?.result_tab).toBeNull();
+    });
+
+    it('leaves the anchor alone when only the destination changes', async () => {
+      // Where the result goes is not when the job runs.
+      const dest = await tabOf();
+      const { body } = await create();
+      const before = scheduler.store.getById(body.id)?.next_due_at;
+      await patch(body.id, { result_tab: dest });
+      expect(scheduler.store.getById(body.id)?.next_due_at).toBe(before);
+    });
+  });
+
   it('rejects an unreadable schedule AT CREATION, with a usable message', async () => {
     const { status, body } = await create({ schedule: 'sometimes on tuesdays' });
     expect(status).toBe(400);

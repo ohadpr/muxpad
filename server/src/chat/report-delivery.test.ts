@@ -164,6 +164,65 @@ describe('report delivery — the join', () => {
    * the sweep only looks at unstamped rounds. 21 rounds on this machine went
    * that way.
    */
+  describe('a round whose asking chat is gone', () => {
+    /**
+     * A round is closed by the SUB-CHAT lifecycle and by nothing else, so a
+     * chat that stops being a sub-chat never reaches that code again and its
+     * round sits `ended_at IS NULL` for ever. `TabStore.delete` closes the
+     * rounds of the children it orphans — but that is one of three doors its
+     * own comment names, and a fix on it cannot repair the rows written before
+     * it existed. One such round on this machine had been open 46 days.
+     *
+     * So the sweep settles them, which is also what makes it self-healing: no
+     * migration, no hand-written SQL, and the next door to forget is covered
+     * before anybody notices it forgot.
+     */
+    const openRoundOf = (tabId: string) =>
+      db.prepare('SELECT ended_at, delivered_at FROM spawn_rounds WHERE tab_id = ?').get(tabId) as {
+        ended_at: number | null;
+        delivered_at: number | null;
+      };
+
+    it('is closed and settled by the sweep', () => {
+      const p = parent('P');
+      child('C', p, { ended: null, report: null, state: null });
+      db.prepare('DELETE FROM tabs WHERE id = ?').run(p);
+      make().sweep();
+      expect(openRoundOf('C')).toEqual({ ended_at: clock, delivered_at: clock });
+    });
+
+    it('is not delivered anywhere — there is nobody to tell', () => {
+      const p = parent('P');
+      child('C', p, { ended: null, report: 'half a job', state: null });
+      db.prepare('DELETE FROM tabs WHERE id = ?').run(p);
+      make().sweep();
+      expect(sent).toEqual([]);
+    });
+
+    it('leaves a LIVE sub-chat mid-round alone', () => {
+      // The ordinary state of every working worker. Closing one here would
+      // end a round that is genuinely in flight.
+      const p = parent('P');
+      child('C', p, { ended: null, report: null, state: null });
+      make().sweep();
+      expect(openRoundOf('C').ended_at).toBeNull();
+    });
+
+    it('stops being work the sweep looks at, so the queue cannot grow forever', () => {
+      // The file's own rule: a round that will never be delivered must not
+      // stay NULL, or the sweep re-examines it until the database is deleted.
+      const p = parent('P');
+      child('C', p, { ended: null, report: null, state: null });
+      db.prepare('DELETE FROM tabs WHERE id = ?').run(p);
+      const d = make();
+      d.sweep();
+      const first = openRoundOf('C');
+      clock += 60_000;
+      d.sweep();
+      expect(openRoundOf('C')).toEqual(first);
+    });
+  });
+
   describe('a parent archived with results outstanding', () => {
     const archive = (id: string) =>
       db

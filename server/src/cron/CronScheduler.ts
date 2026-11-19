@@ -34,6 +34,7 @@ import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import type { TabActivity } from '../tab-activity.js';
 import { CronStore } from './CronStore.js';
+import { capturedResult } from './say-capture.js';
 import { firesDue } from './schedule.js';
 import { fireDiedUnstarted } from './stale-fire.js';
 import { type WatchReading, runWatch, withWatchReading } from './watch.js';
@@ -735,6 +736,32 @@ export class CronScheduler {
     else this.inflight.delete(paneId);
   }
 
+  /**
+   * Store this fire's spoken text, if its schedule has somewhere to put it.
+   *
+   * Capture and delivery are deliberately split. This runs inside a
+   * synchronous bus handler, so it must not send: `submitSend` into another
+   * chat from here would put a stranger's message in the middle of this
+   * worker's turn-end, and a destination mid-respawn would lose it with
+   * nothing recorded. Writing to the outbox cannot lose it — a restart
+   * between the two resumes from the row.
+   *
+   * Never throws into the caller. A result is a courtesy; a cron's own
+   * bookkeeping is not allowed to fail for one.
+   */
+  private captureResult(paneId: string, runId: string): void {
+    try {
+      const run = this.store.runById(runId);
+      if (!run) return;
+      const cron = this.store.getById(run.cron_id);
+      if (!cron?.result_tab) return;
+      const said = capturedResult(this.deps.db, paneId, run.fired_at);
+      if (said) this.store.setRunResult(runId, said);
+    } catch (err) {
+      console.error("[cron] could not capture a fire's result", err);
+    }
+  }
+
   private async onTurnEnded(paneId: string, phase: 'done' | 'fatal'): Promise<void> {
     this.inflight.delete(paneId);
     // The fire's own row, corrected now that the turn it started has ended.
@@ -743,6 +770,17 @@ export class CronScheduler {
     const runId = this.runOfPane.get(paneId);
     if (runId) {
       this.runOfPane.delete(paneId);
+      // ── WHAT THIS FIRE ASKED TO HAVE DELIVERED ─────────────────────────
+      // Captured BEFORE the row is settled, and before the tab can be closed
+      // by `close_when_done` below: the only durable record of a spoken block
+      // is the worker's transcript, and `deleteTabCascade` takes the pane with
+      // it. `opening-review` lost nine mornings to exactly this ordering —
+      // prose written into a chat that was then deleted.
+      //
+      // Only when a destination is declared. Reading a transcript to find
+      // nothing to do with is work for its own sake, and the overwhelmingly
+      // common case is a schedule that has not asked for one.
+      this.captureResult(paneId, runId);
       this.store.finishRun(runId, phase === 'fatal' ? 'failed' : 'done');
     }
     const pending = this.closeOnDone.get(paneId);
