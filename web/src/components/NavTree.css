@@ -181,11 +181,9 @@
   /* A step fainter again — it is the least important thing on the line and
      only has to be legible when you deliberately look at it. The hover below
      is what makes it readable at the moment you actually want it. */
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
   /* …and ON HOVER it steps up to the ink the row's own name wears when read.
      The row you are pointing at is the one row you are asking a question
      about, so that is the moment the answer should be easy to read. */
-  --nt-ws-tag-ink-hot: var(--nt-ink-read);
 
   /* ─── The two surfaces a row can take, and why they are DERIVED ──────────
      Selection and hover are one scale with three rungs, and all three are
@@ -810,11 +808,12 @@
      block: the counters close up, the word loses its shape, and what you see
      is a smudge the right length — "label looks squished".
 
-     0.12em, not the 0.07 it had, and the number is not a taste: it is the
-     tracking the OTHER uppercase label in this rail already uses (the
-     recently-active heading). Two caps labels in one list that are tracked
-     differently read as two kinds of thing, and there is only one kind of
-     thing here — a section name. */
+     0.12em, not the 0.07 it had. The number arrived as the tracking the
+     rail's OTHER uppercase label used — the recently-active heading — on the
+     reasoning that two caps labels in one list tracked differently read as
+     two kinds of thing. That band is gone and this is now the only uppercase
+     label here, so what is left is the measurement itself: below about 0.1em
+     the counters close at this size and weight. */
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -1404,8 +1403,6 @@
   /* Same derivations as the rail's, one surface along — see the definitions
      at the top. They have to be re-stated here or the tag goes on wearing
      rail ink on a pane-coloured row. */
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
-  --nt-ws-tag-ink-hot: var(--nt-ink-read);
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1456,8 +1453,6 @@
   /* Same derivations as the rail's, one surface along — see the definitions
      at the top. They have to be re-stated here or the tag goes on wearing
      rail ink on a pane-coloured row. */
-  --nt-ws-tag-ink: color-mix(in srgb, var(--fg-faint) 80%, transparent);
-  --nt-ws-tag-ink-hot: var(--nt-ink-read);
   --nt-hover: color-mix(in srgb, var(--fg) 6%, transparent);
   --nt-sel: color-mix(in srgb, var(--accent) 20%, transparent);
   --nt-sel-hover: color-mix(in srgb, var(--accent) 26%, transparent);
@@ -1594,104 +1589,6 @@
 }
 .navtree-tab-link:hover {
   text-decoration: none;
-}
-/* Line one — name, plus the chips that qualify it. */
-/* ── THE WORKSPACE TAG, IN THE RECENTLY-ACTIVE BAND ─────────────────────
-   The band is the one place in the rail where rows from different workspaces
-   sit together, so it is the one place a row has to say which one it is from
-   — and it says so only when that is NEWS: a row from the workspace you are
-   already in gets no tag at all.
-
-   AFTER THE NAME, NOT BEFORE IT. It was a prefix, and a rail is scanned down
-   its left edge — the same argument that keeps every status mark on one x. A
-   leading "Orbit /" pushed that row's NAME 70px right of every other name in
-   the band: the thing you are looking for stopped starting where its
-   neighbours start, to make room for the thing you are not.
-
-   AND IT GIVES WAY FIRST. `flex-shrink: 1` against the name's 0, so a narrow
-   rail eats the workspace and keeps the chat. Quieter by ink and size, never
-   by weight: at this size a lighter weight is just blur. The link's own
-   `title` still says "<chat> · <workspace>" in full, and the tag is
-   aria-hidden so it is not read twice. */
-/* ── IT SITS ON THE NAME'S BASELINE, NOT IN THE MIDDLE OF ITS BOX ───────
-   The title line is `align-items: center`, which centres each item's BOX.
-   Two different font sizes then have two different baselines — the smaller
-   one lower by half the leading difference — and the tag read as sagging
-   below the name it qualifies. Reported as "the workspace name is not
-   properly vertically aligned".
-
-   Baseline, on the band's line only. Every item on it is text, so there is a
-   real baseline group to join; the tree's title line carries chips that are
-   not text and keeps its centring. */
-.navtree-ws-slot .navtree-tab-titleline {
-  align-items: baseline;
-}
-/* ── THE CONTAINER IS THE LINK, NOT THE LINE ───────────────────────────────
-   `container-type: inline-size` applies INLINE-AXIS CONTAINMENT: the element's
-   width is computed without looking at its contents. On the title line — a
-   flex item whose width comes FROM its contents — that collapses it to zero,
-   and the chat names disappeared entirely.
-
-   The link is the grid item in the `minmax(0, 1fr)` track, so its width is
-   handed to it by the grid and containment costs nothing. Querying it asks
-   the same question about the same space. */
-/* THE DESKTOP RAIL ONLY, and that scope is the whole correctness of it.
-   `container-type: inline-size` computes the element's width without looking
-   at its contents, so it may only go on a box whose width is handed to it by
-   layout. On the rail the link is a grid item in a `minmax(0, 1fr)` track, so
-   it is.
-
-   ON THE SHEET IT IS NOT: that row is a flex line and the link is
-   `flex: 0 1 auto`, i.e. sized BY its contents. Containment collapsed it to
-   zero and every chat name in the mobile band disappeared — the same mistake
-   this rule was moved here to fix, one surface along. The sheet is a phone
-   width wide and has room for the tag anyway, so it simply does not need the
-   query. */
-.navtree[data-variant="sidebar"] .navtree-ws-slot .navtree-tab-link {
-  container-type: inline-size;
-  container-name: slot-line;
-}
-/* ── A TWO-LETTER WORKSPACE TELLS YOU NOTHING ──────────────────────────────
-   The tag already gave way first, but giving way meant ELLIPSISING, so a tight
-   row spent twenty pixels on "Tr…" while the name it was qualifying was cut to
-   "Investi…". Both halves unreadable, to say one thing.
-
-   So it leaves instead. The row is still scannable — the name is back, the age
-   is still there — and the workspace is one hover away in the link's title.
-   This is the same rule as before ("it gives way first"), taken to its
-   conclusion: the thing that yields should yield all the way rather than
-   linger as a stub. */
-@container slot-line (max-width: 200px) {
-  /* Scoped to the slot, not bare `.navtree-ws-tag`. A bare one is a second
-     block with that exact selector, and every test that looks the rule up by
-     `indexOf('.navtree-ws-tag {')` would silently read THIS one instead — the
-     same false-match the card tests were just fixed for. */
-  .navtree-ws-slot .navtree-ws-tag {
-    display: none;
-  }
-}
-.navtree-ws-tag {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  margin-left: 6px;
-  /* A step below the dim ink the read-child rows wear. It is the LEAST
-     important thing on the line — true of every row in the band, so it must
-     not compete with the names it is qualifying — and it only has to be
-     legible when you deliberately look at it. */
-  color: var(--nt-ws-tag-ink);
-  font-size: 0.6875rem;
-  transition: color 120ms ease;
-}
-.navtree-tab-row:hover .navtree-ws-tag,
-.navtree-tab-row:has(:focus-visible) .navtree-ws-tag {
-  color: var(--nt-ws-tag-ink-hot);
-}
-/* …and the chat's own name never shrinks while there is a tag beside it. */
-.navtree-ws-slot .navtree-name-text {
-  flex: 0 1 auto;
 }
 
 .navtree-tab-titleline {
@@ -3282,13 +3179,17 @@ body.sidenav-resizing iframe {
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
 }
 
-/* ─── Foot: Hosted ───────────────────────────────────────────────────── */
+/* ─── Foot: Artifacts and Apps ─────────────────────────────────────────── */
 
-/* Below the tree, past a hairline. Hosted is deliberately NOT a workspace
-   row: apps and artifacts belong to no workspace and occupy no tab, and
-   indenting them into the tree would imply a containment that doesn't
-   exist. The hairline + top margin says "different kind of destination",
-   the same way the group separators say "different workspace". */
+/* Below the tree, past a hairline. They are deliberately NOT workspace rows:
+   artifacts and apps belong to no workspace and occupy no tab, and indenting
+   them into the tree would imply a containment that doesn't exist. The
+   hairline + top margin says "different kind of destination", the same way
+   the group separators say "different workspace".
+
+   TWO ROWS, not one called "Hosted" — see components/NavTree HostedFoot. They
+   share every rule here: two destinations of the same kind should look like
+   two of the same thing, and the glyph is what separates them. */
 .navtree-foot {
   margin: 14px 8px 0 4px;
   padding-top: 10px;
@@ -3859,427 +3760,6 @@ body.sidenav-resizing iframe {
     8px
   );
   padding-inline-end: 0;
-}
-
-/* ─── THE WORKING SET ───────────────────────────────────────────────────────
-   The chats you are moving between, in slots that do not move. The algorithm
-   and the measurements behind the cap and the decay are in
-   shared/src/working-set.ts; what lives here is only how it sits in the rail.
-
-   ABOVE THE SCROLLER, not inside it. A strip you have to scroll to is a strip
-   you will search for, which is the thing it exists to end — and it is six
-   rows at most, so it costs the tree nothing it will miss.
-
-   ─── FULL BLEED, NOT A FLOATING TRAY ───────────────────────────────────────
-   The obvious styling is an inset card with rounded corners, and it is wrong
-   here for one reason: insetting it by 8px moves the icon column 8px, so the
-   strip's rows no longer line up with the tree's. A rail is scanned down its
-   left edge — it is the same argument that put every status mark on one x —
-   and a band that breaks the column to look like an object costs more than
-   the object is worth. So it is a BAND: its own ground, the full width, and
-   every row still on the tree's grid.
-
-   Its rows are the ORDINARY `.navtree-tab-row`, inheriting the grid, the icon
-   column, the status mark and the selection treatment without a second copy
-   of any of it. A chat is deliberately in both places at once: the strip is a
-   SHORTCUT, not a move, and its workspace must not start lying about what it
-   contains. */
-.navtree-workingset {
-  /* ── THE BAND'S OWN INK, CAPTURED BEFORE A ROW CAN REBIND IT ───────────
-     `.navtree-tab-row[data-active="true"]` swaps --fg, --fg-dim and the whole
-     --nt-ink-* family to the PANE's palette, and it is right to: in the tree
-     that row is painted in the pane's face and its funnel flares that surface
-     into the rail, so pane ink is what belongs on it.
-     The band has no pane face. The same substitution put the pane's content
-     ink on the band's own ground and measured 1.19:1 on memphis, 1.58 on
-     alucard, 2.07 on riso — the chat you are IN became the least readable row
-     in the band. Reaching for --nt-ink-read instead did not help, because that
-     token is re-derived in the same block.
-     A custom property's var() is resolved where it is DECLARED, so these
-     capture whatever the ink means HERE — rail on the desktop island, the
-     sheet's own on a phone — and the active row below substitutes nothing. */
-  --band-ink: var(--fg);
-  --band-ink-dim: var(--fg-dim);
-  /* The tag's ink, captured the same way and for the same reason. Its own
-     token is derived from --fg-dim AND --fg-faint, both of which the active
-     row re-points at the pane. */
-  --band-ws-tag-ink: var(--nt-ws-tag-ink);
-  --band-ws-tag-ink-hot: var(--nt-ws-tag-ink-hot);
-  flex: 0 0 auto;
-  /* ── ITS ROWS LINE UP WITH EVERY OTHER ROW ──────────────────────────────
-     A row inside a workspace carries two insets: the scroller's and the
-     group's. The band had neither, so its chips sat left of every chip below
-     it — "the chats there are not horizontally aligned with the rest of the
-     chats below that are in the other sections" — and its status marks sat
-     right of a column this rail keeps to 0.00px.
-
-     IT PAYS THE GROUP'S SHARE, AND THE SCROLLER'S ONCE. It was doubled on the
-     left, which was right while the band was pinned ABOVE the scroller and
-     had to pay that inset itself. It moved INSIDE the scroller when it
-     stopped being pinned, so the scroller's padding now applies to it exactly
-     as it applies to a group, and paying it twice put the band 4px right of
-     everything below it. On the rail that was a near-miss; on the mobile
-     sheet, whose scroller has no side padding at all, the doubling was the
-     whole error: "on mobile they're placed in a different horizontal position
-     for recent chats and for the other chats in the sidebar".
-
-     Padding, not margin, so the ground below still runs the full width: the
-     band is a shelf across the rail, and a shelf with side gaps is a card. */
-  padding: 2px var(--nt-pad) 5px;
-  /* ── THE BRACKET PAYS FOR ITS OWN WIDTH ─────────────────────────────────
-     The 3px leading border below is part of this box, so it would push every
-     row in the band 3px right of every row beneath it — which is precisely
-     the misalignment the inset arithmetic above exists to prevent ("the chats
-     there are not horizontally aligned with the rest of the chats below").
-     So the leading padding gives the 3px back. The bracket then sits in the
-     margin the rail already had, and the rows do not move at all. */
-  padding-inline-start: calc(var(--nt-pad) - 3px);
-  /* ── AND IT IS TINTED FROM THE ACCENT, NOT FROM THE INK ─────────────────
-     A neutral lift is what every other raised surface in the chrome uses, so
-     the band read as "the rail, slightly brighter" — "the working on can be
-     more unique compared to the rest of the sidebar". The accent is the one
-     colour in the rail that is not a status, so a wash of it says "this is a
-     different kind of thing" without claiming anything about the chats on it.
-     Low enough (10%) that the rows keep their own contrast. */
-  /* ── THE GROUND IS A LIFT, THE ACCENT IS THE SEAM ──────────────────────
-     An accent WASH was the obvious way to make this band its own kind of
-     thing, and measured across the ten themes that ship it does not survive
-     them: a tint only separates from the rail when the accent's luminance
-     differs from the rail's, and on riso the two are within 1.04:1 — a band
-     nobody can see. Worse, at 13% it pushed tokyo-night's row ink to 4.26:1,
-     under AA, so the themes where it DID show paid for it in legibility.
-
-     A mix from --fg always moves AWAY from the surface — it darkens a light
-     rail and lightens a dark one — which is why every other raised surface in
-     this app is built from it. The accent then does the part a wash cannot,
-     as the one drawn line the band has (see the seam below) and in the
-     heading's own ink.
-
-     `--accent`, NOT `--rail-accent`. The rail island rebinds --accent to the
-     rail's value, so inside the rail the two are the same thing — and on the
-     MOBILE SHEET, which is not an island (it sits on the app's own light
-     ground), --rail-accent is a colour chosen to carry on a deep rail.
-     Memphis's rail is black and its rail accent is yellow: on the sheet's
-     cream that label measured 1.7:1. Asking for the rail token by name is
-     what pinned a deep-surface colour onto a light one.
-
-     9% → 6% when the band stopped being pinned. A fixed shelf has to hold its
-     own against a list sliding under it; a band that scrolls WITH the list is
-     a section of it, and at 9% over a cream rail (memphis) the step read as a
-     grey block rather than as a tint. Row ink stays 4.9–12:1 on all ten.
-
-     ── AND THEN IT NEEDED MORE SEPARATION, TWICE ──────────────────────────
-     "Style recent active section with a bit more contrast" and then "needs
-     stronger contrast, it can't look like just another sidebar section."
-
-     I answered the first with tint — 6% → 8% — and the second request is the
-     evidence that tint was never going to do it. MEASURED, across all ten
-     themes (the sweep is reproduced in ChatChrome.contrast.test):
-
-       · on MEMPHIS the band-vs-rail step is 1.001:1 at ANY percentage. Its
-         --fg and its rail surface sit at the same luminance, so a wash of one
-         over the other moves nothing. More grey is literally invisible there.
-       · on TOKYO-NIGHT the row ink is already 4.59:1 at 8% and crosses the
-         4.4 floor by 10%. So the ceiling is reached before the effect is.
-
-     Tint is capped by the darkest theme and useless on the lightest. The axis
-     is wrong, and that is also why an accent WASH failed earlier for what
-     looked like a different reason: a 13% mix of anything cannot separate two
-     colours that share a luminance.
-
-     EDGES CAN, because an edge is not a mix. At full strength the accent
-     measures 2.96–12.6:1 against the rail on every theme — riso (2.96) and
-     demoscene (3.04) included, the two a wash could not touch. So the band is
-     BRACKETED rather than shaded: a 3px accent bar down its leading edge and
-     the accent seam under it, both solid, with the 8% ground kept for the
-     themes where it does contribute.
-
-     The leading edge is free: the pinned mark used to be a 2px bar there and
-     is now the row's NAME ink (see --nt-pinned-ink), so nothing else paints
-     in this channel and there is no second vertical to collide with. */
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-  /* ── THE BRACKET ────────────────────────────────────────────────────────
-     3px, solid accent, full width of the band's own ground. This is the thing
-     that makes it read as a different KIND of region on a theme whose rail
-     and ink share a luminance — which is half of them. */
-  border-inline-start: 3px solid var(--accent);
-  /* ── ONE LINE, NOT FOUR ─────────────────────────────────────────────────
-     The top of this rail had become a stack of hairlines: the brand's, this
-     band's top border, its bottom border, an inset highlight inside the top
-     edge, and a drawn rule trailing the heading — five horizontal strokes in
-     about 160px, which is what "top area still messy" was looking at.
-
-     A band with its own ground does not need a line on the side it already
-     differs from. The brand's hairline is above it (and is load-bearing: it
-     lines up with the pane's tab strip), so this keeps exactly one — the seam
-     at the bottom, where the band stops and the ordinary rail begins. */
-  /* AND THE SEAM IS THE ACCENT, which is what makes this a different kind of
-     shelf rather than a brighter piece of rail. It was a 45% mix, then 55%;
-     it is SOLID now, for the same reason the bracket is — a mix toward the
-     band is a mix toward a colour the band may already share, and on riso and
-     demoscene that is most of its strength gone. Measured 2.96–12.6:1 against
-     the rail on all ten. */
-  border-bottom: 1px solid var(--accent);
-}
-
-/* The heading is a LABEL, not a section header: small caps, wide, quiet.
-   Deliberately NOT the workspace-header treatment — that one is a destination
-   you can click and collapse, and this is neither. */
-.navtree-workingset-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  /* ── THE LABEL NEEDS A LINE OF AIR UNDER IT ────────────────────────────
-     It had 4px, and the first row sat straight under the heading —
-     "recently active too close to actual chats". The comparison that settles
-     the number is the workspace header two sections down: a 32px row with a
-     10px label centred in it, so that label carries ~11px of air on each
-     side by construction. This heading is not a row, so it has to say the
-     same thing in padding.
-     10px below, 8 above: a section label belongs to what is BELOW it, so the
-     gap that separates it from its own first row is the one that must not be
-     the tighter of the two. */
-  padding: 8px calc(var(--nt-pad) + var(--nt-indent)) 10px;
-  font-size: 0.625rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  /* ── THE DOT IS GONE ──────────────────────────────────────────────────
-     There was a 5px accent square in front of this label. In a rail whose
-     ONLY other coloured marks are status — a dot for wants-you, a tick for
-     ready, an amber ring for working — a small coloured square beside a
-     heading reads as one of them: "the red dot looks like an error
-     indicator". It was decoration doing an impression of state.
-     The colour moves into the LABEL instead, where nothing is ever a status,
-     and the band's own accent wash (above) carries the rest. */
-  /* Mixed into the FULL ink, not the dim one. The label is 10px caps — the
-     smallest type in the rail — and an accent diluted with a dim token
-     measured 3.3:1 at its worst (demoscene's rail) however the ratio was
-     tuned: both ends of the mix were already quiet. Against full ink the same
-     hue reads at 4.6–12:1 on both surfaces, and it is still unmistakably the
-     accent rather than the body colour. */
-  color: color-mix(in srgb, var(--accent) 55%, var(--fg));
-}
-/* NO RULE AFTER THE LABEL EITHER. It was there to stop a short heading from
-   reading as a stray word above a list — a real problem when the band had no
-   ground of its own. It has one now, so the label is clearly ON something,
-   and the rule was just another horizontal stroke in the stack. */
-
-/* ── NO SLOT NUMBER ──────────────────────────────────────────────────────
-   There was a `⌃3` cap in each row's gutter, labelling the shortcut. It is
-   gone: six bordered caps down the strip is six pieces of chrome arguing with
-   the status marks for the one column the eye scans, in a band whose whole
-   job is to be read at a glance. "remove ^1 etc keys" was the report.
-
-   The SHORTCUTS still work — ⌃1–⌃6, stable slots, same rows — they are simply
-   no longer announced on every row. */
-
-/* …and the × is the mirror image: absent until you reach for the row. It means
-   "not now" — it frees the slot and nothing else, which is why it is not
-   danger-styled and never arms. */
-/* The × IS revealed on hover and does take width then — like every other
-   hover control on this rail, which is the case the grid's trailing `auto`
-   track exists to absorb. At rest it is `display: none`, so it is no track at
-   all and the marks keep their column. */
-/* ── THE AGE, IN THE TRAILING GUTTER ─────────────────────────────────────
-   The band is ordered by SLOT and never by recency — that is the whole design,
-   so rows do not move under you — and the cost is that nothing on the row says
-   whether you left this chat ten minutes ago or this morning. This column is
-   what the ordering gives up, handed back.
-
-   QUIETER THAN THE WORKSPACE TAG, which is already the quiet thing on the
-   line: the tag answers "which chat is this", the age answers "how stale",
-   and only the first is ever what you are scanning for. Tabular figures so a
-   column of them does not jitter as the numbers tick.
-
-   `--band-ink-dim` for the same reason everything else in this band uses a
-   captured token: the active row re-points --fg and --fg-dim at the pane's
-   palette, and a value reaching for those lands pane ink on rail ground. */
-.navtree-slot-age {
-  /* NEVER SHRINKS, and it is last on the line, so the order of giving way is
-     workspace tag, then chat name, then nothing — which is the order of how
-     much a clipped version still tells you. */
-  flex: 0 0 auto;
-  margin-left: 7px;
-  color: color-mix(in srgb, var(--band-ink-dim) 60%, transparent);
-  font-size: 0.625rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-/* ── NOT ON THE ROW YOU ARE IN ───────────────────────────────────────────
-   "How long ago was this active" is a question about a chat you are NOT in.
-   On the active row the answer is "you are looking at it", the number is the
-   least useful thing on the busiest line in the band, and it is the one row
-   whose age you can read off the conversation itself.
-
-   Dropping it is also what buys that row its name back: the active row
-   carries the live mark and the heaviest type, so it was the first to clip. */
-.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-slot-age {
-  display: none;
-}
-/* IT STAYS ON HOVER. The first version hid it so the × could have the gutter,
-   which was a trailing-column problem and is gone with the column: the age is
-   on the title line now and the × has its own track. Hiding it would also mean
-   the one row you are pointing at is the one row that stops saying when. */
-.navtree-ws-slot .navtree-slot-drop {
-  width: 18px;
-  height: 18px;
-  display: none;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--fg-faint);
-  font-size: 0.875rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.navtree-ws-slot:hover .navtree-slot-drop,
-.navtree-ws-slot:has(:focus-visible) .navtree-slot-drop {
-  display: grid;
-}
-.navtree-ws-slot .navtree-slot-drop:hover {
-  background: color-mix(in srgb, var(--fg) 14%, transparent);
-  color: var(--fg);
-}
-
-/* ── THE BAND'S SELECTION DOES NOT REACH FOR THE PANE ────────────────────
-   A selected row in the TREE is the pane's own surface continuing into the
-   rail: pane face, rounded on the left, square and bleeding on the right, and
-   a funnel node drawing the two concave fillets that flare one into the
-   other. It is one shape with the thing beside it.
-
-   The band borrowed the fill and the radius and got none of the rest: the
-   funnel renders only on a tree row (see NavTree.tsx), so the band's selected
-   row reached for a join it could not make — "recently active tabs have a
-   selector indicator which connects with the tab contents, but that doesn't
-   happen with the nice rounded elements… maybe the selection indicator for
-   the recently active should not try to connect to the chat."
-
-   It should not. The chat's real row is two inches below and does that job
-   properly; a shortcut list pointing at the same pane twice is two claims on
-   one surface. So here selection is an ordinary selection — the rail's own
-   `--nt-sel`, rounded on BOTH ends, inside the band rather than running out
-   of it. */
-.navtree-workingset .navtree-tab-row[data-active="true"] {
-  /* ── NO SLAB. THE CHAT YOU ARE IN IS SELECTED ONCE PER SCREEN ───────────
-     This wore `--bg-pane-face` — the tree's own selected fill — so the chat
-     you were in appeared as two identical pills about 450px apart, one here
-     and one in its workspace below. "It feels a little bit messy": the top of
-     the rail was reading as a lower-contrast copy of the middle of it.
-
-     The fix is NOT another fill. The last attempt at distinguishing these two
-     swapped in `--nt-sel`, the rail's 20% accent wash, and on a dark rail that
-     is a muddy plum slab beside the clean light row below — "active in
-     recently active chat highlight is just trash". Any colour put here is a
-     second claim on one surface; the question was never WHICH colour.
-
-     So the band's current row is marked the way the rail already marks the
-     row you are on everywhere else it cannot draw a pane: the name at full
-     ink and weight, the icon at full saturation (see the desaturation rule),
-     and no ground at all — all of which the row already has from the shared
-     active-row rule (`--fg` at 640, deliberately under the unread 700), so
-     this rule only has to take the ground away. The slab stays in the tree,
-     where the chat actually lives and where it can finish the shape by
-     joining the pane.
-
-     The row does not leave the band, which is the alternative and is worse:
-     hiding it would shift every row under it up as you navigate and back down
-     as you leave — exactly the churn the stable slots exist to prevent.
-
-     ── AND "NO GROUND AT ALL" WENT TOO FAR ───────────────────────────────
-     Measured across all ten themes afterwards: the active row and an UNREAD
-     row were then separated by font-weight alone, 640 against 700, and
-     against a read row the ink step is 1.31:1 on tokyo-night, 1.55 on
-     blueprint, 1.65 on demoscene. Two different facts — "you are here" and
-     "this one has something to say" — on one channel, at a difference you
-     cannot see.
-
-     So the ground comes back, as a LIFT rather than as the pane's face: a
-     neutral mix from --fg, which is how every other raised surface in this
-     app is built and the one construction that survives ten themes (an accent
-     wash does not — see the band's own ground note above). It is visibly not
-     the clean light slab the tree draws two inches below, which is what the
-     original report was about: two identical pills for one chat. One pill,
-     one quieter mark, two different things. */
-  background-color: color-mix(in srgb, var(--band-ink) 11%, transparent);
-  border-radius: var(--nt-pill);
-  box-shadow: none;
-  /* The tree row bleeds its right edge past the group's padding to touch the
-     pane. This one has nothing to reach for. */
-  margin-right: 0;
-  padding-right: var(--nt-air);
-}
-/* ── AND THE NAME KEEPS THE BAND'S OWN INK ───────────────────────────────
-   The shared active-row rule paints the name `--fg`, which is right in the
-   TREE: that row sits on the pane's light face, so the app's content ink is
-   exactly what belongs on it. The band has no pane face, so the same ink
-   landed on the band's own ground and measured 1.19:1 on memphis, 1.58 on
-   alucard, 2.07 on riso — the chat you are IN became the least readable row
-   in the band, which is the precise opposite of the point. (Read rows were
-   fine at 5.6–9.6 the whole time, because they use the rail's ink.)
-
-   So the band's active row carries "you are here" in the two channels that
-   work on this surface — the ground above and the weight below — and leaves
-   the ink alone. One rung brighter than a read row, from the same family, so
-   it cannot drift away from the rail the way an app-level token did. */
-.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-name-text {
-  /* The BAND's ink, captured above — not --fg and not --nt-ink-read, both of
-     which the active row re-points at the pane's palette. */
-  color: var(--band-ink);
-}
-/* …AND THE WORKSPACE TAG BESIDE IT, for the identical reason. It is derived
-   from --fg-dim and --fg-faint, both of which the active row re-points at the
-   pane, so on the active row it measured 1.33–2.25:1 against the band's own
-   ground while every other row's tag was fine. */
-.navtree-workingset .navtree-tab-row[data-active="true"] .navtree-ws-tag {
-  /* EXACTLY what every other row in the band shows. The first attempt mixed
-     its own value — 55% of the dim ink against transparent — and measured
-     2.17–3.24:1, worse than the rows around it. The tag's overall faintness
-     is a separate decision ("make the workspace label a bit smaller and
-     fainter"); this row has no business being a different one. */
-  color: var(--band-ws-tag-ink);
-}
-.navtree-workingset .navtree-tab-row[data-active="true"]:hover .navtree-ws-tag {
-  color: var(--band-ws-tag-ink-hot);
-}
-.navtree-workingset .navtree-tab-row[data-active="true"]:hover {
-  /* It is still a link, and the band is the one place the row you are on is
-     worth pressing — it is how you get back after wandering. One step up from
-     its resting ground, NOT `--nt-hover`: that is a 6% wash, which over this
-     row's own 8% is a change nobody can see. */
-  background-color: color-mix(in srgb, var(--band-ink) 19%, transparent);
-}
-
-/* THE BAND'S OWN GROUND IS ALREADY A LIFT, so a row's hover has to lift again
-   from THAT or the pointer lands on nothing. Measured in the dark themes: the
-   tree's hover over the band's 5% was a 1% step, invisible. */
-/* `:not([data-active="true"])` is the MECHANISM here, not a belt. The active
-   row's hover rule (`.navtree-tab-row[data-active="true"]:hover`, which holds
-   the pane face so the join does not break) has the same specificity as this
-   one and loses on source order, so without the exclusion a hover over the
-   row you are already on replaced the pane's own surface with a grey wash.
-   Reported as "hover over active tab in 'working on' gives bad bg color". */
-.navtree-workingset .navtree-tab-row:not([data-active="true"]):hover {
-  background-color: color-mix(in srgb, var(--fg) 9%, transparent);
-}
-
-/* THE STRIP ON TOUCH. No controls at all — the same rule every other row on
-   the sheet follows (see tabRowAffordances): a phone has no hover to reveal
-   one and no Control key to label, and a permanently visible × would be the
-   only standing control in a surface that deliberately has none. The slot
-   still decays on its own and is still evictable from the desktop, so nothing
-   here is unreachable; the strip's job on a phone is one tap to the chat.
-
-   The row keeps the sheet's 44px floor rather than the rail's 34, because it
-   is the sheet's row — a smaller target in the one place everything is a
-   thumb would be the worst row on the screen. */
-.navtree-ws-slot[data-touch="true"] {
-  height: 44px;
-}
-.navtree-ws-slot[data-touch="true"] .navtree-slot-drop {
-  display: none;
 }
 
 /* ── A WORKER IS QUIETER, NOT INDENTED ──────────────────────────────────────

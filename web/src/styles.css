@@ -1388,7 +1388,7 @@
    ink to step to — this rule put the pane's pale second ink on the rail's own
    ground there and measured 3.07:1. See --band-ink in NavTree.css, which the
    band's own rule uses; this one stops reaching into it. */
-[data-theme="riso"] .navtree-tab-row[data-active="true"]:not(.navtree-ws-slot) .navtree-name-text {
+[data-theme="riso"] .navtree-tab-row[data-active="true"] .navtree-name-text {
   color: var(--fg);
   font-weight: 700;
 }
@@ -1981,11 +1981,12 @@ select:focus {
   min-width: 0;
 }
 /* The content side of the body: just the panes now. It became a column to
-   give the working-set tab strip its own height off the top; the strip is
-   gone (the band is back at the top of the rail), and the column is KEPT
-   rather than collapsed back into the hosts — it is one flex level with no
-   layout of its own, and the next thing that wants a row above the panes has
-   somewhere to go. */
+   give a recently-active tab strip its own height off the top. That strip is
+   gone, and so is the band in the rail that replaced it — recency lives
+   behind ⌘K (see lib/nav-search `recentTabs`). The column is KEPT rather than
+   collapsed back into the hosts: it is one flex level with no layout of its
+   own, and the next thing that wants a row above the panes has somewhere to
+   go. */
 .app-body > .workspace-column {
   flex: 1;
   min-width: 0;

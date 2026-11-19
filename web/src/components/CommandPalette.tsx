@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { PALETTE_OPEN_EVENT, isMacPlatform } from '../lib/command-palette';
+import { tabSlugFromPath } from '../lib/nav-search';
 import { useSearchResultOpener, useSessionSearch } from '../lib/use-session-search';
 import { MessageResult, TabResult } from './NavSearch';
 import './CommandPalette.css';
@@ -42,8 +43,14 @@ export function CommandPalette() {
   const listRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  const { tabMatches, messageRows, searching, active, rowCount, loadCorpus } =
-    useSessionSearch(query);
+  // WHERE WE ARE, read from the path rather than the router: this dialog is
+  // mounted once above every route and has no matched route of its own to ask.
+  // Read during render on purpose — it has to be right on the FIRST paint
+  // after opening, and an effect would show the chat you are standing on for
+  // one frame and then drop it out from under the cursor.
+  const here = tabSlugFromPath(window.location.pathname);
+  const { tabMatches, showingRecents, messageRows, searching, active, rowCount, loadCorpus } =
+    useSessionSearch(query, { exclude: here });
   const openResult = useSearchResultOpener();
 
   // Clamp rather than reset: the list shrinks under the cursor whenever a
@@ -185,15 +192,16 @@ export function CommandPalette() {
             placeholder="Find a chat by name, or search what was said…"
             aria-label="Find a chat"
             role="combobox"
-            aria-expanded={active}
+            // EXPANDED whenever there is a list to move through, which now
+            // includes the recents shown before anything is typed. Gated on
+            // `active` this said "collapsed" over eight live rows.
+            aria-expanded={rowCount > 0}
             aria-autocomplete="list"
             // `aria-controls` is required of the role and stated
             // unconditionally, but the ACTIVE DESCENDANT is not — pointing it at a row id that is not in the document is
             // a reader announcing nothing at all.
             aria-controls={listId}
-            {...(active && rowCount > 0
-              ? { 'aria-activedescendant': `${listId}-r${safeCursor}` }
-              : {})}
+            {...(rowCount > 0 ? { 'aria-activedescendant': `${listId}-r${safeCursor}` } : {})}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -216,10 +224,19 @@ export function CommandPalette() {
           tabIndex={-1}
           aria-label="Search results"
         >
-          {!active && (
+          {/* The placeholder is for an empty query with NOTHING to show — a
+              fresh profile with no chats yet. With recents below it, it was a
+              paragraph telling you to type over a list you could already
+              arrow through. */}
+          {!active && !showingRecents && (
             <p className="cmdk-empty">
               Type to find a chat by name, or three characters to search inside messages.
             </p>
+          )}
+          {showingRecents && (
+            <div className="cmdk-divider">
+              <span>Recent</span>
+            </div>
           )}
           {active && rowCount === 0 && (
             <p className="cmdk-empty">{searching ? 'Searching messages…' : 'No matches.'}</p>

@@ -1,6 +1,7 @@
-// The living sidebar at the HTTP seam: GET /api/tabs ordering (pinned block
-// in manual order, then blocked/attention → recency), PATCH pinned, and the
-// fields the client needs to draw the divider.
+// The sidebar at the HTTP seam: GET /api/tabs ordering (pinned block first in
+// its manual order, then the rest in their stored position — nothing ranks on
+// status, attention or recency any more; see shared/tab-order), PATCH pinned,
+// and the fields the client needs to draw the divider.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,47 +79,65 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(row?.id).toBe(t.id);
   });
 
-  it.each([null, 200])(
-    'a schema-parsed pushed tie matches GET, regardless of manual positions (%s)',
-    async (tie) => {
-      const a = await makeTab('A');
-      const b = await makeTab('B');
-      // Deliberately choose a stored order opposite to the canonical ID order.
-      // This catches server-side drift back to hidden positions independently
-      // of the client hook tests, which cover the actual push subscription.
-      const canonical = [a, b].sort((x, y) => (x.id < y.id ? -1 : 1));
-      await test.app.request('/api/tabs/reorder', {
-        method: 'POST',
-        ...json({ ids: canonical.map((t) => t.id).reverse() }),
-      });
-      const first = canonical[0]!;
-      const second = canonical[1]!;
-      setActivity(first.id, tie === null ? null : 100);
-      setActivity(second.id, 300);
-      const cached = await list();
-      expect(cached.map((t) => t.id)).toEqual([second.id, first.id]);
-      setActivity(first.id, tie);
-      setActivity(second.id, tie);
-      const authoritative = await list();
-      let client = cached;
-      for (const row of authoritative) {
-        const event = MuxpadEventSchema.parse({ type: 'tab.updated', tab: row });
-        if (event.type !== 'tab.updated') throw new Error('wrong event');
-        client = sortSidebarTabs(client.map((t) => (t.id === event.tab.id ? event.tab : t)));
-      }
-      expect(client).toEqual(authoritative);
-      expect(client.map((t) => t.id)).toEqual(canonical.map((t) => t.id));
-    },
-  );
+  it('a pushed row leaves the published order exactly as GET gave it', async () => {
+    // The client splices a `tab.updated` into the list it holds rather than
+    // refetching, so its result has to equal the server's. This used to be a
+    // test of the TIE-BREAK — both sides had to agree on an id-based fallback
+    // when two rows matched on attention and recency. There is no comparator
+    // to agree with now: the server publishes a stored order and the client
+    // preserves it. What is still worth pinning is that a row whose activity
+    // has changed does not move on either side.
+    const a = await makeTab('A');
+    const b = await makeTab('B');
+    // A stored order deliberately opposite to the id order, so a server-side
+    // drift back to ranking (or to an id tiebreak) separates the two.
+    const byId = [a, b].sort((x, y) => (x.id < y.id ? -1 : 1));
+    await test.app.request('/api/tabs/reorder', {
+      method: 'POST',
+      ...json({ ids: byId.map((t) => t.id).reverse() }),
+    });
+    const cached = await list();
+    expect(cached.map((t) => t.id)).toEqual(byId.map((t) => t.id).reverse());
 
-  it('orders the unpinned block by recency, most recent first', async () => {
+    // Make the SECOND row by far the most recently touched — the change that
+    // would have promoted it.
+    setActivity(cached[1]!.id, 9_999);
+    const authoritative = await list();
+    expect(authoritative.map((t) => t.id)).toEqual(cached.map((t) => t.id));
+
+    let client = cached;
+    for (const row of authoritative) {
+      const event = MuxpadEventSchema.parse({ type: 'tab.updated', tab: row });
+      if (event.type !== 'tab.updated') throw new Error('wrong event');
+      client = sortSidebarTabs(client.map((t) => (t.id === event.tab.id ? event.tab : t)));
+    }
+    expect(client).toEqual(authoritative);
+  });
+
+  it('lists the unpinned block in its stored order, not by recency', async () => {
+    // It used to answer ['A','C','B'] here — most recently touched first. The
+    // order is now the one `position, created_at` gives, which for three
+    // chats nobody has dragged is the order they were made in. Recency moved
+    // to ⌘K with an empty query (web/src/lib/nav-search `recentTabs`).
     const a = await makeTab('A');
     const b = await makeTab('B');
     const c = await makeTab('C');
     setActivity(a.id, 300);
     setActivity(b.id, 100);
     setActivity(c.id, 200);
-    expect(await names()).toEqual(['A', 'C', 'B']);
+    expect(await names()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('a drag through /reorder is what DOES change it', async () => {
+    // The order being manual is only meaningful if something can set it.
+    const a = await makeTab('A');
+    const b = await makeTab('B');
+    const c = await makeTab('C');
+    await test.app.request('/api/tabs/reorder', {
+      method: 'POST',
+      ...json({ ids: [c.id, a.id, b.id] }),
+    });
+    expect(await names()).toEqual(['C', 'A', 'B']);
   });
 
   it('a working tab does NOT jump the queue — it lights its status mark instead', async () => {
@@ -294,12 +313,15 @@ describe('living sidebar — tab ordering + pinning', () => {
     });
   });
 
-  it('null last_activity_at (a migrated row) sinks below every known timestamp', async () => {
+  it('a row with no activity at all still holds its place', async () => {
+    // This asserted the opposite: a null timestamp sank below every known one,
+    // because the order read activity and had to put the unknowns somewhere.
+    // Nothing reads it now, so a migrated row is just a row.
     const a = await makeTab('A');
     const b = await makeTab('B');
     setActivity(a.id, null);
     setActivity(b.id, 1);
-    expect(await names()).toEqual(['B', 'A']);
+    expect(await names()).toEqual(['A', 'B']);
   });
 
   it('the order is stable across repeated identical reads (no sidebar jitter)', async () => {
@@ -348,15 +370,20 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(await names()).toEqual(['A', 'B']);
   });
 
-  it('unpinning returns the tab to the auto-sorted block', async () => {
+  it('unpinning puts the tab back where its stored position says', async () => {
+    // It used to fall back into the auto-sorted block and be re-ranked there.
+    // Now it lands at its `position`, which pinning rewrote to the end of the
+    // pinned block — for the first chat in a workspace, that is still the top.
+    // The point is that it is a PLACE rather than a ranking: unpinning twice
+    // puts it in the same spot both times.
     const a = await makeTab('A');
     const b = await makeTab('B');
     setActivity(a.id, 1);
-    setActivity(b.id, 2);
+    setActivity(b.id, 9_999); // by the old order this would have led
     await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: true }) });
     expect(await names()).toEqual(['A', 'B']);
     await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: false }) });
-    expect(await names()).toEqual(['B', 'A']);
+    expect(await names()).toEqual(['A', 'B']);
   });
 
   it('PATCH pinned returns the fresh tab and 404s on an unknown id', async () => {

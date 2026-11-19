@@ -10,6 +10,7 @@ import {
   type WorkspaceTabs,
   paneIndex,
   rankTabs,
+  recentTabs,
   toSearchableTabs,
 } from '../lib/nav-search';
 import { requestSearchJump } from '../lib/search-jump';
@@ -74,8 +75,14 @@ export interface MessageRow {
 }
 
 export interface SessionSearch {
-  /** Tier 1, already ranked and capped. */
+  /** Tier 1, already ranked and capped — or, on an EMPTY query, the recents
+   *  list. One array either way, because the caller's cursor arithmetic,
+   *  Enter handling and row ids should not have to know which it is. */
   tabMatches: TabMatch[];
+  /** `tabMatches` is the recents list, not an answer to a query. The caller
+   *  needs this for the row's heading and for not printing a "type to search"
+   *  placeholder over a list it just filled. */
+  showingRecents: boolean;
   /** Tier 2, already de-duplicated by session and capped. */
   messageRows: MessageRow[];
   /** A request is in flight — only so an empty state can tell "nothing
@@ -89,7 +96,15 @@ export interface SessionSearch {
   loadCorpus: () => void;
 }
 
-export function useSessionSearch(query: string): SessionSearch {
+export function useSessionSearch(
+  query: string,
+  opts?: {
+    /** A tab id or slug to leave out of the recents list — the chat you are
+     *  looking at. Ignored while a query is being typed: a name you typed is
+     *  a request for that row even when you are standing on it. */
+    exclude?: string | undefined;
+  },
+): SessionSearch {
   // ── The corpus ─────────────────────────────────────────────────────────
   // Seeded from whatever `/api/tabs/all` has already answered this session, so
   // reopening costs nothing. Until it has, the per-workspace caches stand in —
@@ -136,10 +151,20 @@ export function useSessionSearch(query: string): SessionSearch {
   }, []);
 
   // ── Tier 1 ─────────────────────────────────────────────────────────────
-  const tabMatches = useMemo(
+  const ranked = useMemo(
     () => rankTabs(corpus, query, { limit: MAX_TAB_RESULTS }),
     [corpus, query],
   );
+  // ── Tier 0: the empty query ────────────────────────────────────────────
+  // Where recency lives now that the rail's duplicate "Recently active" band
+  // is gone (see `recentTabs`). It is the SAME row type and the same array as
+  // the ranked results, deliberately: the palette's cursor, Enter and row ids
+  // are the part of this that is easy to get subtly wrong, and a second list
+  // beside them would be a second copy of all three.
+  const exclude = opts?.exclude;
+  const recents = useMemo(() => recentTabs(corpus, { exclude }), [corpus, exclude]);
+  const showingRecents = query.trim().length === 0 && recents.length > 0;
+  const tabMatches = showingRecents ? recents : ranked;
 
   // ── Tier 2 ─────────────────────────────────────────────────────────────
   // `available` latches false on the first 404: /api/search is mounted only
@@ -219,6 +244,7 @@ export function useSessionSearch(query: string): SessionSearch {
 
   return {
     tabMatches,
+    showingRecents,
     messageRows,
     searching,
     active: query.trim().length > 0,

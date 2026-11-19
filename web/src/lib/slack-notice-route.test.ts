@@ -4,7 +4,11 @@ import { router } from '../router';
 vi.mock('../components/AppLayout', () => ({ AppLayout: () => null }));
 vi.mock('../components/WorkspaceLayout', () => ({ WorkspaceLayout: () => null }));
 vi.mock('../pages/DocView', () => ({ DocView: () => null }));
-vi.mock('../pages/HostedView', () => ({ HostedView: () => null, HostedAppView: () => null }));
+vi.mock('../pages/HostedView', () => ({
+  ArtifactsView: () => null,
+  AppsView: () => null,
+  HostedAppView: () => null,
+}));
 vi.mock('../pages/PopoutView', () => ({ PopoutView: () => null }));
 vi.mock('../pages/RootRedirect', () => ({ RootRedirect: () => null }));
 const nonce = '11111111-1111-4111-8111-111111111111';

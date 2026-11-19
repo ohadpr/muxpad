@@ -216,17 +216,17 @@ function scheduleLiveRefresh(): void {
  * sidebar doesn't reorder properly and fast enough, on main device and on
  * secondary devices".
  *
- * The hazard the old reasoning was protecting against is real but already
- * owned: `freezeActiveTab` (lib/tab-freeze.ts) holds the row you are ON where
- * you found it and lets everything else re-sort around it — which that file
- * calls "the whole point of a living sidebar". So the two were contradicting
- * each other, and the freeze is the one that is right.
+ * ─── …AND THEN STOPPED NEEDING TO ────────────────────────────────────────
+ * Everything above is now history. The order does not rank on activity at all
+ * (shared/tab-order), so there is no freshness for a push to keep up with, and
+ * `tab-freeze` — the one-row-wide hold that kept the row you were standing on
+ * from sliding under your cursor while the rest re-sorted — is deleted with
+ * the sort it existed for.
  *
- * Sorting locally rather than refetching keeps the round trip saved and cannot
- * go out of sync, because both sides now run the SAME comparator
- * (`sortSidebarTabs`, shared/src/tab-order.ts). `position` is passed from the
- * rows we hold; it is only a tiebreak between two tabs with identical attention
- * AND activity, so a stale one cannot reorder anything that actually differs.
+ * `sortSidebarTabs` is still applied here, and it still has one job: keeping
+ * the pinned block contiguous, because the divider is drawn at the pinned
+ * count. It preserves the order it is given, so a splice is a repaint of one
+ * row and nothing else moves.
  *
  * ─── The one thing a patch cannot do ─────────────────────────────────────
  * `pinned` is the single field of the row that the ORDER has to agree with:

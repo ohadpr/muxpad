@@ -5375,7 +5375,7 @@ cmd_publish() {
   [ -n "$FLAG_days" ] && body="$body,\"days\":$FLAG_days"
   [ -n "$base_url" ] && body="$body,\"public_base_url\":$(json_string "$base_url")"
   # Sent only when asked for. An absent field means the server's default, which
-  # is the durable base — so an older CLI, a script, and the Hosted view all get
+  # is the durable base — so an older CLI, a script, and the Artifacts view get
   # the link that still works tomorrow without knowing this field exists.
   [ -n "$audience" ] && body="$body,\"audience\":$(json_string "$audience")"
   body="$body}"
@@ -5411,8 +5411,8 @@ cmd_publish() {
 # the pty after a ptyd restart.
 #
 # `muxpad app` and `muxpad publish` are deliberately SEPARATE verbs. An app is a
-# private process; an artifact is public bytes. They share the Hosted view, not
-# a primitive.
+# private process; an artifact is public bytes. The UI agrees: Apps and
+# Artifacts are two destinations, not one page called Hosted.
 
 cmd_app_add() {
   # Bare mode flags are pre-stripped: parse_flags treats `--foo` (no '=') as
@@ -5615,7 +5615,7 @@ usage: muxpad app <command>
   rm       unregister it and take it down
 
 `muxpad publish` is the other verb: static bytes at a PUBLIC url. An app is a
-private process; they share the Hosted view, not a primitive.
+private process, and the UI lists the two separately — Apps and Artifacts.
 USAGE
       exit 1
       ;;
@@ -5964,8 +5964,8 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
                                      work for YOU and fail for whoever you send
                                      them to. Point this at a tunnel on standard
                                      :443 (or a permanent domain) and publish
-                                     output, --list and the Hosted view all
-                                     follow. A permanent domain is better set
+                                     output, --list and the Artifacts view
+                                     all follow. A permanent domain is better set
                                      once as MUXPAD_PUBLIC_BASE_URL on the
                                      daemon, which outranks this pin.
   publish --clear-base               drop the pin and fall back to discovery

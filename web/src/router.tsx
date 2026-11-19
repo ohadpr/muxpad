@@ -1,9 +1,9 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router';
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
 import { DocView } from './pages/DocView';
-import { HostedAppView, HostedView } from './pages/HostedView';
+import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
 import { RootRedirect } from './pages/RootRedirect';
 
@@ -80,17 +80,37 @@ const docRoute = createRoute({
   component: DocView,
 });
 
-// /hosted — the Hosted surface (apps + published artifacts).
+// /artifacts and /apps — the two hosted surfaces, one entry each.
 //
-// A CHILD OF THE APP LAYOUT, not of a workspace. That placement is the
+// CHILDREN OF THE APP LAYOUT, not of a workspace. That placement is the
 // feature: AppLayout renders its <Outlet/> whenever the URL carries no
-// workspace, so Hosted inherits the brand/settings chrome while occupying no
+// workspace, so these inherit the brand/settings chrome while occupying no
 // tab and belonging to no workspace. An app you are looking at is a route you
 // can leave — closing it never touches the process, which is owned by ptyd.
-const hostedRoute = createRoute({
+//
+// They were ONE route called /hosted. The reasoning for splitting them is in
+// HostedView; the reasoning for keeping /hosted alive as a redirect is that
+// the URL is in transcripts, in published reports and in muscle memory, and a
+// 404 on it would teach nothing. It lands on Artifacts because that is the
+// half people arrive looking for ("link to the thing I made").
+const artifactsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/artifacts',
+  component: ArtifactsView,
+});
+
+const appsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/apps',
+  component: AppsView,
+});
+
+const hostedRedirectRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/hosted',
-  component: HostedView,
+  beforeLoad: () => {
+    throw redirect({ to: '/artifacts', replace: true });
+  },
 });
 
 // /hosted/a/$slug — one app's web view, full screen. `?logs=true` opens
@@ -108,7 +128,9 @@ const hostedAppRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     rootRedirectRoute,
-    hostedRoute,
+    artifactsRoute,
+    appsRoute,
+    hostedRedirectRoute,
     hostedAppRoute,
     workspaceLayoutRoute.addChildren([tabRoute]),
   ]),

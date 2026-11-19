@@ -313,14 +313,12 @@ describe('Step 1 e2e — agent modes + the living sidebar', { timeout: 20_000 },
     const a = await mk('A');
     const b = await mk('B');
     const c = await mk('C');
-    // BOTH columns. The sidebar sorts on `userTouchAt` — `last_user_at`, with
-    // `last_activity_at` only as wire-compat for an older server — so setting
-    // the activity column alone no longer expresses "this tab is more recent".
-    // Every tab here is created in the same breath, so they shared one
-    // `last_user_at` and the order collapsed onto creation order.
-    // That column swap is the fix for a chat four days untouched and near
-    // archival outranking one used that morning, because an agent had printed a
-    // line in it.
+    // THE ORDER NO LONGER READS EITHER COLUMN. This test used to set them to
+    // express "this tab is more recent" and expect ['B','C','A']; the sidebar
+    // ranked on attention then recency, and before that on machine activity.
+    // It is the stored manual order now (shared/tab-order), so these writes
+    // are here precisely to prove they change nothing — and the fields are
+    // still asserted on the wire, because the recents list in ⌘K reads them.
     const setAt = (id: string, at: number) =>
       db
         .prepare('UPDATE tabs SET last_activity_at = ?, last_user_at = ? WHERE id = ?')
@@ -330,14 +328,15 @@ describe('Step 1 e2e — agent modes + the living sidebar', { timeout: 20_000 },
     setAt(c.id, 200);
 
     let list = await api<Tab[]>(`/api/tabs?workspaceId=${ws2}`);
-    expect(list.map((t) => t.name)).toEqual(['B', 'C', 'A']); // recency
+    expect(list.map((t) => t.name)).toEqual(['A', 'B', 'C']); // creation order
     expect(list.every((t) => t.pinned === false)).toBe(true);
     expect(list.every((t) => typeof t.last_activity_at === 'number')).toBe(true);
 
-    // Pin the STALEST tab: it must jump to the front and stay there.
-    await api(`/api/tabs/${a.id}`, { method: 'PATCH', body: JSON.stringify({ pinned: true }) });
+    // Pinning is the one thing that still moves a row, and it moves it to the
+    // front of the list rather than within a ranking. C is last by position.
+    await api(`/api/tabs/${c.id}`, { method: 'PATCH', body: JSON.stringify({ pinned: true }) });
     list = await api<Tab[]>(`/api/tabs?workspaceId=${ws2}`);
-    expect(list.map((t) => t.name)).toEqual(['A', 'B', 'C']);
+    expect(list.map((t) => t.name)).toEqual(['C', 'A', 'B']);
     expect(list[0]?.pinned).toBe(true);
     expect(list[1]?.pinned).toBe(false);
   });

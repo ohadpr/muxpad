@@ -13,11 +13,9 @@ import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
 import { activeAge } from '../lib/short-age';
-import { dropFromWorkingSet, useWorkingSet } from '../working-set';
 
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterPinnedDrop } from '../lib/tab-drag';
-import { useFrozenTabOrder } from '../lib/tab-freeze';
 import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
 import { useArmed } from '../lib/use-armed';
@@ -295,232 +293,6 @@ export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigat
  * default to "expanded iff active", so the dominant flow — switching tabs
  * inside the current workspace — is always one click.
  */
-/**
- * THE WORKING-SET STRIP.
- *
- * The chats you are moving between, in slots that do not move. All of the
- * reasoning — why not MRU, why six, why sixteen hours — is in
- * shared/src/working-set.ts, because that is where the algorithm is and a
- * decision explained beside its implementation is one that survives.
- *
- * Renders NOTHING when empty, including the heading. A section that says
- * "WORKING ON" above no rows is a promise the rail is not keeping, and on a
- * fresh install or after a long break that is the normal state.
- *
- * The rows are the ORDINARY rows — same component, same icon, same status
- * column, same family tint. A second visual language for the same object is
- * how a sidebar stops being scannable, and the chat appearing twice is correct:
- * the strip is a shortcut, not a move. Its own workspace must not start lying
- * about what it contains.
- */
-function WorkingSetStrip({
-  activeTabSlug,
-  onNavigate,
-  touch,
-}: {
-  activeTabSlug: string | null;
-  onNavigate?: (() => void) | undefined;
-  /** The sheet. No hover to reveal a control and no Control key to press. */
-  touch?: boolean | undefined;
-}) {
-  const rows = useWorkingSet();
-  const navigate = useNavigate();
-  /**
-   * The clock the ages are read against.
-   *
-   * 30s, which is finer than anything this column can SAY — the band's window
-   * is sixteen hours, so its ages are minutes and hours — and that is the
-   * point: the tick exists so a row that has just turned over does so within
-   * half a minute rather than whenever something else happens to re-render
-   * the rail. The strip holds it once; six rows reading one number cannot
-   * disagree about what time it is.
-   */
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, []);
-
-  // ⌃1…⌃6, and NOT ⌘ — Chrome binds ⌘1-9 to its own tab switcher, and a
-  // shortcut that fights the browser is a shortcut nobody can use. Control is
-  // free on both platforms here.
-  //
-  // The slots' stability is the whole reason a numbered shortcut is worth
-  // having: a number pointing at a list that renumbers itself is worse than no
-  // number at all, because you learn it and it lies.
-  useEffect(() => {
-    if (touch) return; // no keyboard to bind, and two listeners would double-fire
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      const n = Number(e.key);
-      if (!Number.isInteger(n) || n < 1 || n > rows.length) return;
-      const hit = rows[n - 1];
-      if (!hit) return;
-      e.preventDefault();
-      void navigate({
-        to: '/w/$wsSlug/t/$tabSlug',
-        params: { wsSlug: hit.workspace.slug, tabSlug: hit.tab.slug },
-      });
-      onNavigate?.();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [rows, navigate, onNavigate, touch]);
-
-  if (rows.length === 0) return null;
-  return (
-    /* ── THE NAME, THIRD TRY AND THEIRS ───────────────────────────────────
-       "Working on" read as a status the app was reporting about you. "At
-       hand" was a shelf nobody asked for. "Recently active" is the name the
-       report used — and it is also the only one of the three that states the
-       RULE the band actually runs on: these are the chats with the newest
-       activity, decayed out after sixteen hours. A label that names the
-       mechanism cannot drift from it. */
-    <div className="navtree-workingset" aria-label="Recently active">
-      <div className="navtree-workingset-head" aria-hidden="true">
-        recently active
-      </div>
-      {rows.map(({ tab, workspace, at }) => (
-        <WorkingSetRow
-          key={tab.id}
-          tab={tab}
-          workspace={workspace}
-          age={now - at}
-          active={tab.slug === activeTabSlug}
-          {...(touch ? { touch: true } : {})}
-          {...(onNavigate ? { onNavigate } : {})}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** One slot. The `×` means "not now" — it frees the slot and nothing else. */
-function WorkingSetRow({
-  tab,
-  workspace,
-  age,
-  active,
-  onNavigate,
-  touch,
-}: {
-  tab: Tab;
-  workspace: { slug: string; name: string };
-  /** Milliseconds since you last sent this chat a message — the same stamp
-   *  the slot decays on, so the number on screen and the rule that evicts the
-   *  row are reading the one clock. */
-  age: number;
-  active: boolean;
-  onNavigate?: (() => void) | undefined;
-  touch?: boolean | undefined;
-}) {
-  return (
-    <div
-      className="navtree-tab-row navtree-ws-slot"
-      data-active={active ? 'true' : undefined}
-      // ── THE BAND IS A TAB ROW AND MUST READ LIKE ONE ──────────────────
-      // It carries `.navtree-tab-row` and its name is a `.navtree-name-text`,
-      // so the weight rules already apply to it — it simply never set the
-      // attributes that trigger them. A chat with an unread turn, or one
-      // mid-turn, sat at reading weight here while the SAME chat two
-      // sections down in the tree was bold. One truth, two appearances,
-      // which is the thing this band exists to avoid.
-      data-unread={tab.unread ? 'true' : undefined}
-      data-working={tab.status === 'working' && !active ? 'true' : undefined}
-      data-touch={touch ? 'true' : undefined}
-    >
-      <span className="chatchip navtree-tab-chip" data-density="row" data-shape="tile">
-        <b className="chatchip-glyph">{tab.icon ?? fallbackTabIcon(tab.id)}</b>
-      </span>
-      <Link
-        to="/w/$wsSlug/t/$tabSlug"
-        params={{ wsSlug: workspace.slug, tabSlug: tab.slug }}
-        className="navtree-tab-link"
-        draggable={false}
-        title={`${tab.name} · ${workspace.name}`}
-        onClick={() => onNavigate?.()}
-      >
-        <span className="navtree-tab-titleline">
-          {/* ── THE WORKSPACE, ON EVERY ROW, AFTER THE NAME ─────────────────
-              This band is the one place in the rail where rows from different
-              workspaces sit together — everywhere else a chat sits under the
-              header that names its workspace — so it is the one place a row
-              has to say where it is from.
-
-              IT SAYS SO ON EVERY ROW. It used to render only when the chat
-              was from ANOTHER workspace, on the argument that five identical
-              "Personal" tags down a six-row band is repetition rather than
-              information. That is true of the TAG and false of the BAND: a
-              column that is present on some rows and absent on others is one
-              you cannot scan, and a reader who has learned that a bare row
-              means "here" has learned a rule instead of reading a label.
-              Repetition in a column is what a column IS.
-
-              AFTER THE NAME, AND QUIETER. It was a prefix, and a rail is
-              scanned down its left edge — the same argument that keeps every
-              status mark on one x. A leading "Orbit /" pushed that row's NAME
-              right of every other name in the band: the thing you are looking
-              for stopped starting where its neighbours start, to make room
-              for the thing you are not. It also gives way first on a narrow
-              rail (see the css). */}
-          <span className="navtree-name-text" dir="auto">
-            {tab.name}
-          </span>
-          <span className="navtree-ws-tag" aria-hidden="true">
-            {workspace.name}
-          </span>
-          {/* ── HOW LONG AGO ────────────────────────────────────────────
-              The band is ordered by SLOT, never by recency — that is the
-              whole design, so rows do not move under you — and the cost is
-              that nothing said whether you left this chat ten minutes ago or
-              this morning. This is what the ordering gives up, handed back.
-
-              ON THE TITLE LINE, not in the trailing gutter. It was a fifth
-              child of a four-track grid, so it wrapped: every row grew a
-              second line and the status mark — the tick, the chevron — went
-              with it. Here it is one more item on the line that already
-              knows how to give way, and the row keeps its four tracks.
-
-              It never shrinks, and the workspace tag still yields first: the
-              tag answers "which chat", the age answers "how stale", and a
-              clipped "Orb…" still reads while a clipped "3…" does not. */}
-          <span className="navtree-slot-age" aria-hidden="true">
-            {activeAge(age)}
-          </span>
-        </span>
-      </Link>
-      {/* NO CONTROLS ON TOUCH, which is the rule every other row here already
-          follows (tabRowAffordances): a phone has no hover to reveal one and
-          no Control key to label. The slot still decays on its own and is
-          still evictable from the desktop, so nothing is unreachable — the
-          strip's job on a phone is one tap to the chat.
-
-          AND NO SLOT NUMBER ANYWHERE, touch or not. Each row used to carry a
-          `⌃{slot}` cap in its gutter; six of them down a six-row band is six
-          pieces of chrome in the one column the eye scans. The shortcut still
-          works (see the ⌃1–⌃6 handler above) — it is simply not announced on
-          every row — the strip's own handler binds by position, so the row no
-          longer needs to know its number at all. */}
-      <span className="navtree-tab-rail">
-        <button
-          type="button"
-          className="navtree-close navtree-slot-drop"
-          title="Not now — free this slot"
-          aria-label={`Remove ${tab.name} from Recently active`}
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            void dropFromWorkingSet(tab.id);
-          }}
-        >
-          ×
-        </button>
-      </span>
-      <RowMark status={tab.status} />
-    </div>
-  );
-}
-
 function SidebarTree({
   activeWorkspaceSlug,
   activeTabSlug,
@@ -586,33 +358,25 @@ function SidebarTree({
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
       <div className="navtree-scroll">
-        {/* ─── THE RECENTLY-ACTIVE BAND, BACK WHERE IT STARTED ──────────────
-          Four arrangements, and this is the fourth:
+        {/* ─── NO RECENTLY-ACTIVE BAND ──────────────────────────────────────
+            There was one here, in four arrangements over as many redesigns —
+            pinned above the scroller, inside it, out into a tab strip above
+            the pane, and back inside it. It is gone, and the reason is the one
+            thing none of the four placements changed: every row in it already
+            existed below, in its own workspace, and the copy at the top had no
+            workspace of its own to name — so the one fact you need in order to
+            go back to something was the one fact the band could not carry.
+            ChatGPT users said the same of a global Recents list sitting over
+            chats they had already organized.
 
-            1. PINNED above the rail's scroller. "A strip you have to scroll to
-               is a strip you will search for" — but the rail is not mostly
-               below the fold, so pinning mostly bought a fixed object the
-               list slid under. Reported: "I'm not entirely sold on having the
-               recent chats be fixed. I think you should be able to scroll
-               through the whole thing."
-            2. INSIDE the scroller, first thing in it.
-            3. OUT of the rail and into a TAB STRIP above the pane, on the
-               reasoning that a list which looks like the list under it and
-               means something different reads as noise however carefully it
-               is coloured.
-            4. HERE. "Rethink tab bar — remove it and bring back the recent
-               chats section at the top of the sidebar."
-
-          The strip was a second navigation surface for the same chats: the
-          rail already lists them, in groups, with their state — and two
-          places to click the same thing is the cost the band was moved to
-          avoid, paid twice over with a row of the pane's height on top.
-
-          Inside the scroller, as in (2): the rail is one list again, and you
-          can scroll past the band to the workspaces instead of having it hold
-          a fixed slice of the screen. The SHEET has always had it here — see
-          the other mount — so both surfaces now agree. */}
-        <WorkingSetStrip activeTabSlug={activeTabSlug} {...(onNavigate ? { onNavigate } : {})} />
+            Recency now lives behind ⌘K with an empty query, where a row names
+            its workspace as a matter of course — `recentTabs` in
+            lib/nav-search, which carries the rest of the reasoning. The cost
+            is real and worth saying: a cross-workspace jump is a keystroke
+            instead of a glance. Its ⌃1–⌃6 shortcut went with it rather than
+            being rebound, for the band's own stated reason — "a number
+            pointing at a list that renumbers itself is worse than no number
+            at all, because you learn it and it lies." */}
         {/* NO CREATE CONTROL HERE, and none in the list either. It is on each
             WORKSPACE HEADER — see WorkspaceNode. That is the row the action is
             about, so the button needs no label saying where it creates and
@@ -652,29 +416,59 @@ function SidebarTree({
         >
           {creatingWs ? 'Creating…' : '+ New workspace'}
         </button>
-        {/* Hosted lives BELOW the tree, past a hairline, because it is not part
-            of it: apps and artifacts belong to no workspace and occupy no tab —
+        {/* They live BELOW the tree, past a hairline, because they are not part
+            of it: artifacts and apps belong to no workspace and occupy no tab —
             that is the whole point. Rendered in both variants, so the mobile
-            sheet reaches it too. */}
-        <div className="navtree-foot">
-          <Link
-            className="navtree-foot-link"
-            to="/hosted"
-            activeProps={{ 'data-active': 'true' }}
-            onClick={() => onNavigate?.()}
-          >
-            <SvgHosted />
-            <span className="navtree-name-text">Hosted</span>
-          </Link>
-        </div>
+            sheet reaches them too. */}
+        <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
       </div>
     </nav>
   );
 }
 
+/**
+ * ARTIFACTS and APPS — two entries, not one called "Hosted".
+ *
+ * There was one, and its label named the only property the two kinds share:
+ * having a URL. That is not a question anybody arrives with. The two that are
+ * — "where is the thing I made" and "is that server up" — want different
+ * pages, and the single page already admitted it by listing them under
+ * separate headers with separate actions. The reasoning in full is in
+ * pages/HostedView.
+ *
+ * ARTIFACTS FIRST. It is the one reached by the question people actually ask
+ * ("link to the thing I made" — the same portal was asked for three times in
+ * five days), and the one whose contents expire, which is a reason to meet the
+ * list rather than remember it.
+ */
+function HostedFoot({ onNavigate }: { onNavigate?: (() => void) | undefined }) {
+  return (
+    <div className="navtree-foot">
+      <Link
+        className="navtree-foot-link"
+        to="/artifacts"
+        activeProps={{ 'data-active': 'true' }}
+        onClick={() => onNavigate?.()}
+      >
+        <SvgArtifacts />
+        <span className="navtree-name-text">Artifacts</span>
+      </Link>
+      <Link
+        className="navtree-foot-link"
+        to="/apps"
+        activeProps={{ 'data-active': 'true' }}
+        onClick={() => onNavigate?.()}
+      >
+        <SvgApps />
+        <span className="navtree-name-text">Apps</span>
+      </Link>
+    </div>
+  );
+}
+
 /** Stacked layers — "things I have put somewhere and can point a browser at".
  *  Same 1.5px lucide-ish geometry as the rest of the nav's glyphs. */
-function SvgHosted() {
+function SvgArtifacts() {
   return (
     <svg
       width="14"
@@ -690,6 +484,30 @@ function SvgHosted() {
       <path d="M12 3 2 8l10 5 10-5-10-5z" />
       <path d="M2 16l10 5 10-5" />
       <path d="M2 12l10 5 10-5" />
+    </svg>
+  );
+}
+
+/** Two racked boxes with a light each — a server, which is what an app is.
+ *  Deliberately nothing like the layers above: the two entries sit on
+ *  consecutive rows, so the glyphs are the fastest thing that tells them
+ *  apart at a glance. */
+function SvgApps() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="7" rx="1.5" />
+      <rect x="3" y="13" width="18" height="7" rx="1.5" />
+      <path d="M7 7.5h.01M7 16.5h.01" />
     </svg>
   );
 }
@@ -886,17 +704,12 @@ function SheetRail({
               avoid. */}
       </div>
       <div className="navtree-scroll">
-        {/* ─── THE SAME BAND, AND THE SAME PLACE ──────────────────────────
-            Inside the scroller here too — see the rail above for why it
-            stopped being pinned. The cost of hunting for a chat is HIGHER on
-            a phone (the list is the whole screen and there is no ⌘K chord on
-            a thumb), which is an argument for the band EXISTING, not for it
-            holding a fixed slice of a screen this small. */}
-        <WorkingSetStrip
-          activeTabSlug={activeTabSlug}
-          touch={true}
-          {...(onNavigate ? { onNavigate } : {})}
-        />
+        {/* NO BAND HERE EITHER — see the rail. The sheet's argument for
+            keeping one was that hunting for a chat costs more on a phone,
+            where the list is the whole screen "and there is no ⌘K chord on a
+            thumb". That premise no longer holds: the sheet's magnifier opens
+            the same palette (lib/command-palette), so the recents list is one
+            tap away rather than a chord. */}
         {/* EVERY WORKSPACE, like the desktop rail. The sheet used to render one
             workspace's TabList and reach the others through a picker that
             replaced the whole list — so moving between them was a mode change,
@@ -1027,24 +840,11 @@ function WorkspacePickList({
       >
         {creating ? 'Creating…' : '+ New workspace'}
       </button>
-      {/* Hosted is deliberately NOT a workspace row: apps and artifacts belong
-          to no workspace and occupy no tab. It sits past a hairline, at the
-          foot of the one surface that lists destinations — never in the chat
-          list, which contains chats and nothing else.
-      */}
-      {
-        <div className="navtree-foot">
-          <Link
-            className="navtree-foot-link"
-            to="/hosted"
-            activeProps={{ 'data-active': 'true' }}
-            onClick={() => onNavigate?.()}
-          >
-            <SvgHosted />
-            <span className="navtree-name-text">Hosted</span>
-          </Link>
-        </div>
-      }
+      {/* Deliberately NOT workspace rows: artifacts and apps belong to no
+          workspace and occupy no tab. They sit past a hairline, at the foot of
+          the one surface that lists destinations — never in the chat list,
+          which contains chats and nothing else. */}
+      <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
     </div>
   );
 }
@@ -1540,45 +1340,31 @@ export function TabList({
   // what a write is or which caches it has to refresh.
   const actions = tabRowActions(workspace);
 
-  // ── The living sidebar's two blocks ─────────────────────────────────────
-  // The SERVER owns the order (pinned first in manual order, then unpinned
-  // auto-sorted by attention → recency) and the client never re-sorts, so a
-  // poll can never fight a local sort. It no longer has to find the SEAM
-  // either: the pinned block had a divider drawn at `livePinned`, and the mark
-  // moved onto the rows themselves (--nt-pinned-ink), so the index went with
-  // the element.
+  // ── THE LIST, AND IT HOLDS STILL ────────────────────────────────────────
+  // The SERVER owns the order and the client never re-ranks it: pinned block
+  // first in its manual order, then the rest in their stored position, new
+  // chats appended (shared/tab-order). Nothing about what a chat is DOING can
+  // move its row.
   //
-  // The single exception is the tab you're LOOKING AT: it holds the best
-  // position it has reached for as long as it's active (useFrozenTabOrder) and
-  // settles into its sorted place when you leave. Being in a tab is itself
-  // activity, so without this the row under your cursor gets shoved about by
-  // every other chat that goes busy. It moves ONE row and never writes.
+  // A FREEZE USED TO SIT HERE, and its removal is the same change. The
+  // unpinned block was auto-sorted by attention then recency, which made the
+  // row you were standing on slide up the list under your cursor — being in a
+  // chat is itself activity — so `useFrozenTabOrder` held that one row where
+  // you found it and let the rest re-sort around it. Two mechanisms pulling in
+  // opposite directions to make a moving list pointable at. With the sort gone
+  // the freeze has nothing to protect against, and leaving it in would be a
+  // second, silent authority over an order that already holds still.
   //
-  // ─── THE SHEET USED TO FREEZE THE WHOLE LIST ───────────────────────────────
-  // For as long as it was open, on the reasoning that the sheet's rows carry
-  // almost no marks any more — so order is most of what the list says, and a
-  // quiet list that reshuffles under a thumb loses the row you were reaching
-  // for. The premise is true. The conclusion does not follow: it argues for the
-  // order being RIGHT, and freezing whatever was cached when the sheet opened
-  // is how it ends up wrong.
-  //
-  // Which is what was reported — "if I go to mobile the sort order of the tabs
-  // is not right, this thing doesn't auto update". On a phone the document is
-  // hidden most of the time, so the 5s poll is stopped and the cache can be
-  // minutes old; the sheet then snapshotted THAT and held it for the whole
-  // visit, so a correction arriving a second after you opened it could never
-  // land. The list was not slow. It was frozen at the wrong moment.
-  //
-  // And the cost the freeze was buying is smaller here than it looks: the sheet
-  // is open for a few seconds at a time, so the window in which a reshuffle
-  // could steal a tap is narrow — while being stale lasts the entire visit.
-  //
-  // So both surfaces now run the same rule, which is also one fewer place for
-  // "what order is this list in" to be decided. lib/sheet-order is deleted.
+  // (The sheet had a THIRD one — lib/sheet-order froze the whole list for as
+  // long as the sheet was open, and was deleted earlier for its own reason:
+  // on a phone the document is hidden most of the time, so the 5s poll is
+  // stopped, and the sheet snapshotted a cache that could be minutes old.
+  // "If I go to mobile the sort order of the tabs is not right." The list was
+  // not slow; it was frozen at the wrong moment.)
   const sheet = variant === 'sheet';
   const activeTabId =
     (isActiveWorkspace && serverTabs.find((t) => t.slug === activeTabSlug)?.id) || null;
-  const tabs = useFrozenTabOrder(serverTabs, activeTabId);
+  const tabs = serverTabs;
 
   // ── The live list, the done group, and the nesting ──────────────────────
   // groupChats is pure and unit-tested (NavTree.chats.test.tsx) — it decides
@@ -1639,10 +1425,16 @@ export function TabList({
   );
 
   // An UNPINNED row is still draggable, but the drag can only MOVE it: drop
-  // it on another workspace (WorkspaceNode's group target) to re-home it.
-  // It gets no reorder handlers, so no drop line ever appears inside the
-  // auto-sorted block — which is honest, since any order dragged into it
-  // would evaporate on the next poll.
+  // it on another workspace (WorkspaceNode's group target) to re-home it. It
+  // gets no reorder handlers, so no drop line appears inside the unpinned
+  // block.
+  //
+  // THAT RESTRICTION IS NOW A CHOICE RATHER THAN A CONSEQUENCE. It existed
+  // because the block was auto-sorted, so any order you dragged into it
+  // evaporated on the next poll. The block is stable now (shared/tab-order),
+  // so a dragged order WOULD stick — reorder-on-drop for unpinned rows is a
+  // thing that could be added, deliberately not added here, and this note
+  // exists so the next reader does not take the old reason for a live one.
   const [movingTabId, setMovingTabId] = useState<string | null>(null);
   const moveOnlyDnd = (id: string): DragItemProps => ({
     draggable: true,
@@ -1882,8 +1674,8 @@ interface TabRowProps {
   onSetUnread: (want: boolean) => void;
   /** Set this tab's leading icon (emoji). */
   onSetIcon: (icon: string) => void;
-  /** Pin/unpin — hold this tab at the top of its workspace block in the
-   *  manual order, instead of letting it be auto-sorted. */
+  /** Pin/unpin — hold this tab at the top of its workspace block, above the
+   *  rest, in the order you drag it into. */
   onSetPinned: (pinned: boolean) => void;
   rowDnd?: DragItemProps | undefined;
 }
@@ -1942,9 +1734,9 @@ export interface ChatGroup {
  *      goes in alone. The forty that reported are reachable where you would
  *      look for them — the cards in the parent's conversation — and by `@`.
  *
- * Order is the server's throughout — pinned block first, then the auto-sorted
- * one. It used to also return `livePinned`, the index the pin divider was drawn
- * at; the divider is gone (a pinned chat's NAME carries the mark now) and the
+ * Order is the server's throughout — pinned block first, then the rest in
+ * their stored position, and nothing here re-ranks either. It used to also
+ * return `livePinned`, the index the pin divider was drawn at; the divider is gone (a pinned chat's NAME carries the mark now) and the
  * count went with it rather than being left for a future caller to rediscover.
  *
  * It takes no `now`, and that is the point: nothing in here is time-dependent

@@ -1,12 +1,12 @@
 /**
  * What a sidebar tab drag is allowed to MEAN.
  *
- * Manual order is a pinned-only concept: the unpinned block is auto-sorted
- * (attention → recency) and re-derived on every poll, so any order you
- * drag it into would evaporate seconds later. Earlier rounds papered over
- * that by PINNING whatever unpinned tab you dropped — a gesture that silently
- * changed a tab's category to make the drag mean something. It surprised more
- * than it helped, so:
+ * Drag-to-reorder is a pinned-only gesture. It began as a consequence: the
+ * unpinned block was auto-sorted (attention → recency) and re-derived on every
+ * poll, so any order you dragged it into evaporated seconds later. Earlier
+ * rounds papered over that by PINNING whatever unpinned tab you dropped — a
+ * gesture that silently changed a tab's category to make the drag mean
+ * something. It surprised more than it helped, so:
  *
  *   - PINNED tab dragged → reorder within the pinned block, nothing else.
  *   - UNPINNED tab dragged → a MOVE only: drop it on another workspace to
@@ -28,9 +28,14 @@ export interface DraggableTab {
  * point: an unpinned tab cannot be reordered, and dropping ONTO one can't
  * define a manual position either.
  *
- * `pinnedIds` is what gets persisted (the server stores manual order for the
- * pinned block only); `allIds` is the optimistic client-side order, with the
- * auto-sorted block left exactly as the server last returned it.
+ * `pinnedIds` is what gets persisted; `allIds` is the optimistic client-side
+ * order, with the unpinned block left exactly as the server last returned it.
+ *
+ * NOTE THAT THE ORIGINAL REASON HAS EXPIRED. The unpinned block is no longer
+ * auto-sorted — it is the stored manual order (shared/tab-order) — so an order
+ * dragged into it would now survive. Extending the gesture is a real option;
+ * it is not what this function does, and the restriction above should be read
+ * as a decision from here on rather than as a consequence.
  */
 export function orderAfterPinnedDrop(
   tabs: DraggableTab[],

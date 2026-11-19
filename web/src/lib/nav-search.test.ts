@@ -5,12 +5,15 @@
 import type { PaneStatus, Tab } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  RECENT_LIMIT,
   type SearchableTab,
   type WorkspaceTabs,
   paneIndex,
   rankTabs,
+  recentTabs,
   snippetParts,
   splitHighlight,
+  tabSlugFromPath,
   toSearchableTabs,
 } from './nav-search';
 
@@ -353,5 +356,133 @@ describe('the “ra” problem — ties decided by the wrong thing', () => {
     const once = names('ra');
     const twice = names('ra');
     expect(once).toEqual(twice);
+  });
+});
+
+/**
+ * THE EMPTY QUERY. This list is what replaced the rail's "Recently active"
+ * band, so the properties the band had — a stable order, your own activity
+ * rather than an agent's, and no duplicate of the row you are standing on —
+ * are the ones asserted here.
+ */
+describe('recentTabs', () => {
+  const T = 1_800_000_000_000;
+  const touched = (name: string, lastUserAt: number | null) => tab({ tabName: name, lastUserAt });
+
+  it('orders by the last time YOU touched it, newest first', () => {
+    const rows = recentTabs([
+      touched('old', T - 86_400_000),
+      touched('now', T),
+      touched('hour', T - 3_600_000),
+    ]);
+    expect(rows.map((r) => r.tab.tabName)).toEqual(['now', 'hour', 'old']);
+  });
+
+  it('ignores machine activity — a chat tailing a log does not hold the top', () => {
+    // The measurement behind `userTouchAt`: six working chats held six of the
+    // global top seven, none of it anything the user had done. `lastActivityAt`
+    // is bumped by pty output; it must not outrank a real touch.
+    const chatty = tab({ tabName: 'tailing a log', lastUserAt: T - 7 * 86_400_000 });
+    chatty.lastActivityAt = T;
+    const mine = touched('what I was doing', T - 3_600_000);
+    expect(recentTabs([chatty, mine]).map((r) => r.tab.tabName)).toEqual([
+      'what I was doing',
+      'tailing a log',
+    ]);
+  });
+
+  it('falls back to machine activity only when there is no user stamp at all', () => {
+    // An OLDER SERVER with no `last_user_at` column is the only way that
+    // happens, and degrading it to today's ordering beats no ordering.
+    const a = tab({ tabName: 'a' });
+    a.lastActivityAt = T;
+    const b = tab({ tabName: 'b' });
+    b.lastActivityAt = T - 1000;
+    expect(recentTabs([a, b]).map((r) => r.tab.tabName)).toEqual(['a', 'b']);
+  });
+
+  it('sorts a chat with no timestamp at all LAST, not first', () => {
+    // `null` means "we do not know when", and reading it as "just now" would
+    // put the least-known rows at the top of a list whose claim is recency.
+    const rows = recentTabs([touched('unknown', null), touched('known', T - 86_400_000)]);
+    expect(rows.map((r) => r.tab.tabName)).toEqual(['known', 'unknown']);
+  });
+
+  it('leaves out the chat you are standing on, by id or by slug', () => {
+    // Without this the cursor starts on the chat you opened the palette FROM,
+    // and the first Enter — the whole point of a keyboard switcher — is a no-op.
+    //
+    // BOTH KEYS, and the id/slug distinction is the whole reason: the caller
+    // reads a SLUG off the route (`/w/house/t/here`), while everything else in
+    // the corpus is keyed by id. A fixture where the two are the same string
+    // cannot tell those apart — this one gives the row a ULID-ish id so a
+    // lookup that only checks `tabId` fails here instead of in the palette.
+    const here = tab({ tabName: 'here', tabId: '01M7R437DA', tabSlug: 'here', lastUserAt: T });
+    const tabs = [here, touched('there', T - 1)];
+    expect(recentTabs(tabs, { exclude: 'here' }).map((r) => r.tab.tabName)).toEqual(['there']);
+    expect(recentTabs(tabs, { exclude: '01M7R437DA' }).map((r) => r.tab.tabName)).toEqual([
+      'there',
+    ]);
+    expect(recentTabs(tabs, { exclude: 'nowhere' })).toHaveLength(2);
+  });
+
+  it('does not promote a blocked chat', () => {
+    // A list that reorders itself on an agent's state is the churn feed this
+    // replaced. The row still carries its dot where it sits.
+    const rows = recentTabs([
+      tab({ tabName: 'blocked', status: 'blocked', lastUserAt: T - 86_400_000 }),
+      touched('recent', T),
+    ]);
+    expect(rows.map((r) => r.tab.tabName)).toEqual(['recent', 'blocked']);
+    expect(rows[1]?.tab.status).toBe('blocked');
+  });
+
+  it('caps the list and honours an explicit limit', () => {
+    const many = Array.from({ length: RECENT_LIMIT + 5 }, (_, i) => touched(`c${i}`, T - i * 1000));
+    expect(recentTabs(many)).toHaveLength(RECENT_LIMIT);
+    expect(recentTabs(many, { limit: 3 })).toHaveLength(3);
+    expect(recentTabs(many, { limit: 0 })).toEqual([]);
+  });
+
+  it('breaks an exact tie totally, so the list cannot swap under a re-render', () => {
+    const rows = recentTabs([touched('b', T), touched('a', T)]);
+    expect(rows.map((r) => r.tab.tabName)).toEqual(['a', 'b']);
+  });
+
+  it('does not mutate the corpus it was handed', () => {
+    const tabs = [touched('old', T - 1000), touched('new', T)];
+    recentTabs(tabs);
+    expect(tabs.map((t) => t.tabName)).toEqual(['old', 'new']);
+  });
+
+  it('carries no highlight range, so a row renders its name plain', () => {
+    const row = recentTabs([touched('Investing', T)])[0];
+    expect(row?.range).toBeUndefined();
+    expect(splitHighlight('Investing', row?.range)).toEqual(['Investing', '', '']);
+  });
+});
+
+describe('tabSlugFromPath', () => {
+  it('finds the tab slug in a chat route', () => {
+    expect(tabSlugFromPath('/w/personal/t/investing')).toBe('investing');
+  });
+
+  it('ignores the query string and the hash', () => {
+    expect(tabSlugFromPath('/w/personal/t/investing?logs=true#x')).toBe('investing');
+  });
+
+  it('decodes an escaped slug', () => {
+    expect(tabSlugFromPath('/w/personal/t/%D7%91%D7%A0%D7%99%D7%9E%D7%99%D7%A0%D7%94')).toBe(
+      'בנימינה',
+    );
+  });
+
+  it('returns the raw segment rather than throwing on a malformed escape', () => {
+    expect(tabSlugFromPath('/w/personal/t/100%')).toBe('100%');
+  });
+
+  it('has no answer for a path with no tab — which excludes nothing', () => {
+    expect(tabSlugFromPath('/hosted')).toBeUndefined();
+    expect(tabSlugFromPath('/w/personal')).toBeUndefined();
   });
 });

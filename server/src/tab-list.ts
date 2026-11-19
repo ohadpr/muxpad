@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { type PtydCache, cronsByTab, decorateTab } from './ptyd-cache.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { compareUnpinnedTabs } from './tab-activity.js';
+import { sortSidebarTabs } from '@muxpad/shared';
 import { type ClockSnapshot, clockSnapshot } from './tab-clock.js';
 
 /**
@@ -58,10 +58,11 @@ export function orderedTabsForWorkspace(
   const decorated = raw.map((t) =>
     decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab),
   );
-  const positions = new Map(raw.map((t, i) => [t.id, i]));
-  const pinned = decorated.filter((t) => t.pinned);
-  const rest = decorated
-    .filter((t) => !t.pinned)
-    .sort((a, b) => compareUnpinnedTabs(a, b, positions));
-  return [...pinned, ...rest];
+  // STORE ORDER, pinned block first. `listByWorkspace` already reads
+  // `ORDER BY position, created_at, id`, which is the manual order a drag
+  // writes and the place a new chat is appended to — so this adds nothing to
+  // it but the pinned/unpinned split the sidebar's divider needs. The unpinned
+  // block used to be re-sorted here by attention then recency; see
+  // shared/tab-order for why it is not.
+  return sortSidebarTabs(decorated);
 }

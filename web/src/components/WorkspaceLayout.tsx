@@ -56,10 +56,12 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
   // pane that rang, and an APP whose supervisor gave up is exactly such a pane
   // (its pane lives in the hidden apps container). Tapping "could not be
   // restarted" would have dropped the user into limbo instead of the one screen
-  // that can actually fix it. Send them to Hosted, which owns that app.
+  // that can actually fix it. Send them to Apps, which owns that app — it was
+  // the undivided Hosted page until that became two destinations, and the half
+  // with the start/stop controls is the one that can fix this.
   useEffect(() => {
     if (!isActive || !workspace?.hidden) return;
-    void navigate({ to: '/hosted', replace: true });
+    void navigate({ to: '/apps', replace: true });
   }, [isActive, workspace, navigate]);
 
   // Recovery for a stale tab URL — a reload (or a PWA restoring its last URL)

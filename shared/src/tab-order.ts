@@ -1,35 +1,60 @@
 /**
- * The living sidebar's order for UNPINNED tabs: needs-attention first, then
- * most recently active.
+ * The sidebar's order: the pinned block first, in its manual order, then
+ * everything else in the order it was given.
  *
- * ── WHY THIS LIVES IN shared ─────────────────────────────────────────────────
- * It used to live on the server alone, as the sort behind GET /api/tabs, and
- * that made the server the only thing that could ever reorder the sidebar. The
- * client held the resulting sequence and deliberately did not re-derive it: a
- * `tab.updated` push patched the row IN PLACE and left the array order alone,
- * so a tab that had just become the most recently active one did not move until
- * the next 5s poll — and not at all while that poll is stopped, which it is for
- * a collapsed workspace or a hidden document. Coming back to the app after a
- * few minutes away showed an order minutes stale on EVERY device, which is
- * precisely when a recency-ordered sidebar is supposed to be most useful.
+ * ── IT USED TO SORT, AND THAT IS THE CHANGE ─────────────────────────────────
+ * The unpinned block was auto-sorted: chats that wanted you NOW first, then
+ * most recently touched. The sidebar was meant to be "living" — rows rising
+ * and falling as work moved — and both halves of that turned out to cost more
+ * than they bought.
  *
- * The reason the client refused to sort was real — rows must not jump around
- * under the cursor — but that hazard already has an owner: `freezeActiveTab`
- * (web/src/lib/tab-freeze.ts) holds the row you are ON where you found it and
- * lets everything else re-sort around it, which that file calls "the whole
- * point of a living sidebar". The two behaviours contradicted each other; this
- * is the shared definition that lets the client honour the same order the
- * server publishes, immediately, without a refetch.
+ * RECENCY had already been narrowed twice before it was removed. It first read
+ * `last_activity_at`, which a tailing log bumps every five seconds: measured
+ * on the live cockpit, six `working` chats held six of the global top seven,
+ * all under a minute old, none of it anything the user had done. Moving it to
+ * `last_user_at` fixed that and left the deeper problem — the list still
+ * rearranged itself while you were reading it. The machinery that grew around
+ * that is the evidence: a client-side re-sort on every `tab.updated` so the
+ * order would not go stale, and `tab-freeze` on top of it to hold the one row
+ * you were standing on still while the rest moved under your cursor. Two
+ * mechanisms, in opposite directions, to make a moving list usable.
+ *
+ * ATTENTION went for a plainer reason: "this chat is blocked" is a thing to
+ * SAY on a row, not a reason to move it. A row that jumps when its agent
+ * changes state is a row you cannot point at — OpenBot shipped an
+ * attention-promoting default in 0.67.0 and shipped the switch to turn it off
+ * in 0.68.0, one day later, after users said it was "really breaking
+ * organizing our agents for us".
+ *
+ * So the order is now MANUAL and stable: pinned rows where you put them, the
+ * rest in their stored position, new rows appended. Status is on the row —
+ * spinner, `YOU`, unread bold — and a collapsed workspace still carries its
+ * rollup mark, so nothing is hidden by a list that holds still.
+ *
+ * RECENCY DID NOT DISAPPEAR, it moved: ⌘K with an empty query lists the chats
+ * you touched most recently, across every workspace, each naming the workspace
+ * it lives in (web/src/lib/nav-search `recentTabs`). That is the surface a
+ * recency order belongs on — one you open, read and leave — rather than one
+ * you are trying to point at.
+ *
+ * ── WHY THIS STILL LIVES IN shared ──────────────────────────────────────────
+ * Both sides run it. The server publishes the order; the client re-applies the
+ * same rule when it splices a pushed row in, so a `tab.updated` cannot put the
+ * pinned divider in the wrong place and an inserted row lands where the server
+ * would have put it.
  */
 
-/** The fields the order actually reads. A superset of both Tab and the
- *  decorated row, so either side can pass what it already has. */
+/** The fields the two functions below read. A superset of both Tab and the
+ *  decorated row, so either side can pass what it already has.
+ *
+ *  `status` and `attention` are deliberately NOT here any more: they were read
+ *  by the comparator that promoted a blocked chat, and leaving them on this
+ *  type would be an invitation to read them again. The order does not know
+ *  what a chat is doing. */
 export interface SortableTab {
   id: string;
-  status?: 'blocked' | 'working' | 'ready' | 'dead' | 'idle' | undefined;
-  attention?: boolean | undefined;
   last_activity_at?: number | null | undefined;
-  /** See {@link userTouchAt} — the key the GLOBAL list orders on. */
+  /** See {@link userTouchAt} — the key the recents list orders on. */
   last_user_at?: number | null | undefined;
 }
 
@@ -65,86 +90,40 @@ export function userTouchAt(t: SortableTab): number | null {
   return t.last_user_at ?? t.last_activity_at ?? null;
 }
 
-/** "This tab wants you NOW" — the one condition still worth reordering for.
- *  Reads `status` when the row carries it and falls back to the deprecated
- *  `attention` alias otherwise. The fallback is not decoration: `attention` is
- *  the raw BEL bit, and an AGENT chat never rings BEL — so a pane parked on
- *  `ask_user`, the highest-value case there is, would get no promotion at all
- *  if this partitioned on `attention` alone. */
-export function tabWantsYou(t: SortableTab): boolean {
-  return t.status === 'blocked' || t.attention === true;
-}
-
-export function compareUnpinnedTabs(
-  a: SortableTab,
-  b: SortableTab,
-  _positions?: Map<string, number>,
-): number {
-  const attn = Number(tabWantsYou(b)) - Number(tabWantsYou(a));
-  if (attn !== 0) return attn;
-  // USER TOUCH, not machine activity — see `userTouchAt` for the measurement.
-  // This read `last_activity_at` until a screenshot settled the argument the
-  // docstring above had hedged on ("inside ONE workspace that is tolerable"):
-  // a chat four days since the user last touched it and days from
-  // being archived for inactivity, sat ABOVE a chat used that morning, used the same morning —
-  // because something had printed a line in it nine minutes earlier. Inside one
-  // workspace the consequence turns out to be identical to the cross-workspace
-  // one it was already rejected for.
-  //
-  // `userTouchAt` was written for the global list, documented at length, and
-  // then left with no callers at all when the flat view was deleted. It is the
-  // rule this file already believed in.
-  //
-  // Nulls last: -Infinity is smaller than any real timestamp, and we sort
-  // descending, so a never-touched tab lands at the bottom of its partition.
-  const at =
-    (userTouchAt(b) ?? Number.NEGATIVE_INFINITY) - (userTouchAt(a) ?? Number.NEGATIVE_INFINITY);
-  // NaN guard: (-Inf) - (-Inf) is NaN, which would make the comparator
-  // inconsistent and the sort implementation-defined.
-  if (at !== 0 && !Number.isNaN(at)) return at < 0 ? -1 : 1;
-  // Only wire fields may break ties. The server's manual positions are NOT
-  // the client's last published indices: status/recency can reorder them.
-  // IDs give both sides the same total order, even when a push creates a tie.
-  // The optional legacy argument is ignored; pinned manual order is separate.
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/* `compareByUserTouch` USED TO LIVE HERE, and deleting it is the point.
+/* `tabWantsYou`, `compareUnpinnedTabs` and `compareByUserTouch` USED TO LIVE
+ * HERE, and deleting them is the point — see the file note above.
  *
- * It was the GLOBAL list's comparator: same shape as `compareUnpinnedTabs`
- * with the recency key swapped for `userTouchAt`, kept deliberately separate
- * on the argument that the two lists answer different questions ("what is
- * going on in here" vs "what was I doing") and that collapsing them would be
- * the one-value-two-meanings bug this codebase keeps finding.
+ * `compareByUserTouch` had already gone for its own reason, worth keeping
+ * because it is the same lesson: it was a SECOND comparator for the global
+ * list, kept separate on the argument that the two lists answer different
+ * questions ("what is going on in here" vs "what was I doing"). The
+ * per-workspace list then moved onto the same key, leaving the two functions
+ * byte-for-byte identical while the docstring went on claiming they differed.
+ * Two identical functions are not two policies.
  *
- * Both halves of that argument expired, from opposite ends:
- *
- *   · the per-workspace list moved onto `userTouchAt` too (see the comment
- *     inside `compareUnpinnedTabs`: a chat four days cold outranked one used
- *     that morning because something printed a line in it). The two functions
- *     were left byte-for-byte identical — same partition, same key, same null
- *     and NaN guards, same id tiebreak — while this docstring went on saying
- *     they differed, which is a worse failure than the duplication;
- *   · the global flat view that called it was deleted, so it had no
- *     production caller at all. Its only consumer was a test asserting the
- *     divergence that no longer existed, and that test duly failed.
- *
- * Two identical functions are not two policies. If the surfaces genuinely
- * diverge again, the honest move is a named key passed INTO one comparator,
- * not a second copy that can drift silently. */
+ * What survives of all three is `userTouchAt` below, which is a measurement
+ * rather than an order, and is now read by one caller: the ⌘K recents list. */
 
 /**
- * The published sidebar order for one workspace's tabs: the pinned block in its
- * manual order, untouched, then the unpinned block by `compareUnpinnedTabs`.
+ * The published sidebar order for one workspace's tabs.
  *
- * Unpinned ties use the wire ID, independent of any previous array order.
- * The optional positions argument remains for source compatibility only.
+ * STABLE. The pinned block keeps its manual order and the rest keep theirs;
+ * nothing here reads status, activity or recency, which is the whole point.
+ * `Array.prototype.sort` is not involved at all — a comparator returning 0 for
+ * every pair would do the same thing while inviting someone to add a key to
+ * it.
+ *
+ * The caller supplies the order it wants preserved: the server passes its
+ * stored `position` order, and the client passes the array it is holding with
+ * a new row appended.
  */
 export function sortSidebarTabs<T extends SortableTab & { pinned?: boolean | undefined }>(
   tabs: readonly T[],
-  positions: Map<string, number> = new Map(),
 ): T[] {
+  // PINNED FIRST is the one rearrangement left, and it is not a sort: the
+  // sidebar draws its divider at `tabs.filter(t => t.pinned).length`, so the
+  // two blocks have to be contiguous or the divider lands in the wrong place.
   const pinned = tabs.filter((t) => t.pinned);
-  const rest = tabs.filter((t) => !t.pinned).sort((a, b) => compareUnpinnedTabs(a, b, positions));
+  const rest = tabs.filter((t) => !t.pinned);
   return [...pinned, ...rest];
 }

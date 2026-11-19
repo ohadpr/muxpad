@@ -20,17 +20,27 @@ import { useDocumentTitle } from '../use-document-title';
 import './HostedView.css';
 
 /**
- * HOSTED — one view, two kinds.
+ * ARTIFACTS and APPS — two destinations, one file.
  *
  *   APPS       running local web servers muxpad supervises. Private (tailnet
  *              only), have logs, can be started and stopped.
  *   ARTIFACTS  static trees published to a public URL, with versions.
  *
- * They are listed together because the question a person arrives with — "what
- * am I hosting, and is it up?" — spans both. They are listed SEPARATELY, under
- * their own headers with their own action sets, because everything else about
- * them differs: an app can be stopped, an artifact cannot; an artifact has a
- * public link worth copying, an app deliberately does not.
+ * THEY USED TO BE ONE PAGE CALLED "HOSTED", under one sidebar entry, and the
+ * argument for that was that "what am I hosting, and is it up?" spans both.
+ * It does not: the two questions people actually arrive with are "where is
+ * the thing I made" and "is that server up", and neither is answered by a
+ * label that names the one property the two kinds share — having a URL.
+ * Everything else about them differs, which the page already admitted by
+ * listing them under separate headers with separate action sets: an app can
+ * be stopped, an artifact cannot; an artifact has a public link worth copying
+ * and an expiry, an app deliberately has neither and is reachable only on the
+ * tailnet.
+ *
+ * So the rail carries two entries and this renders ONE kind at a time. Same
+ * data hook, same rows — the split is in the navigation, not in a second copy
+ * of the list. `/hosted` still answers, as a redirect, because links to it
+ * exist in transcripts and in people's heads.
  *
  * The status rail is the sidebar's StatusMark, unchanged, reading the shared
  * APP_STATE_STATUS mapping. There is no second status vocabulary in muxpad —
@@ -40,19 +50,48 @@ import './HostedView.css';
  * on touch, and nothing is revealed by hover — hover only ever *brightens*
  * something already visible.
  */
-export function HostedView() {
+export type HostedKind = 'apps' | 'artifacts';
+
+const KIND: Record<
+  HostedKind,
+  { title: string; sub: string; note: string; docTitle: string; public: boolean }
+> = {
+  apps: {
+    title: 'Apps',
+    sub: 'Local web servers muxpad keeps running. Reachable on your tailnet only.',
+    note: 'tailnet only',
+    docTitle: 'muxpad — apps',
+    public: false,
+  },
+  artifacts: {
+    title: 'Artifacts',
+    sub: 'Pages and reports published to a public URL. A new link answers for 7 days.',
+    note: 'public',
+    docTitle: 'muxpad — artifacts',
+    public: true,
+  },
+};
+
+export function AppsView() {
+  return <HostedView kind="apps" />;
+}
+
+export function ArtifactsView() {
+  return <HostedView kind="artifacts" />;
+}
+
+function HostedView({ kind }: { kind: HostedKind }) {
   const { apps, artifacts, base, loading, error, refresh } = useHosted();
-  useDocumentTitle('muxpad — hosted');
+  const meta = KIND[kind];
+  useDocumentTitle(meta.docTitle);
 
   return (
     <div className="hosted">
       <div className="hosted-inner">
         <header className="hosted-head">
           <div>
-            <h1 className="hosted-title">Hosted</h1>
-            <p className="hosted-sub">
-              Apps run here and stay private. Artifacts are published to a public URL.
-            </p>
+            <h1 className="hosted-title">{meta.title}</h1>
+            <p className="hosted-sub">{meta.sub}</p>
           </div>
           <button
             type="button"
@@ -74,42 +113,48 @@ export function HostedView() {
           </p>
         )}
 
-        <section className="hosted-section" aria-labelledby="hosted-apps-h">
+        <section className="hosted-section" aria-labelledby="hosted-kind-h">
+          {/* THE HEADING STAYS, under a page title that says the same word.
+              It is what carries the note beside it — "tailnet only", "public"
+              — and that note is the one thing a reader must not have to infer
+              from the title. One page, one section: no second kind is listed
+              below it any more. */}
           <div className="hosted-section-head">
-            <h2 className="hosted-section-label" id="hosted-apps-h">
-              Apps
+            <h2 className="hosted-section-label" id="hosted-kind-h">
+              {meta.title}
             </h2>
-            <span className="hosted-section-note">tailnet only</span>
+            <span
+              className={
+                meta.public
+                  ? 'hosted-section-note hosted-section-note-public'
+                  : 'hosted-section-note'
+              }
+            >
+              {meta.note}
+            </span>
+            {/* The base every artifact link is built from. Worth a permanent
+                line because its failure is otherwise SILENT: a tunnel whose
+                process died, or one on a port the recipient's network blocks,
+                makes every link on this page useless while the page looks
+                fine. */}
+            {kind === 'artifacts' && base && <BaseNote base={base} />}
           </div>
-          {loading && apps.length === 0 ? (
-            <p className="hosted-empty">Loading…</p>
-          ) : apps.length === 0 ? (
-            <EmptyState
-              line="No apps registered."
-              hint="muxpad app add --name=Notes --url=https://host:4322 --cwd=~/notes -- ./start"
-            />
-          ) : (
-            <ul className="hosted-list">
-              {apps.map((app) => (
-                <AppRow key={app.id} app={app} onChanged={refresh} />
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="hosted-section" aria-labelledby="hosted-artifacts-h">
-          <div className="hosted-section-head">
-            <h2 className="hosted-section-label" id="hosted-artifacts-h">
-              Artifacts
-            </h2>
-            <span className="hosted-section-note hosted-section-note-public">public</span>
-            {/* The base every link below is built from. Worth a permanent line
-                because its failure is otherwise SILENT: a tunnel whose process
-                died, or one on a port the recipient's network blocks, makes
-                every link on this page useless while the page looks fine. */}
-            {base && <BaseNote base={base} />}
-          </div>
-          {loading && artifacts.length === 0 ? (
+          {kind === 'apps' ? (
+            loading && apps.length === 0 ? (
+              <p className="hosted-empty">Loading…</p>
+            ) : apps.length === 0 ? (
+              <EmptyState
+                line="No apps registered."
+                hint="muxpad app add --name=Notes --url=https://host:4322 --cwd=~/notes -- ./start"
+              />
+            ) : (
+              <ul className="hosted-list">
+                {apps.map((app) => (
+                  <AppRow key={app.id} app={app} onChanged={refresh} />
+                ))}
+              </ul>
+            )
+          ) : loading && artifacts.length === 0 ? (
             <p className="hosted-empty">Loading…</p>
           ) : artifacts.length === 0 ? (
             <EmptyState

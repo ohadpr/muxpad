@@ -1,15 +1,11 @@
 import { EventEmitter } from 'node:events';
+import { sortSidebarTabs } from '@muxpad/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import { openDb } from './store/db.js';
-import {
-  ACTIVITY_THROTTLE_MS,
-  type SortableTab,
-  TabActivity,
-  compareUnpinnedTabs,
-} from './tab-activity.js';
+import { ACTIVITY_THROTTLE_MS, type SortableTab, TabActivity } from './tab-activity.js';
 
 function fixture() {
   const db = openDb(':memory:');
@@ -158,109 +154,6 @@ describe('TabActivity — the output throttle', () => {
     // The row is gone; UPDATE matches nothing. Must not throw — this runs
     // inside a ws message handler.
     expect(() => a.touchTab(f.tab.id, { source: 'output', force: true })).not.toThrow();
-  });
-});
-
-describe('compareUnpinnedTabs — the auto-sorted block', () => {
-  const sort = (
-    rows: SortableTab[],
-    positions: Map<string, number> = new Map(rows.map((r, i) => [r.id, i])),
-  ) => [...rows].sort((a, b) => compareUnpinnedTabs(a, b, positions)).map((r) => r.id);
-
-  it('needs-attention first, then recency — busy is NOT a sort key', () => {
-    // Busy used to promote a tab above every idle one. It was the same signal
-    // twice (a glyph AND a position), so a tab going to work jumped up the
-    // list while you were reaching for the row below it. The status rail says
-    // "working" from a fixed column; the rail must not also shuffle.
-    expect(
-      sort([
-        { id: 'old', last_activity_at: 1 },
-        { id: 'working', last_activity_at: 1 },
-        { id: 'recent', last_activity_at: 99 },
-        { id: 'attn', attention: true, last_activity_at: 1 },
-      ]),
-      // 'old' and 'working' tie on recency, so they fall through to ID
-      // order — which is exactly the point: working no longer moves anything.
-    ).toEqual(['attn', 'recent', 'old', 'working']);
-  });
-
-  it('attention still promotes — it is rare, it clears when you look, and it is worth moving for', () => {
-    expect(
-      sort([
-        { id: 'recent', last_activity_at: 10_000 },
-        { id: 'attn', attention: true, last_activity_at: 1 },
-      ]),
-    ).toEqual(['attn', 'recent']);
-  });
-
-  it('a BLOCKED tab is promoted even with no BEL — agent chats never ring one', () => {
-    // The fallback to `attention` is not decoration. `attention` is the raw BEL
-    // bit, and a chat-native agent never rings it — so a pane parked on
-    // ask_user (the highest-value case there is) would get no promotion at all
-    // if this partitioned on `attention` alone.
-    expect(
-      sort([
-        { id: 'recent', status: 'working', last_activity_at: 10_000 },
-        { id: 'asking', status: 'blocked', last_activity_at: 1 },
-      ]),
-    ).toEqual(['asking', 'recent']);
-  });
-
-  it('within the attention partition, order is pure recency', () => {
-    expect(
-      sort([
-        { id: 'b', last_activity_at: 5 },
-        { id: 'a-old', attention: true, last_activity_at: 1 },
-        { id: 'a-new', attention: true, last_activity_at: 2 },
-      ]),
-    ).toEqual(['a-new', 'a-old', 'b']);
-  });
-
-  it('null last_activity_at (migrated rows) sorts LAST, never first', () => {
-    expect(
-      sort([
-        { id: 'never', last_activity_at: null },
-        { id: 'ancient', last_activity_at: 1 },
-        { id: 'missing' },
-      ]),
-    ).toEqual(['ancient', 'missing', 'never']); // nulls use the canonical wire ID
-  });
-
-  it('a null timestamp sorts after a real one, even against an attention row’s partition', () => {
-    expect(
-      sort([
-        { id: 'nullattn', attention: true, last_activity_at: null },
-        { id: 'recent', last_activity_at: 10_000 },
-      ]),
-      // The attention partition still comes first; nulls only lose WITHIN a
-      // partition.
-    ).toEqual(['nullattn', 'recent']);
-  });
-
-  it('ties ignore caller positions and use wire id — the order is TOTAL', () => {
-    // Identical on every signal: the comparator must still be deterministic,
-    // or the sidebar would visibly reshuffle on every 5s poll.
-    const rows = [
-      { id: 'c', last_activity_at: 5 },
-      { id: 'a', last_activity_at: 5 },
-      { id: 'b', last_activity_at: 5 },
-    ];
-    const positions = new Map([
-      ['a', 2],
-      ['b', 1],
-      ['c', 0],
-    ]);
-    expect(sort(rows, positions)).toEqual(['a', 'b', 'c']);
-    // Same data, different input order → same output.
-    expect(sort([...rows].reverse(), positions)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('two nulls with equal position fall through to id (never NaN-unstable)', () => {
-    const positions = new Map([
-      ['z', 0],
-      ['a', 0],
-    ]);
-    expect(sort([{ id: 'z', last_activity_at: null }, { id: 'a' }], positions)).toEqual(['a', 'z']);
   });
 });
 
@@ -651,10 +544,12 @@ describe('a write only notifies when it can reorder something', () => {
       },
     });
 
-    const order = (rows: Iterable<SortableTab>) =>
-      [...rows].sort(compareUnpinnedTabs).map((t) => t.id);
-    // Sorted across BOTH workspaces: the ⌘K list ranks globally, and each
-    // sidebar's per-workspace order is a subsequence of this one.
+    // The published order, which no longer ranks on anything: `sortSidebarTabs`
+    // keeps what it is given (shared/tab-order). What this still proves is the
+    // part that was never about ranking — that a client fed ONLY notifications
+    // ends up holding the same rows in the same sequence as a client that
+    // re-fetched, across out-of-band creations and suppressed writes.
+    const order = (rows: Iterable<SortableTab>) => sortSidebarTabs([...rows]).map((t) => t.id);
     const serverOrder = () => order(f.tabs.list().map(withAttention));
 
     // Deterministic LCG — a fixed sequence, so a failure is reproducible.

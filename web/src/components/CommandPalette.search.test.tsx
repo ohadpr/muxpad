@@ -30,7 +30,8 @@ vi.mock('../events', () => ({
   },
   subscribeResync: () => () => {},
 }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => () => Promise.resolve() }));
+const navigate = vi.fn(async () => {});
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('../workspaces', () => ({
   useWorkspaces: () => ({ workspaces: [] }),
   visibleWorkspaces: () => [],
@@ -52,6 +53,9 @@ beforeEach(() => {
   resetAllTabsCache();
   searches.length = 0;
   requestSearchJump.mockClear();
+  navigate.mockClear();
+  // The palette reads the path to leave out the chat you are standing on.
+  window.history.replaceState({}, '', '/');
   SERVER = [
     {
       id: 'w1',
@@ -180,5 +184,96 @@ describe('opening from a button', () => {
     await open();
     await open();
     expect(host.querySelector('.cmdk-dialog')).not.toBeNull();
+  });
+});
+
+/**
+ * THE EMPTY QUERY — the recents list that replaced the rail's "Recently
+ * active" band. The band's duplication was the problem it was removed for, so
+ * what matters here is that this surface carries the workspace a row lives in,
+ * is reachable by keyboard on the first press, and gives way the moment you
+ * type.
+ */
+describe('recents, before anything is typed', () => {
+  const recentTabs = (): Tab[] => [
+    tab('investing', 'p1', { last_user_at: 3_000 }),
+    tab('muxpad', 'p2', { last_user_at: 2_000 }),
+    tab('home', 'p3', { last_user_at: 1_000 }),
+  ];
+
+  beforeEach(() => {
+    SERVER = [{ id: 'w1', slug: 'personal', name: 'Personal', tabs: recentTabs() }];
+    resetAllTabsCache();
+  });
+
+  const heading = () =>
+    [...host.querySelectorAll('.cmdk-divider')].map((d) => d.textContent?.trim());
+
+  it('lists the chats you touched most recently, newest first', async () => {
+    await open();
+    await wait(0);
+    expect(options().map((o) => o.querySelector('.navsearch-row-title')?.textContent)).toEqual([
+      'investing',
+      'muxpad',
+      'home',
+    ]);
+    expect(heading()).toEqual(['Recent']);
+  });
+
+  it('says which workspace each row lives in — the thing the old band could not', async () => {
+    await open();
+    await wait(0);
+    expect(options()[0]?.querySelector('.navsearch-row-ws')?.textContent).toBe('Personal');
+  });
+
+  it('leaves out the chat you are looking at', async () => {
+    window.history.replaceState({}, '', '/w/personal/t/investing');
+    await open();
+    await wait(0);
+    expect(options().map((o) => o.querySelector('.navsearch-row-title')?.textContent)).toEqual([
+      'muxpad',
+      'home',
+    ]);
+  });
+
+  it('Enter navigates on the FIRST press, with no arrow key first', async () => {
+    // The whole point of a keyboard switcher. The cursor starts at 0 and the
+    // combobox has to call itself expanded for a reader to follow it there.
+    await open();
+    await wait(0);
+    expect(input().getAttribute('aria-expanded')).toBe('true');
+    expect(input().getAttribute('aria-activedescendant')).toBe(options()[0]?.id);
+    press('Enter');
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { wsSlug: 'personal', tabSlug: 'investing' } }),
+    );
+  });
+
+  it('gives way to matches as you type, and comes back when you clear', async () => {
+    await open();
+    await wait(0);
+    expect(options()).toHaveLength(3);
+    type('home');
+    expect(options().map((o) => o.querySelector('.navsearch-row-title')?.textContent)).toEqual([
+      'home',
+    ]);
+    expect(heading()).toEqual([]);
+    type('');
+    expect(options()).toHaveLength(3);
+    expect(heading()).toEqual(['Recent']);
+  });
+
+  it('does not print "type to search" over a list you can already arrow through', async () => {
+    await open();
+    await wait(0);
+    expect(host.querySelector('.cmdk-empty')).toBeNull();
+  });
+
+  it('still explains itself when there is genuinely nothing to list', async () => {
+    SERVER = [{ id: 'w1', slug: 'personal', name: 'Personal', tabs: [] }];
+    resetAllTabsCache();
+    await open();
+    await wait(0);
+    expect(host.querySelector('.cmdk-empty')?.textContent).toContain('Type to find a chat');
   });
 });

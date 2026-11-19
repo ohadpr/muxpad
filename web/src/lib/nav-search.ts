@@ -1,4 +1,10 @@
-import { type PaneStatus, STATUS_ORDER, type Tab, collectLayoutLeaves } from '@muxpad/shared';
+import {
+  type PaneStatus,
+  STATUS_ORDER,
+  type Tab,
+  collectLayoutLeaves,
+  userTouchAt,
+} from '@muxpad/shared';
 
 /**
  * The sidebar search's INSTANT tier: rank every known tab against what the
@@ -29,6 +35,10 @@ export interface SearchableTab {
   unread?: boolean | undefined;
   pinned?: boolean | undefined;
   lastActivityAt?: number | null | undefined;
+  /** When YOU last touched it — the key the recents list orders on. Separate
+   *  from `lastActivityAt`, which a tailing log bumps every five seconds; see
+   *  `userTouchAt` in shared/tab-order for the measurement that settled it. */
+  lastUserAt?: number | null | undefined;
   /** The chat is finished — archived, decayed, or a sub-chat that delivered.
    *  Absent on the sidebar's corpus; the mention picker supplies it. */
   done?: boolean | undefined;
@@ -42,8 +52,11 @@ export type MatchField = 'name' | 'headline' | 'workspace';
 export interface TabMatch {
   tab: SearchableTab;
   field: MatchField;
-  /** [start, end) of the matched run, in the ORIGINAL field text's coordinates. */
-  range: readonly [number, number];
+  /** [start, end) of the matched run, in the ORIGINAL field text's
+   *  coordinates. ABSENT on a row that nothing was typed against — the
+   *  recents list below reuses this shape so one result row renders both,
+   *  and `splitHighlight` already degrades an absent range to plain text. */
+  range?: readonly [number, number] | undefined;
   score: number;
 }
 
@@ -228,7 +241,7 @@ export function rankTabs(
     // nothing about which chat you meant.
     match.score += contextBoost(
       tab,
-      match.field === 'name' ? match.range[1] - match.range[0] : 0,
+      match.field === 'name' && match.range ? match.range[1] - match.range[0] : 0,
       now,
     );
     out.push(match);
@@ -247,6 +260,107 @@ export function rankTabs(
   });
   const limit = opts?.limit;
   return limit !== undefined && limit >= 0 ? out.slice(0, limit) : out;
+}
+
+/** How many rows the empty query shows. The band this replaces had six fixed
+ *  slots; eight covers them with margin and still fits one screen on a phone
+ *  without the list becoming a second sidebar. */
+export const RECENT_LIMIT = 8;
+
+/**
+ * THE EMPTY QUERY — "take me back to what I was doing", across every workspace.
+ *
+ * This is where recency lives now. The rail used to carry a permanent
+ * "Recently active" band of six slots above the tree, and the band's problem
+ * was not its order but its DUPLICATION: every row in it already existed below
+ * in its own workspace, and the copy at the top had no workspace to belong to,
+ * so the one piece of information you need to go back to something — where it
+ * lives — was the one piece it could not show. ChatGPT users hit the same
+ * thing when organized chats also filled a global Recents list.
+ *
+ * So recency moves behind the one search surface, where a row carries its
+ * workspace name as a matter of course. The cost is honest and worth stating:
+ * a cross-workspace jump is now a keystroke rather than a glance. That is the
+ * trade this makes, not a free win.
+ *
+ * ORDERED BY YOUR OWN TOUCH, not the machine's. `userTouchAt` is the shared
+ * definition the server's sidebar order already uses, and it reads
+ * `last_user_at` precisely so a chat left tailing a log cannot hold the top of
+ * the list. Measured on the live cockpit when that rule was written: six
+ * working chats held six of the global top seven, all under a minute old, none
+ * of them anything the user had done. Reusing the function rather than
+ * re-deriving recency here is what keeps the two surfaces from disagreeing.
+ *
+ * NOT re-ranked by status. A blocked chat is not promoted, because a list that
+ * reorders itself on an agent's state is the churn feed this is meant to
+ * replace — and "which chat wants me" is a different question with its own
+ * answer. The rows carry their state dot, so a blocked chat still reads as
+ * blocked where it sits.
+ */
+export function recentTabs(
+  tabs: readonly SearchableTab[],
+  opts?: { limit?: number; exclude?: string | undefined },
+): TabMatch[] {
+  const limit = opts?.limit ?? RECENT_LIMIT;
+  if (limit <= 0) return [];
+  const exclude = opts?.exclude;
+  // WHERE YOU ALREADY ARE is not somewhere to go. Without this the cursor
+  // starts on the chat you opened the palette from, and the first Enter — the
+  // whole point of a keyboard switcher — does nothing at all.
+  const rows = tabs.filter((t) => !exclude || (t.tabId !== exclude && t.tabSlug !== exclude));
+  const out = [...rows];
+  out.sort((a, b) => {
+    const ta = touchedAt(a);
+    const tb = touchedAt(b);
+    if (ta !== tb) {
+      // A row with no stamp at all sorts LAST rather than first: `null` is
+      // "we don't know when", and guessing "just now" would put the least
+      // known rows at the top of a list whose whole claim is recency.
+      if (ta === null) return 1;
+      if (tb === null) return -1;
+      return tb - ta;
+    }
+    // TOTAL, so two chats created in the same millisecond do not swap places
+    // between renders of the same data.
+    const byName = a.tabName.localeCompare(b.tabName);
+    if (byName !== 0) return byName;
+    return a.tabId < b.tabId ? -1 : a.tabId > b.tabId ? 1 : 0;
+  });
+  // `field: 'name'` with no range: the row shape is shared with the ranked
+  // results so one component renders both, and an absent range is already the
+  // "nothing matched, print it plain" case in `splitHighlight`.
+  return out.slice(0, limit).map((tab) => ({ tab, field: 'name' as const, score: 0 }));
+}
+
+/** The corpus row's camelCase fields in the shape the shared order reads.
+ *  One policy, two spellings — never a second definition of "recent". */
+function touchedAt(t: SearchableTab): number | null {
+  return userTouchAt({
+    id: t.tabId,
+    last_user_at: t.lastUserAt,
+    last_activity_at: t.lastActivityAt,
+  });
+}
+
+/**
+ * The tab slug in a route like `/w/personal/t/investing`, for "don't offer me
+ * the chat I am looking at".
+ *
+ * Reads the path rather than the router's params because the palette is
+ * mounted once, above every route, and has no matched route of its own to ask.
+ * Returns undefined for any path without a tab — the hosted surfaces, the
+ * workspace root — which is exactly the case where nothing should be excluded.
+ */
+export function tabSlugFromPath(path: string): string | undefined {
+  const seg = /\/t\/([^/?#]+)/.exec(path)?.[1];
+  if (!seg) return undefined;
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    // A malformed escape is not a reason to fail a navigation list; the raw
+    // segment still matches a slug that never needed encoding.
+    return seg;
+  }
 }
 
 /** Split `text` at a match range so the row can bold the middle third. */
@@ -316,6 +430,7 @@ export function toSearchableTabs(groups: readonly WorkspaceTabs[]): SearchableTa
         unread: t.unread,
         pinned: t.pinned,
         lastActivityAt: t.last_activity_at,
+        lastUserAt: t.last_user_at,
         paneIds: collectLayoutLeaves(t.layout),
       });
     }

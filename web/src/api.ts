@@ -309,8 +309,10 @@ export const api = {
       icon?: string;
       layout?: LayoutNode;
       view_mode?: 'split' | 'tabbed';
-      /** Living sidebar: hold this tab at the top of its workspace block, in
-       *  the manual drag order (unpinned tabs are auto-sorted). */
+      /** Hold this tab at the top of its workspace block, above the rest. The
+       *  whole list is in manual order now (shared/tab-order); pinning is what
+       *  puts a chat in the block that is drag-reorderable and keeps it in
+       *  view above however many chats accumulate below. */
       pinned?: boolean;
       /** The chat's own theme, or `null` to follow the device's default. A
        *  bare string rather than the ThemeChoice union: the server stores

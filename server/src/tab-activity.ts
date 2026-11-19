@@ -14,7 +14,6 @@ import { PaneStore } from './store/PaneStore.js';
 import { SpawnRoundStore } from './store/SpawnRoundStore.js';
 import { TabStore } from './store/TabStore.js';
 import { clockIndex, isSubChat, resetChatClock } from './tab-clock.js';
-import { WorkingSet } from './working-set.js';
 
 /** Output may reorder within one visible-poll interval, at most 12 writes/min
  * per continuously active tab. Sixty seconds made ordinary work look stale. */
@@ -34,8 +33,6 @@ export const ACTIVITY_BOOT_GRACE_MS = 90_000;
 export class TabActivity {
   private readonly db: Database.Database;
   private readonly tabs: TabStore;
-  private readonly workingSet: WorkingSet;
-  private readonly onWorkingSet: (() => void) | undefined;
   private readonly panes: PaneStore;
   /** tabId → epoch ms of the last write we performed (forced or throttled). */
   private readonly lastWriteAt = new Map<string, number>();
@@ -89,13 +86,9 @@ export class TabActivity {
       /** Injected in tests so the grace window can be driven deterministically. */
       startedAt?: number;
       onWrite?: (tabId: string) => void;
-      /** The strip changed shape — see WorkingSet.touch. */
-      onWorkingSet?: (() => void) | undefined;
     } = {},
   ) {
     this.db = db;
-    this.workingSet = new WorkingSet(db);
-    this.onWorkingSet = opts.onWorkingSet;
     this.tabs = new TabStore(db);
     this.panes = new PaneStore(db);
     this.throttleMs = opts.throttleMs ?? ACTIVITY_THROTTLE_MS;
@@ -254,18 +247,6 @@ export class TabActivity {
       const turn = parent ? (clocks.get(parent)?.clock_started_at ?? null) : null;
       new SpawnRoundStore(this.db).open(tabId, at, turn);
     }
-    // ── THE WORKING SET ──────────────────────────────────────────────────
-    // This method is the single funnel for every message into every agent
-    // pane, which makes it the one place that sees you COMMIT to a chat —
-    // and committing, not opening, is what the strip is a record of. (Opening
-    // is how you look at something; typing is how you pick it. Measured: 24
-    // chats saw activity in a day and 18 saw a message.)
-    //
-    // A SUB-CHAT NEVER ENTERS, and does not count for its parent either.
-    // Answering a worker is work inside a chat, not a choice to be in one, and
-    // a parent whose three workers are busy is not a parent you are typing in
-    // — the row would hold a slot for hours of someone else's activity.
-    if (!sub && this.workingSet.touch(tabId)) this.onWorkingSet?.();
     const affected = resetChatClock(this.db, tabId, at);
     const { emitted } = this.writeTabInner(tabId, at);
     if (!this.onWrite) return;
@@ -312,6 +293,22 @@ export class TabActivity {
    * backfill), and a memo would happily suppress a real reorder after one.
    * The scope is GLOBAL rather than per-workspace because the nav search ranks
    * tabs across workspaces by the same column.
+   *
+   * ── IT NO LONGER GATES A REORDER, AND THE NAME IS NOW HISTORICAL ──────────
+   * The sidebar order does not read `last_activity_at` at all (see
+   * shared/tab-order): it is the stored manual order. So nothing this predicate
+   * says yes or no to can move a row any more, and what it has become is a
+   * plain emission throttle on activity-driven `tab.updated` — which is still
+   * worth having, since each one costs every connected client a tree walk, and
+   * is still SAFE, since a `tab.updated` carries the whole decorated row and
+   * every other reason to emit one (status, unread, headline, pin) arrives
+   * through its own path rather than through here.
+   *
+   * Left in place rather than deleted because deleting it would emit MORE, not
+   * less, and the question of which activity writes deserve a push is a
+   * separate one from what order the list is in. Renaming it is the obvious
+   * tidy-up; it is not done here so that this note stays findable from the
+   * commit that made it stale.
    */
   private canReorder(tabId: string, before: number | null, at: number): boolean {
     if (before === null) return true; // bottom of the list — any stamp moves it
@@ -430,4 +427,4 @@ export class TabActivity {
 // pushed row instead of waiting for its next poll — see shared/src/tab-order.ts
 // for why that wait was the bug. Re-exported here because this module is where
 // the rest of the server has always imported it from.
-export { type SortableTab, compareUnpinnedTabs, tabWantsYou } from '@muxpad/shared';
+export type { SortableTab } from '@muxpad/shared';

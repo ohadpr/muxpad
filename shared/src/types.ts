@@ -759,21 +759,6 @@ export const TabsReorderedEventSchema = z.object({
   workspace_id: z.string(),
 });
 /**
- * The working-set strip changed SHAPE — a chat entered, left, or was evicted.
- *
- * Coarse and carrying nothing, the same shape as `tabs.reordered` and for the
- * same reason: the handler's job is to re-fetch, which makes the event
- * idempotent and impossible to drift from the store. The strip is at most six
- * ids; a row-shaped event would cost more to describe than to fetch.
- *
- * NOT emitted when only a timestamp moved. You send messages to the chat you
- * are already in constantly; a strip that re-rendered on each of them would be
- * the churn this whole design exists to remove.
- */
-export const WorkingSetChangedEventSchema = z.object({
-  type: z.literal('working_set.changed'),
-});
-/**
  * A SETTING THAT BELONGS TO THE INSTALL, not to a browser, changed.
  *
  * Carries the whole prefs object rather than a key and a value: there are a
@@ -876,7 +861,6 @@ export const MuxpadEventSchema = z.discriminatedUnion('type', [
   TabUpdatedEventSchema,
   TabRemovedEventSchema,
   TabsReorderedEventSchema,
-  WorkingSetChangedEventSchema,
   PrefsUpdatedEventSchema,
   WorkspaceAddedEventSchema,
   WorkspaceUpdatedEventSchema,

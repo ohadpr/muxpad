@@ -421,7 +421,18 @@ async function hideAndShow(page: Page, inst: Instance): Promise<void> {
   // The chat pane stays MOUNTED behind display:none (the keep-alive stack), so
   // there is no DOM signal for "hidden" to wait on — wait for the other tab's
   // own surface to be on screen instead.
-  await page.waitForSelector('.xterm', { timeout: 15_000 });
+  //
+  // `:visible`, AND THAT IS THE WHOLE POINT OF THE WAIT. A bare `.xterm` is
+  // ambiguous here: the hidden chat pane is still mounted and has one too, and
+  // `waitForSelector` takes the FIRST match, so what it waits on depends on
+  // the keep-alive stack's DOM order — which follows the sidebar's tab order.
+  // That used to be recency, so the tab just clicked was first and the wait
+  // happened to land on the visible terminal. The order is the stored one now
+  // (shared/tab-order), so the first `.xterm` is whichever tab comes first in
+  // the workspace, and the wait sat on a display:none element until it timed
+  // out. Asking for a VISIBLE terminal says what the comment above always
+  // claimed, and is independent of how the panes are stacked.
+  await page.locator('.xterm:visible').first().waitFor({ timeout: 15_000 });
   await sleep(700);
   await page.click(`a[href="/w/${inst.ws}/t/${inst.chatTab.slug}"]`);
   await restoreSettled(page);
@@ -532,7 +543,9 @@ describe('chat scroll position across a hide/show', () => {
 
     // Away, the agent runs a turn, back.
     await page.click(`a[href="/w/${inst.ws}/t/${inst.otherTab.slug}"]`);
-    await page.waitForSelector('.xterm', { timeout: 15_000 });
+    // `:visible` for the reason spelled out in `hideAndShow` — the hidden chat
+    // pane is still mounted and carries an `.xterm` of its own.
+    await page.locator('.xterm:visible').first().waitFor({ timeout: 15_000 });
     await sleep(700);
     inst.appendMessages(12);
     await sleep(1500);
