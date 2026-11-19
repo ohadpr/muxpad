@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb } from '../store/db.js';
-import { CronStore } from './CronStore.js';
+import { CRON_RUNS_KEEP, CronStore } from './CronStore.js';
 import { DELIVERY_ATTEMPTS, ResultDelivery, renderResult } from './result-delivery.js';
 
 /**
@@ -288,6 +288,99 @@ describe('cron result delivery', () => {
       // The text is never thrown away. It is still the record of what the
       // fire produced, and `muxpad search` can still find the run's chat.
       expect(runOf(run)?.result).toBe('SPX +0.4%');
+    });
+  });
+
+  describe('a result the queue must not lose or chase for ever', () => {
+    /**
+     * BOTH OF THESE WERE FOUND BY REVIEWING THE FEATURE AFTER SHIPPING IT, and
+     * the seventeen tests above pass either way — which is why they are here
+     * as their own block.
+     */
+    it('stops being retried once it has been given up on', () => {
+      // `failDelivery` marks the row and leaves `result` and `delivered_at`
+      // exactly as they were. Without an outcome clause the outbox returns it
+      // again — three more attempts, another failure, another bump of the
+      // schedule's streak, every three minutes for ever. An undeliverable
+      // result retried for ever is the original bug with more logging on it.
+      status = 'rejected';
+      const c = cron({ resultTab: 'DEST' });
+      const run = firedWithResult(c.id, 'SPX +0.4%');
+      const d = make();
+      for (let i = 0; i < DELIVERY_ATTEMPTS; i++) d.sweep();
+      expect(runOf(run)?.outcome).toBe('failed');
+      const sentSoFar = sent.length;
+      const streak = store.getById(c.id)?.fail_streak;
+
+      // Three more sweeps: nothing is tried, nothing is counted.
+      for (let i = 0; i < DELIVERY_ATTEMPTS; i++) {
+        expect(d.sweep()).toEqual({ delivered: 0, held: 0, failed: 0 });
+      }
+      expect(sent).toHaveLength(sentSoFar);
+      expect(store.getById(c.id)?.fail_streak).toBe(streak);
+      // …and the text is still on the row, because it is the record of what
+      // the fire produced and `cron show` prints it.
+      expect(runOf(run)?.result).toBe('SPX +0.4%');
+    });
+
+    it('is not deleted by the run-history trim while it is still waiting', () => {
+      // CRON_RUNS_KEEP is 50, trimmed on every insert — "a day of a 15-minute
+      // one", says its own comment. A schedule firing that often with its
+      // destination down would have deleted the oldest undelivered results
+      // silently, with nothing recording that a result was lost. Which is the
+      // failure this whole feature exists to end.
+      const c = cron({ resultTab: 'DEST' });
+      const waiting = firedWithResult(c.id, 'the one that matters');
+      for (let i = 0; i < CRON_RUNS_KEEP + 5; i++) {
+        store.addRun({
+          cron_id: c.id,
+          due_at: NOW + i * 1000,
+          fired_at: NOW + i * 1000,
+          outcome: 'sent',
+        });
+      }
+      expect(runOf(waiting)?.result).toBe('the one that matters');
+      // And it still goes out.
+      expect(make().sweep().delivered).toBe(1);
+    });
+
+    it('lets the trim collect it once it HAS been handed over', () => {
+      // The protection is bounded on purpose: a delivered row is history like
+      // any other, or a busy schedule's table would grow without limit.
+      const c = cron({ resultTab: 'DEST' });
+      const done = firedWithResult(c.id, 'delivered already');
+      make().sweep();
+      expect(runOf(done)?.delivered_at).toBe(clock);
+      for (let i = 0; i < CRON_RUNS_KEEP + 5; i++) {
+        store.addRun({
+          cron_id: c.id,
+          due_at: NOW + i * 1000,
+          fired_at: NOW + i * 1000,
+          outcome: 'sent',
+        });
+      }
+      expect(runOf(done)).toBeNull();
+    });
+
+    it('lets the trim collect one it gave up on', () => {
+      // The other half of the bound. A failed row is settled, so it is
+      // history too — and without this a permanently broken destination would
+      // pin fifty rows for ever.
+      status = 'rejected';
+      const c = cron({ resultTab: 'DEST' });
+      const lost = firedWithResult(c.id, 'never landed');
+      const d = make();
+      for (let i = 0; i < DELIVERY_ATTEMPTS; i++) d.sweep();
+      expect(runOf(lost)?.outcome).toBe('failed');
+      for (let i = 0; i < CRON_RUNS_KEEP + 5; i++) {
+        store.addRun({
+          cron_id: c.id,
+          due_at: NOW + i * 1000,
+          fired_at: NOW + i * 1000,
+          outcome: 'sent',
+        });
+      }
+      expect(runOf(lost)).toBeNull();
     });
   });
 

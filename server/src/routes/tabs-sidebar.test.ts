@@ -116,16 +116,29 @@ describe('living sidebar — tab ordering + pinning', () => {
 
   it('lists the unpinned block in its stored order, not by recency', async () => {
     // It used to answer ['A','C','B'] here — most recently touched first. The
-    // order is now the one `position, created_at` gives, which for three
-    // chats nobody has dragged is the order they were made in. Recency moved
-    // to ⌘K with an empty query (web/src/lib/nav-search `recentTabs`).
+    // order is now the stored one, and a NEW chat is created at the top of
+    // the unpinned block (TabStore.create), so three chats nobody has dragged
+    // read newest-first. Recency itself moved to ⌘K with an empty query
+    // (web/src/lib/nav-search `recentTabs`).
+    //
+    // The activity writes are here to prove they change nothing.
     const a = await makeTab('A');
     const b = await makeTab('B');
     const c = await makeTab('C');
     setActivity(a.id, 300);
     setActivity(b.id, 100);
     setActivity(c.id, 200);
-    expect(await names()).toEqual(['A', 'B', 'C']);
+    expect(await names()).toEqual(['C', 'B', 'A']);
+  });
+
+  it('puts a NEWLY created chat at the top, where you just pressed +', async () => {
+    // Creation used to append, which was invisible under a recency sort and
+    // put the new chat at the BOTTOM once the order held still.
+    await makeTab('old');
+    await makeTab('newer');
+    expect(await names()).toEqual(['newer', 'old']);
+    await makeTab('newest');
+    expect(await names()).toEqual(['newest', 'newer', 'old']);
   });
 
   it('a drag through /reorder is what DOES change it', async () => {
@@ -146,6 +159,8 @@ describe('living sidebar — tab ordering + pinning', () => {
     // cursor and dropped back when it went quiet. This asserts the LIVE wiring
     // of the replacement: the order holds, and the row reports `working` +
     // its subagent count so the rail can say it in place.
+    // B is created SECOND, so it is above A in the stored order — the fact
+    // under test is that going to work does not change that either way.
     const a = await makeTab('A'); // much more recent, idle
     const b = await makeTab('B'); // ancient, and about to start working
     setActivity(a.id, 9999);
@@ -155,10 +170,13 @@ describe('living sidebar — tab ordering + pinning', () => {
         await test.app.request(`/api/tabs/${b.id}/panes`, { method: 'POST', ...json({}) })
       ).json()) as { id: string }
     ).id;
-    expect(await names()).toEqual(['A', 'B']);
+    // B second, so B is on top: new chats are created at the top of the
+    // unpinned block. The fact under test is that this does not MOVE.
+    const before = await names();
+    expect(before).toEqual(['B', 'A']);
 
     test.cache.setAgentBusy(bp, true);
-    expect(await names()).toEqual(['A', 'B']); // order unchanged — this is the fix
+    expect(await names()).toEqual(before); // order unchanged — this is the fix
     const rows = (await (await test.app.request(`/api/tabs?workspaceId=${wsId}`)).json()) as Array<{
       name: string;
       status?: string;
@@ -178,7 +196,7 @@ describe('living sidebar — tab ordering + pinning', () => {
     expect(rows2.find((t) => t.name === 'B')).toMatchObject({ status: 'working', agents: 2 });
 
     test.cache.setSubagentCount(bp, 0);
-    expect(await names()).toEqual(['A', 'B']);
+    expect(await names()).toEqual(before); // and back to quiet, still unmoved
   });
 
   /**
@@ -370,7 +388,7 @@ describe('living sidebar — tab ordering + pinning', () => {
     const b = await makeTab('B');
     setActivity(a.id, null);
     setActivity(b.id, 1);
-    expect(await names()).toEqual(['A', 'B']);
+    expect(await names()).toEqual(['B', 'A']); // creation order, newest first
   });
 
   it('the order is stable across repeated identical reads (no sidebar jitter)', async () => {
@@ -421,10 +439,15 @@ describe('living sidebar — tab ordering + pinning', () => {
 
   it('unpinning puts the tab back where its stored position says', async () => {
     // It used to fall back into the auto-sorted block and be re-ranked there.
-    // Now it lands at its `position`, which pinning rewrote to the end of the
-    // pinned block — for the first chat in a workspace, that is still the top.
-    // The point is that it is a PLACE rather than a ranking: unpinning twice
-    // puts it in the same spot both times.
+    // Now it lands at its `position` — a PLACE rather than a ranking, so
+    // unpinning twice puts it in the same spot both times.
+    //
+    // PINNING REWRITES THE POSITION to the end of the pinned block, which for
+    // the first pin in a workspace is 0 — and new chats are created at
+    // negative positions now (see TabStore.create), so A comes back BELOW the
+    // newer B rather than above it. That is the honest consequence of pinning
+    // being an explicit placement: it moved the row, and unpinning does not
+    // un-move it.
     const a = await makeTab('A');
     const b = await makeTab('B');
     setActivity(a.id, 1);
@@ -432,7 +455,12 @@ describe('living sidebar — tab ordering + pinning', () => {
     await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: true }) });
     expect(await names()).toEqual(['A', 'B']);
     await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: false }) });
-    expect(await names()).toEqual(['A', 'B']);
+    const after = await names();
+    expect(after).toEqual(['B', 'A']);
+    // The same place both times, which is the actual claim.
+    await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: true }) });
+    await test.app.request(`/api/tabs/${a.id}`, { method: 'PATCH', ...json({ pinned: false }) });
+    expect(await names()).toEqual(after);
   });
 
   it('PATCH pinned returns the fresh tab and 404s on an unknown id', async () => {

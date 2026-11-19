@@ -30,6 +30,7 @@ function tab(over: Partial<SearchableTab> & { tabName: string }): SearchableTab 
 }
 
 const names = (q: string, tabs: SearchableTab[]) => rankTabs(tabs, q).map((m) => m.tab.tabName);
+const titles = (rows: ReturnType<typeof recentTabs>) => rows.map((r) => r.tab.tabName);
 
 describe('rankTabs — which field matched', () => {
   it('returns nothing for an empty or whitespace-only query', () => {
@@ -437,6 +438,38 @@ describe('recentTabs', () => {
     expect(rows[1]?.tab.status).toBe('blocked');
   });
 
+  it('leaves out a WORKER, which is not a place you go back to', () => {
+    // THE REGRESSION THIS FILE EXISTS FOR, found by reading the live corpus
+    // after shipping: `/api/tabs/all` is 1,111 rows on this machine and 964
+    // of them are sub-chats. A sub-chat's `last_user_at` is stamped at
+    // CREATION, so eight freshly spawned workers would take every slot in the
+    // switcher.
+    //
+    // The band this replaced could not do that because its working set was
+    // fed by `TabActivity.touchTab`, which skips a sub-chat explicitly. That
+    // exclusion was load-bearing and did not come across with the feature.
+    const worker = tab({ tabName: 'review the diff', lastUserAt: T, spawnedBy: 'parent' });
+    const conversation = touched('muxpad', T - 3_600_000);
+    expect(titles(recentTabs([worker, conversation]))).toEqual(['muxpad']);
+  });
+
+  it('leaves out a chat that is OVER', () => {
+    // 1,091 of those 1,111 rows are `done` — archived, decayed, or a worker
+    // that delivered. The clock calls a chat done after four days untouched,
+    // which is the opposite of what you were just doing. Typing still finds
+    // it, under its own penalty.
+    const archived = tab({ tabName: 'old thing', lastUserAt: T, done: true });
+    const live = touched('muxpad', T - 3_600_000);
+    expect(titles(recentTabs([archived, live]))).toEqual(['muxpad']);
+  });
+
+  it('can come back empty rather than padding with finished work', () => {
+    // A fresh profile, or a machine where everything has decayed. An empty
+    // recents list is honest; eight dead rows are not, and the palette has a
+    // placeholder for exactly this.
+    expect(recentTabs([tab({ tabName: 'gone', lastUserAt: T, done: true })])).toEqual([]);
+  });
+
   it('caps the list and honours an explicit limit', () => {
     const many = Array.from({ length: RECENT_LIMIT + 5 }, (_, i) => touched(`c${i}`, T - i * 1000));
     expect(recentTabs(many)).toHaveLength(RECENT_LIMIT);
@@ -484,5 +517,58 @@ describe('tabSlugFromPath', () => {
   it('has no answer for a path with no tab — which excludes nothing', () => {
     expect(tabSlugFromPath('/hosted')).toBeUndefined();
     expect(tabSlugFromPath('/w/personal')).toBeUndefined();
+  });
+});
+
+/**
+ * THE CORPUS BUILDER DROPPED TWO FIELDS THE WIRE WAS ALREADY CARRYING, and
+ * both mattered: `done` left `SCORE.donePenalty` unreachable for every single
+ * ⌘K query, and `spawned_by` left the recents list unable to tell a
+ * conversation from a worker.
+ *
+ * Asserted against a real wire row rather than a hand-made one, because the
+ * bug was precisely a field that exists upstream and stops here.
+ */
+describe('toSearchableTabs carries what the wire sends', () => {
+  const wireTab = (over: Partial<Tab>): Tab =>
+    ({
+      id: 't1',
+      slug: 't1',
+      name: 'T',
+      layout: JSON.stringify('p1'),
+      created_at: 1,
+      updated_at: 1,
+      ...over,
+    }) as Tab;
+
+  const only = (over: Partial<Tab>) =>
+    toSearchableTabs([{ id: 'w', slug: 'w', name: 'W', tabs: [wireTab(over)] }])[0];
+
+  it('carries `done`, so the ranking penalty is reachable at all', () => {
+    expect(only({ done: true } as Partial<Tab>)?.done).toBe(true);
+    expect(only({ done: false } as Partial<Tab>)?.done).toBe(false);
+  });
+
+  it('carries `spawned_by`, so a worker is distinguishable from a chat', () => {
+    expect(only({ spawned_by: 'parent' } as Partial<Tab>)?.spawnedBy).toBe('parent');
+    expect(only({})?.spawnedBy).toBeUndefined();
+  });
+
+  it('sinks a done chat in a TYPED search too, rather than only in recents', () => {
+    // What `donePenalty` was always meant to do and could not, because the
+    // field never arrived. Same band, so the penalty only breaks the tie —
+    // which is the whole design of the score bands.
+    const rows = toSearchableTabs([
+      {
+        id: 'w',
+        slug: 'w',
+        name: 'W',
+        tabs: [
+          wireTab({ id: 'a', slug: 'a', name: 'radio', done: true } as Partial<Tab>),
+          wireTab({ id: 'b', slug: 'b', name: 'radio', done: false } as Partial<Tab>),
+        ],
+      },
+    ]);
+    expect(rankTabs(rows, 'radio').map((m) => m.tab.tabId)).toEqual(['b', 'a']);
   });
 });

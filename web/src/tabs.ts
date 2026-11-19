@@ -133,7 +133,20 @@ export function insertTabRow(workspaceId: string, tab: Tab): void {
   // Same version bump as applyTabRow / applyTabOrder: a refresh that started
   // before this insert must not land after it and drop the row again.
   versions.set(workspaceId, (versions.get(workspaceId) ?? 0) + 1);
-  const merged = sortSidebarTabs([...list, tab]);
+  // PREPENDED, matching the server.
+  //
+  // This appended, which agreed with `TabStore.create` while that appended
+  // too — and both were invisible under a recency sort, because a chat made a
+  // second ago was the most recent thing and went to the top either way.
+  // Creation now places a new chat at the TOP of the unpinned block (see
+  // TabStore.create for the measurement: append left it fifteen rows below
+  // the "+" that made it), so appending here would show it at the BOTTOM
+  // until the next poll and then let it jump.
+  //
+  // Caught by the convergence property test in tab-activity, which replays
+  // the client contract against the server's order after every write — the
+  // one test that can see the two halves disagree.
+  const merged = sortSidebarTabs([tab, ...list]);
   caches.set(workspaceId, merged);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(merged);

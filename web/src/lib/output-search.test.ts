@@ -204,6 +204,52 @@ describe('rankOutputs', () => {
   });
 });
 
+describe('muxpad’s own browser hosts', () => {
+  /**
+   * FOUND BY REVIEWING THE SHIPPED FEATURE AGAINST THE REAL REGISTRY: 13 of
+   * the 36 apps on this machine are browser hosts muxpad registered for
+   * itself, one per profile ever used. They are real apps and they belong on
+   * the Apps page, which is an inventory. In a search for something you MADE
+   * they are noise that wins: "browser" returned 13 results and nothing else,
+   * and "chat", "test", "default", "shots" and "perf" each returned one of
+   * these and nothing of the user's — and Enter on one navigates into an
+   * internal CDP host.
+   */
+  const host = (slug: string, name: string) => app({ slug, name, cwd: '/Users/me/.muxpad' });
+
+  it('are left out of the corpus entirely', () => {
+    const rows = toSearchableOutputs(
+      [host('browser-default', 'browser · default'), app({ slug: 'notes', name: 'Notes' })],
+      [],
+    );
+    expect(rows.map((r) => r.slug)).toEqual(['notes']);
+  });
+
+  it('stop a one-word query returning nothing but plumbing', () => {
+    // The measured case. Every one of these matched "chat" through its slug
+    // or its name while the user had no app by that name at all.
+    const rows = toSearchableOutputs(
+      [
+        host('browser-perf-chat-open', 'browser · perf-chat-open'),
+        host('browser-shots', 'browser · shots'),
+        host('browser-default', 'browser · default'),
+      ],
+      [],
+    );
+    expect(rankOutputs(rows, 'chat')).toEqual([]);
+    expect(rankOutputs(rows, 'browser')).toEqual([]);
+    expect(rankOutputs(rows, 'shots')).toEqual([]);
+  });
+
+  it('do not take an app the USER named with the same prefix off the list', () => {
+    // The prefix test is deliberately `browser-` AND something after it, so a
+    // genuine app cannot be hidden by sharing a word. `browser` alone is not
+    // one of muxpad's rows.
+    const rows = toSearchableOutputs([app({ slug: 'browser', name: 'Browser notes' })], []);
+    expect(rows.map((r) => r.slug)).toEqual(['browser']);
+  });
+});
+
 describe('toSearchableOutputs', () => {
   it('marks an artifact public and an app tailnet-only — the label a title cannot imply', () => {
     const rows = toSearchableOutputs(

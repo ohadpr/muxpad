@@ -1,3 +1,4 @@
+import { BROWSER_APP_SLUG_PREFIX } from '@muxpad/shared';
 /**
  * Naming and addressing for a browser profile muxpad OWNS.
  *
@@ -42,8 +43,12 @@
  * use rather than re-deriving and guessing.
  */
 
-/** Every owner app row is `browser-<profile>`. */
-export const BROWSER_APP_SLUG_PREFIX = 'browser-';
+/** Every owner app row is `browser-<profile>`.
+ *
+ *  ONE DEFINITION, in shared, because ⌘K needs the same rule to keep muxpad's
+ *  own hosts out of a search for things the USER made — see the note there.
+ *  Re-exported so every reader in this package keeps its import. */
+export { BROWSER_APP_SLUG_PREFIX } from '@muxpad/shared';
 
 /** Where profile directories live, relative to the data dir. */
 export const BROWSER_PROFILES_DIRNAME = 'browser-profiles';
@@ -148,6 +153,11 @@ export function browserAppName(profile: string): string {
 
 /** Whether an app slug is one of ours. */
 export function isBrowserAppSlug(slug: string): boolean {
+  // The SERVER's version stays stricter than shared's prefix test: it round
+  // trips through `profileFromAppSlug`, so a slug that merely starts with the
+  // prefix but is not a profile this package would mint is not claimed. The
+  // client cannot do that (normalisation lives here) and does not need to — a
+  // false positive there costs one row hidden from a search.
   return profileFromAppSlug(slug) !== null;
 }
 

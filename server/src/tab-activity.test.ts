@@ -573,7 +573,15 @@ describe('a write only notifies when it can reorder something', () => {
           layout: '',
           workspace_id: f.wss[rand(2)]!.id,
         });
-        client.set(fresh.id, withAttention(f.tabs.getById(fresh.id)!));
+        // PREPENDED, which is the client contract (`insertTabRow`) and now
+        // matches the server: a new chat is created at the top of the
+        // unpinned block. A Map preserves insertion order and
+        // `sortSidebarTabs` preserves what it is given, so appending here
+        // modelled a client that shows a new chat at the bottom — which is
+        // what the real one did until this test caught it.
+        const rebuilt = new Map([[fresh.id, withAttention(f.tabs.getById(fresh.id)!)], ...client]);
+        client.clear();
+        for (const [k, v] of rebuilt) client.set(k, v);
       } else if (step % 53 === 52) {
         // Attention arrives on the PANE channel, independently of recency.
         if (attention.has(target.id)) attention.delete(target.id);

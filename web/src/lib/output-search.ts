@@ -1,4 +1,5 @@
 import type { AppWithStatus, Artifact } from '@muxpad/shared';
+import { isBrowserAppSlug } from '@muxpad/shared';
 import { SCORE, findBest, nameScore } from './nav-search';
 
 /**
@@ -44,6 +45,20 @@ import { SCORE, findBest, nameScore } from './nav-search';
  *
  * Nothing is backfilled, and the label is absent far more often than not. An
  * origin inferred from a timestamp would be a wrong chat stated confidently.
+ *
+ * ── MUXPAD'S OWN PLUMBING IS NOT A THING YOU MADE ───────────────────────────
+ * 13 of the 36 apps on this machine are browser hosts muxpad registered for
+ * itself — `browser · default`, `browser · shots`,
+ * `browser · perf-chat-open`, one per profile ever used. They are real apps
+ * and they belong on the Apps PAGE, which is an inventory. They do not belong
+ * in a search for something you made, and measured against the real registry
+ * they dominate it: "browser" returns 13 results and nothing else, and
+ * "chat", "test", "default", "shots" and "perf" each return one of these and
+ * nothing of the user's.
+ *
+ * Worse than noise, pressing Enter on one navigates into an internal CDP
+ * host. Recognised by the slug prefix the server mints them with
+ * (`BROWSER_APP_SLUG_PREFIX`), which is the one rule that defines them.
  *
  * ── WHAT IS NOT HERE ────────────────────────────────────────────────────────
  * Filters by workspace and type. The tier is capped at five rows under the
@@ -110,6 +125,7 @@ export function toSearchableOutputs(
 ): SearchableOutput[] {
   const out: SearchableOutput[] = [];
   for (const a of apps) {
+    if (isBrowserAppSlug(a.slug)) continue;
     out.push({
       kind: 'app',
       slug: a.slug,

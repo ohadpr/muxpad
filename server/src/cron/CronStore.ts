@@ -312,9 +312,23 @@ export class CronStore {
     // Trim in the same call that grows it — the only way the bound is real.
     this.db
       .prepare(
-        `DELETE FROM cron_runs WHERE cron_id = ? AND id NOT IN (
-           SELECT id FROM cron_runs WHERE cron_id = ? ORDER BY fired_at DESC, id DESC LIMIT ?
-         )`,
+        `DELETE FROM cron_runs WHERE cron_id = ?
+            -- A RESULT STILL WAITING TO BE HANDED OVER IS NOT HISTORY.
+            --
+            -- The trim keeps the newest 50 runs, which the comment on
+            -- CRON_RUNS_KEEP calls "a day of a 15-minute one". A schedule that
+            -- fires that often with its destination down would therefore
+            -- DELETE the oldest undelivered results — silently, with nothing
+            -- recording that a result was lost, which is precisely the failure
+            -- this whole feature exists to end.
+            --
+            -- Bounded, so this cannot grow without limit: a row is only
+            -- protected while it is in the outbox, and three sweeps (about
+            -- three minutes) move it to 'failed' either way.
+            AND NOT (result IS NOT NULL AND delivered_at IS NULL AND outcome <> 'failed')
+            AND id NOT IN (
+              SELECT id FROM cron_runs WHERE cron_id = ? ORDER BY fired_at DESC, id DESC LIMIT ?
+            )`,
       )
       .run(run.cron_id, run.cron_id, CRON_RUNS_KEEP);
     return {
@@ -402,6 +416,18 @@ export class CronStore {
            JOIN crons c ON c.id = r.cron_id
           WHERE r.result IS NOT NULL
             AND r.delivered_at IS NULL
+            -- A RUN ALREADY GIVEN UP ON IS SETTLED, and must leave the queue.
+            -- Without this clause it never does: failDelivery marks the row
+            -- and leaves result and delivered_at exactly as they were, so
+            -- the sweep returns it again, retries it three more times, fails
+            -- it again and bumps the schedule's streak again — every three
+            -- minutes, for ever. An undeliverable result retried for ever is
+            -- the original bug with more logging.
+            --
+            -- The text STAYS on the row. It is still the record of what the
+            -- fire produced, and 'cron show' reads it to print RESULT
+            -- UNDELIVERED beside the outcome.
+            AND r.outcome <> 'failed'
             AND c.result_tab IS NOT NULL
           ORDER BY r.fired_at ASC, r.id ASC
           LIMIT ?`,

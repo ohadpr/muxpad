@@ -240,12 +240,34 @@ export class TabStore {
     // it. The icon now arrives from the chat's own subject (chat/headline.ts)
     // or from the picker, and both of those are better than a dice roll.
     const icon = input.icon ?? null;
-    const maxPos =
+    /**
+     * A NEW CHAT GOES TO THE TOP OF THE UNPINNED BLOCK, not the end.
+     *
+     * This was `MAX(position) + 1` — append — and that was right while the
+     * sidebar re-sorted unpinned rows by recency, because a chat created a
+     * second ago was the most recent thing and went straight to the top
+     * anyway. The order is the stored one now (shared/tab-order), so append
+     * means the chat you just made is the LAST row, below everything.
+     *
+     * Measured on the live cockpit right after that change shipped: the
+     * Personal workspace read oldest-first, `muxpad` from 13 May at the top
+     * and `Backups` from last night at the bottom — fifteen rows away from
+     * the "+" that made it. `MAX(position)` is also computed over every tab
+     * in the workspace, retired ones included, so the number it appends after
+     * is about a thousand rows the sidebar does not show.
+     *
+     * MIN - 1, which can go negative, and that is fine: the column is a sort
+     * key with no other meaning, `reorder` rewrites it wholesale as indices,
+     * and the pinned/unpinned split is made before the order is read, so a
+     * new chat lands directly under the pinned block rather than above it.
+     */
+    const minPos =
       (
         this.db
-          .prepare('SELECT COALESCE(MAX(position), -1) AS m FROM tabs WHERE workspace_id = ?')
+          .prepare('SELECT COALESCE(MIN(position), 0) AS m FROM tabs WHERE workspace_id = ?')
           .get(input.workspace_id) as { m: number } | undefined
-      )?.m ?? -1;
+      )?.m ?? 0;
+    const newPos = minPos - 1;
     // NEW tabs default to the tabbed presentation: a tab is primarily "one
     // full-size pane" (more panes appear as sub-tabs in the header strip),
     // with the bsplit mosaic available via the per-tab split toggle.
@@ -268,7 +290,7 @@ export class TabStore {
         view_mode,
         now,
         now,
-        maxPos + 1,
+        newPos,
         now,
         spawned_by,
         // Every chat is born with a full clock, INCLUDING a sub-chat — whose

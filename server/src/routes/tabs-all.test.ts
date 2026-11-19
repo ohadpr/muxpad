@@ -149,14 +149,17 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
       expect(grouped).toEqual(perWorkspace);
       expect(grouped.map((t) => t.name)).toEqual([
         'C', // pinned — pins lead, whatever their age
-        // Then by USER TOUCH, which `resetClock` writes: A was reset to two
-        // days ago, B to nearly a full decay window ago, so A is the more
-        // recently touched of the two. The `last_activity_at` values set above
-        // say the opposite (B=9999, A=1) and no longer decide anything — which
-        // is the whole point of the change, and why this fixture now reads as
-        // two conflicting claims with the honest one winning.
-        'A',
+        // Then the STORED order, which nothing in this fixture can move. A
+        // new chat is created at the top of the unpinned block, so B (made
+        // second) is above A.
+        //
+        // Every timestamp set above is here to prove it changes nothing:
+        // `last_activity_at` says B=9999 A=1, and `resetClock` says A was
+        // touched two days ago and B nearly a decay window ago. Two
+        // conflicting claims about recency, and neither decides the order any
+        // more — which is the whole point of the change.
         'B',
+        'A',
       ]);
 
       // …and byte-identical INCLUDING KEY ORDER, which `toEqual` does not see.

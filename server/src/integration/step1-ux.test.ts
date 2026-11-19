@@ -328,15 +328,20 @@ describe('Step 1 e2e — agent modes + the living sidebar', { timeout: 20_000 },
     setAt(c.id, 200);
 
     let list = await api<Tab[]>(`/api/tabs?workspaceId=${ws2}`);
-    expect(list.map((t) => t.name)).toEqual(['A', 'B', 'C']); // creation order
+    // NEWEST FIRST: a new chat is created at the top of the unpinned block
+    // (TabStore.create). It used to be appended, which was invisible while
+    // the order was recency-sorted and put the chat you just made at the
+    // bottom once the order held still.
+    expect(list.map((t) => t.name)).toEqual(['C', 'B', 'A']);
     expect(list.every((t) => t.pinned === false)).toBe(true);
     expect(list.every((t) => typeof t.last_activity_at === 'number')).toBe(true);
 
-    // Pinning is the one thing that still moves a row, and it moves it to the
-    // front of the list rather than within a ranking. C is last by position.
-    await api(`/api/tabs/${c.id}`, { method: 'PATCH', body: JSON.stringify({ pinned: true }) });
+    // Pinning is the one thing that still moves a row, and it moves it into
+    // the pinned block rather than within a ranking. A is LAST by position
+    // (created first), so pinning it lifts it over both.
+    await api(`/api/tabs/${a.id}`, { method: 'PATCH', body: JSON.stringify({ pinned: true }) });
     list = await api<Tab[]>(`/api/tabs?workspaceId=${ws2}`);
-    expect(list.map((t) => t.name)).toEqual(['C', 'A', 'B']);
+    expect(list.map((t) => t.name)).toEqual(['A', 'C', 'B']);
     expect(list[0]?.pinned).toBe(true);
     expect(list[1]?.pinned).toBe(false);
   });

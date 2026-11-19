@@ -39,9 +39,20 @@ export interface SearchableTab {
    *  from `lastActivityAt`, which a tailing log bumps every five seconds; see
    *  `userTouchAt` in shared/tab-order for the measurement that settled it. */
   lastUserAt?: number | null | undefined;
-  /** The chat is finished — archived, decayed, or a sub-chat that delivered.
-   *  Absent on the sidebar's corpus; the mention picker supplies it. */
+  /**
+   * The chat is finished — archived, decayed, or a sub-chat that delivered.
+   *
+   * POPULATED ON THIS CORPUS NOW. It used to be "absent on the sidebar's
+   * corpus; the mention picker supplies it", which made `SCORE.donePenalty`
+   * dead code for ⌘K — and then made the recents list below wrong, because
+   * `done` is the overwhelming majority: measured on the live cockpit, 1,091
+   * of 1,111 rows. The wire has carried the field all along.
+   */
   done?: boolean | undefined;
+  /** Spawned under another chat — a worker, not a conversation. 964 of those
+   *  1,111 rows. See `recentTabs` for why they are not somewhere to go back
+   *  to. */
+  spawnedBy?: string | null | undefined;
   /** Layout leaves — how a content hit's `session.pane_id` finds its tab. */
   paneIds: string[];
 }
@@ -345,10 +356,36 @@ export function recentTabs(
   const limit = opts?.limit ?? RECENT_LIMIT;
   if (limit <= 0) return [];
   const exclude = opts?.exclude;
-  // WHERE YOU ALREADY ARE is not somewhere to go. Without this the cursor
-  // starts on the chat you opened the palette from, and the first Enter — the
-  // whole point of a keyboard switcher — does nothing at all.
-  const rows = tabs.filter((t) => !exclude || (t.tabId !== exclude && t.tabSlug !== exclude));
+  const rows = tabs.filter((t) => {
+    // WHERE YOU ALREADY ARE is not somewhere to go. Without this the cursor
+    // starts on the chat you opened the palette from, and the first Enter —
+    // the whole point of a keyboard switcher — does nothing at all.
+    if (exclude && (t.tabId === exclude || t.tabSlug === exclude)) return false;
+    // ── AND NEITHER IS A WORKER, OR A CHAT THAT IS OVER ─────────────────
+    //
+    // This list is "take me back to what I was doing", and the corpus it
+    // draws on is not that list: measured on the live cockpit, 1,111 rows, of
+    // which 1,091 are `done` and 964 are sub-chats. Ordering all of them by
+    // recency and taking eight is one `muxpad agent new` away from a switcher
+    // containing nothing but the workers you just spawned — a sub-chat's
+    // `last_user_at` is stamped at CREATION, so eight fresh ones take every
+    // slot.
+    //
+    // The band this replaced could not do that, and it is worth being precise
+    // about why rather than trusting that it cannot happen: its working set
+    // was fed by `TabActivity.touchTab`, which skips a sub-chat explicitly
+    // ("answering a worker is work inside a chat, not a choice to be in
+    // one"). That exclusion was load-bearing and it did not come across.
+    //
+    // A worker is also not a place you go back to: its result arrives in its
+    // parent's conversation, and its own chat is reachable from the parent's
+    // drawer and from `@`. A DONE chat is excluded for the plainer reason —
+    // the clock calls a chat done after four days untouched, which is the
+    // opposite of what you were just doing. Typing still finds both.
+    if (t.spawnedBy) return false;
+    if (t.done) return false;
+    return true;
+  });
   const out = [...rows];
   out.sort((a, b) => {
     const ta = touchedAt(a);
@@ -472,6 +509,11 @@ export function toSearchableTabs(groups: readonly WorkspaceTabs[]): SearchableTa
         pinned: t.pinned,
         lastActivityAt: t.last_activity_at,
         lastUserAt: t.last_user_at,
+        // BOTH OF THESE WERE ON THE WIRE AND DROPPED HERE. `done` left
+        // `SCORE.donePenalty` unreachable for every ⌘K query, and `spawned_by`
+        // left the recents list unable to tell a conversation from a worker.
+        done: t.done,
+        spawnedBy: t.spawned_by,
         paneIds: collectLayoutLeaves(t.layout),
       });
     }

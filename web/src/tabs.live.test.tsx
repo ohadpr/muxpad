@@ -346,7 +346,12 @@ describe('a pushed row does not reorder the list', () => {
     expect(listTabs).toHaveBeenCalledTimes(1);
   });
 
-  it('appends a new chat rather than ranking it in', async () => {
+  it('puts a new chat at the TOP, where the server puts it', async () => {
+    // Both halves append-ed, which agreed while the order was recency-sorted:
+    // a chat made a second ago led either way. Creation now places a new chat
+    // at the top of the unpinned block, so appending here would show it at
+    // the BOTTOM until the next poll and then let it jump. The convergence
+    // property test in server/tab-activity is what noticed.
     rows = [tab('b'), tab('a')];
     const mod = await import('./tabs');
     await mod.refreshTabs(WS);
@@ -354,12 +359,13 @@ describe('a pushed row does not reorder the list', () => {
     act(() => {
       mod.insertTabRow(WS, tab('zz', { last_activity_at: 9_999 }));
     });
-    expect(seen.map((t) => t.id)).toEqual(['b', 'a', 'zz']);
+    expect(seen.map((t) => t.id)).toEqual(['zz', 'b', 'a']);
   });
 
   it('keeps the pinned block contiguous, which the divider depends on', async () => {
     // NavTree draws the divider at `tabs.filter(t => t.pinned).length`, so a
-    // pinned row left in the middle puts it in the wrong place.
+    // pinned row left in the middle puts it in the wrong place. The new row
+    // leads its own block, because the insert prepends.
     rows = [tab('loose'), tab('p', { pinned: true })];
     const mod = await import('./tabs');
     await mod.refreshTabs(WS);
@@ -367,6 +373,6 @@ describe('a pushed row does not reorder the list', () => {
     act(() => {
       mod.insertTabRow(WS, tab('p2', { pinned: true }));
     });
-    expect(seen.map((t) => t.id)).toEqual(['p', 'p2', 'loose']);
+    expect(seen.map((t) => t.id)).toEqual(['p2', 'p', 'loose']);
   });
 });

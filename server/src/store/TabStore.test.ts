@@ -34,12 +34,36 @@ describe('TabStore', () => {
     expect(slugs.size).toBe(50);
   });
 
-  it('lists workspaces sorted by position', () => {
+  it('lists NEWEST FIRST, because a new chat goes to the top', () => {
+    // (The name said "workspaces" — this is TabStore and these are tabs.)
+    //
+    // Creation used to append (`MAX(position) + 1`), which was invisible while
+    // the sidebar re-sorted unpinned rows by recency: a chat made a second ago
+    // was the most recent thing and went to the top anyway. The order is the
+    // stored one now, so append put the chat you just made at the BOTTOM —
+    // measured live, fifteen rows below the "+" that made it, under one from
+    // May. Creation takes `MIN(position) - 1` instead.
     const a = store.create({ name: 'A', layout: 'pa', workspace_id: workspaceId });
     const b = store.create({ name: 'B', layout: 'pb', workspace_id: workspaceId });
-    const list = store.list();
-    // Insertion order = position order (a got 0, b got 1).
-    expect(list.map((w) => w.id)).toEqual([a.id, b.id]);
+    expect(store.list().map((w) => w.id)).toEqual([b.id, a.id]);
+  });
+
+  it('keeps putting each new chat above the last', () => {
+    const a = store.create({ name: 'A', layout: 'pa', workspace_id: workspaceId });
+    const b = store.create({ name: 'B', layout: 'pb', workspace_id: workspaceId });
+    const c = store.create({ name: 'C', layout: 'pc', workspace_id: workspaceId });
+    expect(store.list().map((w) => w.id)).toEqual([c.id, b.id, a.id]);
+  });
+
+  it('counts RETIRED rows out of the calculation, by not counting at all', () => {
+    // `MAX(position)` was computed over every tab in the workspace, retired
+    // ones included — about a thousand rows the sidebar does not show. A
+    // minimum has the same property and the opposite effect: a new chat is
+    // above them whatever they are.
+    const old = store.create({ name: 'old', layout: 'p1', workspace_id: workspaceId });
+    store.retire(old.id, 'archived');
+    const fresh = store.create({ name: 'fresh', layout: 'p2', workspace_id: workspaceId });
+    expect(store.list().map((w) => w.id)).toEqual([fresh.id, old.id]);
   });
 
   it('reorders workspaces', () => {
