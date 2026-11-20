@@ -115,6 +115,56 @@ describe('scripts/muxpad HTTP wrapper', () => {
     // session ended before this call's result was recorded"; the pane then
     // read `idle` as though it had finished; and a later `agent send` reported
     // success while delivering into the stranded session nobody was reading.
+    /**
+     * ── `status` ON A MACHINE THAT IS NOT THE CONTROL PLANE ───────────────
+     *
+     * Every liveness check in the wrapper is local: launchd, a pid file, a
+     * log. On a NODE all of them are legitimately empty and the old answer was
+     * a flat "muxpad: not running" — which a chat on the Trayo VM read as "the
+     * server is down", offering the user a `muxpad restart` (here: kills live
+     * panes, fixes nothing) and publishing its page to Netlify to get around
+     * it. A reachable API is the fact that settles it.
+     *
+     * `MUXPAD_DATA_DIR` off the default is what makes the local checks empty
+     * in this test — the same guard that stops a non-default instance asking
+     * launchctl about the default install's jobs.
+     */
+    it('does not call muxpad dead when the control plane is answering elsewhere', async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'muxpad-status-'));
+      try {
+        const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+          env: {
+            ...process.env,
+            MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+            MUXPAD_DATA_DIR: dataDir,
+          },
+          encoding: 'utf-8',
+        });
+        expect(stdout).not.toContain('muxpad: not running');
+        expect(stdout).toContain('no daemon on THIS machine');
+        expect(stdout).toContain(`control plane: http://127.0.0.1:${port}`);
+        // And it says what NOT to do, because that is what went wrong.
+        expect(stdout).toContain('would kill local work');
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('still says "not running" when nothing answers at all', async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'muxpad-status-'));
+      try {
+        const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+          // Port 1 is privileged and unbound: the probe fails fast.
+          env: { ...process.env, MUXPAD_API_URL: 'http://127.0.0.1:1', MUXPAD_DATA_DIR: dataDir },
+          encoding: 'utf-8',
+        });
+        expect(stdout).toContain('muxpad: not running');
+        expect(stdout).not.toContain('control plane:');
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
     it('answers --help on an HTTP subcommand instead of refusing it as a flag', async () => {
       const env = { ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}` };
       for (const sub of ['new', 'send', 'list', 'wait', 'transcript', 'respawn']) {

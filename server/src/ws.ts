@@ -134,6 +134,11 @@ const NOTIFY_BODY_MAX = 180;
 // or a runaway client / HTTP caller.
 const MAX_QUEUED_SENDS = 200;
 
+/** How soon after a relayed send a Stop still counts as having killed THAT
+ *  send rather than work the turn had already done. Generous: a turn that has
+ *  produced nothing in five seconds has produced nothing. */
+const STOP_ABANDON_WINDOW_MS = 5_000;
+
 /**
  * Hard bound on the SERVER's mirror of a pane's subagent roster. The runner
  * enforces its own cap (SubagentRoster.MAX_ROSTER_ENTRIES) — this is the
@@ -972,6 +977,11 @@ export function attachWsServer(deps: {
      * match on. The text is the one field both ends hold in every case.
      */
     pendingSendText: string | null;
+    /** Did the send named by {@link pendingSendText} come off the QUEUE?
+     *  Only for the abandonment log in `markStopped` — a drained message is
+     *  gone from the queue by the time its turn starts, so if that turn dies
+     *  at once there is nothing left anywhere that says what it was. */
+    lastSendWasQueued: boolean;
   }
   /**
    * The question a chat client should be showing: the oldest unanswered one,
@@ -1084,9 +1094,33 @@ export function attachWsServer(deps: {
    * `turn-start` arrives (a send relayed, stopped a beat later), and turn-start
    * clearing the flag unconditionally erased it. See the clear site.
    */
-  const markStopped = (conn: AgentRunnerConn): void => {
+  const markStopped = (paneId: string, conn: AgentRunnerConn): void => {
     conn.stoppedThisTurn = true;
     conn.stoppedAt = Date.now();
+    // ─── WHAT THE STOP TOOK WITH IT ────────────────────────────────────────
+    //
+    // A Stop inside the relay window kills a send that never produced a
+    // single frame, and for a message that came off the QUEUE that is the last
+    // copy: `drainQueue` removes the row before the turn starts, and the
+    // backend's stop empties its own pending list. The transcript keeps the
+    // prompt, but nothing in the chat, the log or the queue says the turn that
+    // was carrying it died 400ms old — which is exactly how a 2.4KB
+    // instruction to a remote chat vanished with the chat reading idle and
+    // everyone assuming it had been ignored.
+    //
+    // This does not try to decide whether the Stop MEANT that message: a
+    // person who sends and stops a beat later is a supported pattern, and
+    // re-queueing it would re-run something they just cancelled. It only
+    // refuses to let it go unrecorded.
+    const sinceSend = Date.now() - conn.lastSendAt;
+    if (conn.pendingSendText && sinceSend < STOP_ABANDON_WINDOW_MS) {
+      const head = conn.pendingSendText.replace(/\s+/g, ' ').slice(0, 140);
+      console.warn(
+        `[agent] pane ${paneId}: a Stop ${sinceSend}ms after the send abandoned ${
+          conn.lastSendWasQueued ? 'a QUEUED message (no copy left in the queue)' : 'a direct send'
+        } before its turn produced anything — "${head}${conn.pendingSendText.length > 140 ? '…' : ''}"`,
+      );
+    }
   };
   const staleRunner = (paneId: string): boolean => {
     const conn = agentRunners.get(paneId);
@@ -1208,14 +1242,16 @@ export function attachWsServer(deps: {
       if (!conn) return false;
       const sendInFlight = Date.now() - conn.lastSendAt < 15_000;
       if (!conn.turnActive && !sendInFlight) return false;
+      // markStopped FIRST: it reads the stamp to say what the Stop abandoned,
+      // and the clear below is what destroys the last copy of a drained one.
+      markStopped(paneId, conn);
       // A Stop ABANDONS the relayed send, exactly as the socket path does —
       // leaving the stamp on would let the next autonomous turn wear it.
       conn.pendingSendText = null;
-      // …and it is a Stop like any other. This path (`muxpad agent stop`, a
-      // cron, a supervisor) did not set the flag, so the Agent-mode voice
-      // synthesis still read out the scratchpad of a turn somebody stopped
-      // from the CLI. One rule, both doors.
-      markStopped(conn);
+      // (…and it is a Stop like any other. This path — `muxpad agent stop`, a
+      // cron, a supervisor — did not set the flag, so the Agent-mode voice
+      // synthesis used to read out the scratchpad of a turn somebody stopped
+      // from the CLI. One rule, both doors.)
       return sendToRunner(paneId, { t: 'stop' });
     };
     deps.agentBridge.blocked = (paneId) =>
@@ -1716,6 +1752,7 @@ export function attachWsServer(deps: {
       conn.turnActive = true;
       conn.lastSendAt = Date.now();
       conn.pendingSendText = next.text;
+      conn.lastSendWasQueued = true;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
       conn.turnFromCron = parseCronMarker(next.text) !== null;
       deps.cache.setAgentBusy(paneId, true);
@@ -1773,6 +1810,7 @@ export function attachWsServer(deps: {
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
+        conn.lastSendWasQueued = false;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
         conn.turnFromCron = parseCronMarker(t) !== null;
         // Same D14 mirroring as drainQueue: turn state, pane status and the
@@ -2127,6 +2165,7 @@ export function attachWsServer(deps: {
           turnFromCron: false,
           lastExplicitNotifyAt: 0,
           pendingSendText: null,
+          lastSendWasQueued: false,
         };
         agentRunners.set(paneId, conn);
         // THIS runner owns the pane's per-connection state from this instant,
@@ -3489,9 +3528,9 @@ export function attachWsServer(deps: {
               // stamp" is deliberate: an unstamped turn-start binds nothing,
               // which is silence; a wrongly stamped one speaks a cron's output
               // as the answer to the user's question.
+              // Before the clear, for the reason the other door gives.
+              markStopped(chatPaneId, conn);
               conn.pendingSendText = null;
-              // Silence is what Stop asks for — see `stoppedThisTurn`.
-              markStopped(conn);
               sendToRunner(chatPaneId, { t: 'stop' });
             } else {
               send({ t: 'turn-done', ok: true });

@@ -489,7 +489,34 @@ cmd_status() {
     echo "  log:  $LOG_FILE"
     echo "  data: $DATA_DIR"
   else
-    echo "muxpad: not running"
+    # ── "NOT RUNNING" IS THE WRONG ANSWER ON A NODE ───────────────────────
+    #
+    # Every check above is this machine's: launchd, a pid file, a log. On a
+    # machine that is a muxpad NODE — panes here, control plane somewhere
+    # else — all of them are legitimately empty, and the flat "not running"
+    # is read as "muxpad is broken". Measured consequence: a chat on the
+    # Trayo VM saw this, concluded the server was down, offered the user a
+    # `muxpad restart` (which here would kill live panes and fix nothing)
+    # and published its page to Netlify to get around it.
+    #
+    # So ASK THE API before answering. Any reachable control plane means the
+    # daemon is simply not this machine's to run. `/api/say/key` because it
+    # is cheap, needs no id, and is on the node funnel's allowlist — a path
+    # the funnel refuses would make a live node look dead again.
+    local cp=""
+    if [ -n "${MUXPAD_API_URL:-}" ]; then
+      curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
+        "${MUXPAD_API_URL%/}/api/say/key" 2>/dev/null | grep -q '^200$' && cp="$MUXPAD_API_URL"
+    fi
+    if [ -n "$cp" ]; then
+      echo "muxpad: no daemon on THIS machine — and none is wanted"
+      echo "  control plane: $cp (answering)"
+      echo "  this machine runs panes for it; \`muxpad start/restart\` here"
+      echo "  would kill local work and fix nothing."
+      echo "  data: $DATA_DIR"
+    else
+      echo "muxpad: not running"
+    fi
   fi
 
   # ptyd
@@ -507,8 +534,16 @@ cmd_status() {
     # instance. "muxpad: not running" under a path you did not expect is the
     # cheapest possible warning, and it is what makes the isolation checkable
     # without starting a daemon.
-    echo "ptyd: not running"
-    echo "  socket: $PTYD_SOCKET"
+    # Same shape of lie as above, one layer down: launchd and the pid file are
+    # how a MAC runs ptyd. On a node it is systemd, so both are empty while the
+    # daemon is up and serving — and the socket is the fact that settles it.
+    if [ -S "$PTYD_SOCKET" ]; then
+      echo "ptyd: running (not under launchd — systemd, or started by hand)"
+      echo "  socket: $PTYD_SOCKET"
+    else
+      echo "ptyd: not running"
+      echo "  socket: $PTYD_SOCKET"
+    fi
   fi
 }
 

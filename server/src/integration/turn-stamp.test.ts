@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { type ServerType, serve } from '@hono/node-server';
 import type { Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { createAgentBridge } from '../agent-bridge.js';
 import { EventBus } from '../events.js';
@@ -188,6 +188,72 @@ describe('turn-start correlation stamp', () => {
     runner.sock.send(JSON.stringify({ t: 'turn-start' }));
     await waitFor('the autonomous turn-start', () => count(chat.frames, 'turn-start') === 1);
     expect(starts(chat.frames).at(-1)).toEqual({ t: 'turn-start' });
+  });
+
+  /**
+   * ── A STOP THAT LANDS ON A FRESHLY DRAINED MESSAGE ──────────────────────
+   *
+   * Measured, on a chat on another machine: a turn had been parked on a
+   * question for 11 minutes with a message queued behind it; the turn ended,
+   * the queue drained, and 400ms later a Stop killed the new turn. The queue
+   * row was already deleted (drainQueue removes it before the turn starts) and
+   * the backend's stop empties its own pending list, so the only trace left
+   * anywhere was `[Request interrupted by user]` in a transcript on a machine
+   * whose history the server cannot read. The chat read idle, the sender
+   * assumed it had been ignored, and 2.4KB of instructions were simply gone.
+   *
+   * Recording it is the fix. Not re-queueing: send-then-Stop is a pattern
+   * people use on purpose, and a message that came back after they cancelled
+   * it would be worse than one that did not.
+   */
+  it('says what a Stop abandoned, naming the queue as the copy that is gone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { runner, chat } = await wired('sid-stamp-abandon');
+      // A turn is running, so the send can only queue.
+      runner.sock.send(JSON.stringify({ t: 'turn-start' }));
+      await waitFor('the turn to be live', () => count(chat.frames, 'turn-start') === 1);
+      chat.sock.send(
+        JSON.stringify({ t: 'send', text: 'learn muxpad publish, then publish the page' }),
+      );
+      await waitFor('the queue bubble', () => count(chat.frames, 'queue') >= 1);
+      expect(count(runner.frames, 'send')).toBe(0); // queued, not relayed
+
+      // The turn ends; the drain relays it and deletes the queue row.
+      runner.sock.send(JSON.stringify({ t: 'turn-done', ok: true }));
+      await waitFor('the drained send', () => count(runner.frames, 'send') === 1);
+
+      chat.sock.send(JSON.stringify({ t: 'stop' }));
+      await waitFor('the stop to reach the runner', () => count(runner.frames, 'stop') === 1);
+      await waitFor('the abandonment to be recorded', () =>
+        warn.mock.calls.some((c) => String(c[0]).includes('abandoned')),
+      );
+
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes('abandoned'))!;
+      expect(line).toContain('QUEUED message (no copy left in the queue)');
+      expect(line).toContain('learn muxpad publish, then publish the page');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('calls a stopped DIRECT send what it is — the queue never had it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { runner, chat } = await wired('sid-stamp-abandon-direct');
+      chat.sock.send(JSON.stringify({ t: 'send', text: 'summarise the diff' }));
+      await waitFor('the send to reach the runner', () => count(runner.frames, 'send') === 1);
+      chat.sock.send(JSON.stringify({ t: 'stop' }));
+      await waitFor('the stop to reach the runner', () => count(runner.frames, 'stop') === 1);
+      await waitFor('the abandonment to be recorded', () =>
+        warn.mock.calls.some((c) => String(c[0]).includes('abandoned')),
+      );
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes('abandoned'))!;
+      expect(line).toContain('a direct send');
+      expect(line).not.toContain('QUEUED');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   // A fourth case — a runner DYING mid-send — is deliberately not tested here.
