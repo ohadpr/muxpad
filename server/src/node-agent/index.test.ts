@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { GENERATED_BANNER } from '../agent-files.js';
 import {
@@ -17,6 +17,15 @@ import {
 } from './index.js';
 
 const TOKEN = 'a'.repeat(64);
+/**
+ * A data dir for the boots that do not care about one.
+ *
+ * `dataDir` DEFAULTS to the real ~/.muxpad, and a node writes its generated
+ * prompt files there at boot — so a test that omits it rewrites the user's
+ * live instructions. `archive: false` exists for exactly the same reason.
+ */
+const scratch = mkdtempSync(join(tmpdir(), 'muxpad-node-scratch-'));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 let stop: (() => void) | null = null;
 let dir: string | null = null;
 afterEach(() => {
@@ -110,6 +119,7 @@ describe('the front door', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     expect((await upgrade(p, '/control')).ok).toBe(false);
@@ -123,6 +133,7 @@ describe('the front door', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     expect((await upgrade(p, '/control', 'b'.repeat(64))).ok).toBe(false);
@@ -138,6 +149,7 @@ describe('the front door', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     expect((await upgrade(p, '/api/panes', TOKEN)).ok).toBe(false);
@@ -164,6 +176,7 @@ describe('the front door', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     const r = await fetch(`http://127.0.0.1:${p}/health`);
@@ -179,6 +192,7 @@ describe('the front door', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     expect((await fetch(`http://127.0.0.1:${p}/self`)).status).toBe(404);
@@ -280,6 +294,7 @@ describe('who may use the API funnel', () => {
       token: TOKEN,
       log: () => {},
       archive: false,
+      dataDir: scratch,
     });
     stop = a.close;
     const res = await fetch(`http://127.0.0.1:${p}/api/say/key`);
