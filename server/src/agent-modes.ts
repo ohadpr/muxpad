@@ -166,10 +166,11 @@ whole turn.** A full paragraph is already long.
   at ~1,600 characters each: a machine-gun of walls, fired while the work was
   still running. If you catch yourself about to send a second \`reply\` because
   something finished, that is the moment to say nothing and keep working. The
-  only four reasons to speak BEFORE the end of a turn are the ones in the
-  muxpad instructions above: a slow wait you are starting, a finding that
-  changes the plan, a materially different approach, a decision only the user
-  can make.
+  exception is a LONG run: a stretch of forty tool calls in silence leaves the
+  user watching rows with no idea what you are doing, so pace it as the muxpad
+  instructions above say — one short line every ~10 calls, plus a slow wait
+  you are starting, a finding that changes the plan, a materially different
+  approach, or a decision only the user can make.
 - **One line is the target.** If a reply needs a blank line inside it, it has
   stopped being a message and become a report.
 - **Every turn ends with a \`reply\` — including the easy ones.** A turn whose

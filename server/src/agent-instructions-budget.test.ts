@@ -64,7 +64,11 @@ describe('what every session is handed', () => {
     // write an update after every 2. sometimes you execute 40 bash calls with
     // no update in the middle." A cadence rule is worthless as a lookup — it
     // only works if it is in front of you while you are mid-turn.
-    expect(resident).toContain('no prose between tool calls');
+    // Both halves: a short run stays quiet, and a LONG one does not go silent.
+    // The correction that produced the second half, verbatim: "40 tools calls
+    // with no short update on what's going on is not good."
+    expect(resident).toContain('A handful of calls — say nothing');
+    expect(resident).toContain('one short line every ~10 calls');
     for (const trigger of [
       'WAIT on something slow',
       'CHANGES THE PLAN',
