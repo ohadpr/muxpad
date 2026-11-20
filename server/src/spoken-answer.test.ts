@@ -83,10 +83,12 @@ describe('what the server refuses to speak', () => {
     // `agentBridge.stop` is what `muxpad agent stop`, a cron and a supervisor
     // use. It did not set the flag, so a turn stopped from the CLI still had
     // its working-out read aloud.
-    const marks = WS.match(/markStopped\(conn\)/g) ?? [];
+    // It takes the pane id too (the abandonment log names the pane), so match
+    // the call rather than one exact argument list.
+    const marks = WS.match(/markStopped\([^)]*conn\)/g) ?? [];
     expect(marks.length).toBeGreaterThanOrEqual(2);
     const bridge = WS.slice(WS.indexOf('deps.agentBridge.stop = '));
-    expect(bridge.slice(0, bridge.indexOf('};'))).toContain('markStopped(conn)');
+    expect(bridge.slice(0, bridge.indexOf('};'))).toMatch(/markStopped\([^)]*conn\)/);
   });
 
   it('does not let turn-start erase a Stop that beat it', () => {

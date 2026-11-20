@@ -503,10 +503,23 @@ cmd_status() {
     # daemon is simply not this machine's to run. `/api/say/key` because it
     # is cheap, needs no id, and is on the node funnel's allowlist — a path
     # the funnel refuses would make a live node look dead again.
+    # TWO probes, because "an API answers" is not the question.
+    #
+    # Pointing MUXPAD_API_URL at the default install while running an isolated
+    # data dir ALSO reaches a server, and there "no daemon is wanted" would be
+    # the opposite of true — that instance is the user's to start. What marks a
+    # NODE is that its /api is a FUNNEL: an allowlist on the control plane,
+    # which forwards `/api/say/key` and refuses `/api/health`. A direct server
+    # answers both, so health-refused-but-say-key-fine is the discriminator,
+    # and neither probe needs an id or a pane.
     local cp=""
     if [ -n "${MUXPAD_API_URL:-}" ]; then
-      curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
-        "${MUXPAD_API_URL%/}/api/say/key" 2>/dev/null | grep -q '^200$' && cp="$MUXPAD_API_URL"
+      local direct funnelled
+      direct="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
+        "${MUXPAD_API_URL%/}/api/health" 2>/dev/null || true)"
+      funnelled="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' \
+        "${MUXPAD_API_URL%/}/api/say/key" 2>/dev/null || true)"
+      [ "$direct" != "200" ] && [ "$funnelled" = "200" ] && cp="$MUXPAD_API_URL"
     fi
     if [ -n "$cp" ]; then
       echo "muxpad: no daemon on THIS machine — and none is wanted"

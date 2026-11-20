@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { join } from 'node:path';
@@ -131,6 +132,47 @@ describe('scripts/muxpad HTTP wrapper', () => {
      */
     it('does not call muxpad dead when the control plane is answering elsewhere', async () => {
       const dataDir = mkdtempSync(join(tmpdir(), 'muxpad-status-'));
+      // A stand-in for muxpad-node's /api funnel: it forwards what the
+      // control plane's allowlist allows (`/api/say/key`) and answers
+      // everything else with its own 404 — including `/api/health`, which is
+      // what tells the wrapper it is not talking to a server directly.
+      const funnel = createServer((req, res) => {
+        if (req.url === '/api/say/key') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ key: 'k' }));
+          return;
+        }
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+      });
+      await new Promise<void>((r) => funnel.listen(0, '127.0.0.1', () => r()));
+      const funnelPort = (funnel.address() as { port: number }).port;
+      try {
+        const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
+          env: {
+            ...process.env,
+            MUXPAD_API_URL: `http://127.0.0.1:${funnelPort}`,
+            MUXPAD_DATA_DIR: dataDir,
+          },
+          encoding: 'utf-8',
+        });
+        expect(stdout).not.toContain('muxpad: not running');
+        expect(stdout).toContain('no daemon on THIS machine');
+        expect(stdout).toContain(`control plane: http://127.0.0.1:${funnelPort}`);
+        // And it says what NOT to do, because that is what went wrong.
+        expect(stdout).toContain('would kill local work');
+      } finally {
+        await new Promise<void>((r) => funnel.close(() => r()));
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('still says "not running" when the API is a SERVER, not a node funnel', async () => {
+      // An isolated instance pointed at the default install reaches a real
+      // server, and there "no daemon is wanted" is the opposite of true — that
+      // instance is the user's to start. `/api/health` answering is what tells
+      // the two apart.
+      const dataDir = mkdtempSync(join(tmpdir(), 'muxpad-status-'));
       try {
         const { stdout } = await execFileAsync(MUXPAD_BIN, ['status'], {
           env: {
@@ -140,11 +182,8 @@ describe('scripts/muxpad HTTP wrapper', () => {
           },
           encoding: 'utf-8',
         });
-        expect(stdout).not.toContain('muxpad: not running');
-        expect(stdout).toContain('no daemon on THIS machine');
-        expect(stdout).toContain(`control plane: http://127.0.0.1:${port}`);
-        // And it says what NOT to do, because that is what went wrong.
-        expect(stdout).toContain('would kill local work');
+        expect(stdout).toContain('muxpad: not running');
+        expect(stdout).not.toContain('control plane:');
       } finally {
         rmSync(dataDir, { recursive: true, force: true });
       }
