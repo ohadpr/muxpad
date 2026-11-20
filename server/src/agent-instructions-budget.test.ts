@@ -59,6 +59,21 @@ describe('what every session is handed', () => {
     expect(INSTRUCTION_TOPICS.publish).toContain('no agent deciding');
   });
 
+  it('keeps the mid-turn update rule resident, because it governs every turn', () => {
+    // The complaint, in the owner's words: "sometimes you do 10 bash calls and
+    // write an update after every 2. sometimes you execute 40 bash calls with
+    // no update in the middle." A cadence rule is worthless as a lookup — it
+    // only works if it is in front of you while you are mid-turn.
+    expect(resident).toContain('no prose between tool calls');
+    for (const trigger of [
+      'WAIT on something slow',
+      'CHANGES THE PLAN',
+      'DIFFERENT approach',
+      'DECISION only they can make',
+    ])
+      expect(resident, `trigger "${trigger}" is missing`).toContain(trigger);
+  });
+
   it('moved the manual rather than deleting it', () => {
     // Each page is still the text it was. These are the load-bearing lines of
     // four different topics; if a move quietly dropped one, this fails.
