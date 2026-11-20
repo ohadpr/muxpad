@@ -206,24 +206,38 @@ export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
   prints a PUBLIC internet URL. Use \`--name=<slug>\` for a stable
   re-publishable URL; \`muxpad publish --rm <slug>\` takes one down.
 
-  **WHEN TO PUBLISH WITHOUT ASKING: when the thing you are publishing is the
-  thing they ASKED YOU TO MAKE.** "Build me a page / a report / a dashboard /
-  a chart / a demo" means publish it and hand back the url. Do NOT hand over a
-  local file to open, and do NOT reach for an app or a tailnet address — those
-  are a different feature for a different purpose. A viewable artifact somebody
-  asked for is published, and the url IS the deliverable. Same for the words
-  "publish", "host", "share" and "link".
+  **MADE SOMETHING TO LOOK AT? PUBLISH IT AND HAND BACK THE URL. ALWAYS.**
+  A page, a report, a dashboard, a chart, a comparison, a map of something — if
+  the deliverable is a thing they will LOOK AT rather than read as chat text,
+  it is published and the url is the answer.
 
-  **WHEN TO ASK FIRST: everything else.** The rule above is NOT "publish
-  whatever you happen to produce". A screenshot, a log, a transcript, a dump of
-  a database, a page you built to debug something, a file you read off this
-  machine — none of those were asked for as a public artifact, and this host
-  has no login. Publishing one is the standing rule's "outward-facing" case,
-  so it gets the standing rule's answer: say what it is and ask.
+  Do NOT hand over a local file path. Do NOT build a server by hand: no picking
+  a port, no \`python3 -m http.server\`, no registering an app. That is what this
+  verb is for, and doing it by hand is four decisions nobody asked you to make.
 
-  The line between them is the REQUEST, not the file type. "Make me a page
-  about X" → publish it. "What is in this screenshot" → the screenshot is
-  evidence for a conversation, not something to put on the internet.
+  **IT IS A SITUATION, NOT A LIST OF WORDS.** It does not matter whether they
+  said "publish", "host", "share", "link", "make me a page", or just described
+  what they wanted. The trigger is that you produced something viewable. Asking
+  for the same thing in different words must not produce a different outcome —
+  that is the exact complaint this rule was rewritten for.
+
+  **AND IT IS NOT YOURS TO SECOND-GUESS.** The owner's instruction, verbatim:
+  *"always public, security by obscurity. no private links, no agent deciding
+  not to publish something."* A slug carries 8 random characters on a host with
+  no index and no listing, and that is the privacy model he has chosen. An
+  agent that decides his data is too sensitive to put behind an unguessable url
+  hands him a file path instead — which is what happened, and what he was
+  complaining about.
+
+  So: no refusing on sensitivity grounds, no offering an alternative, no asking
+  whether he is sure. He asked to see the thing; give him the link.
+
+  **WHAT IS NOT AN ARTIFACT AT ALL.** This is not "publish everything you
+  happen to produce". A screenshot you took as evidence, a log you read, a
+  transcript, a database dump, a page you built to debug your own work —
+  nobody asked for those as a thing to look at, and hosting one is work with
+  no reader. The line is whether it is the DELIVERABLE, never how sensitive
+  its contents look.
 
   **THE SLUG IS NOT THE NAME YOU ASKED FOR, AND THE LINK EXPIRES IN 7 DAYS.**
   Two things about this domain decide how you must treat it: it is the OPEN
