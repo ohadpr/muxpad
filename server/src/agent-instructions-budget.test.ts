@@ -45,6 +45,20 @@ describe('what every session is handed', () => {
     expect(resident).toContain('muxpad help <topic>');
   });
 
+  it('keeps the publish TRIGGER resident, because a deferred trigger never fires', () => {
+    // The failure this is pinned against, in the owner's words: "again failing
+    // to produce an artifact". `publish`'s manual had moved to a help page and
+    // the rule that says WHEN to publish went with it — so an agent that never
+    // thought to read the page handed back a local file path and hand-rolled a
+    // `python3 -m http.server`. A trigger is not a flag reference: it has to be
+    // in the text every session already has.
+    expect(resident).toContain('IT, HAND BACK THE URL');
+    expect(resident).toContain('not yours to second-guess');
+    expect(resident).toContain('not a hand-rolled server');
+    // The owner's verbatim instruction stays in the page the bullet points at.
+    expect(INSTRUCTION_TOPICS.publish).toContain('no agent deciding');
+  });
+
   it('moved the manual rather than deleting it', () => {
     // Each page is still the text it was. These are the load-bearing lines of
     // four different topics; if a move quietly dropped one, this fails.

@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
+import { GENERATED_BANNER } from '../agent-files.js';
 import {
   DEFAULT_NODE_PORT,
   defaultShell,
@@ -283,5 +284,60 @@ describe('who may use the API funnel', () => {
     stop = a.close;
     const res = await fetch(`http://127.0.0.1:${p}/api/say/key`);
     expect(res.status).toBe(503);
+  });
+});
+
+/**
+ * ── THE PROMPT FILES BELONG TO THE MACHINE THE AGENT RUNS ON ─────────────
+ *
+ * A remote pane's runner is a process on THIS host and reads this host's data
+ * dir. Only the main server used to write agent-instructions.md, and a missing
+ * one contributes nothing without complaining — so every chat on a node ran
+ * with no muxpad instructions and no Chat mode contract, and the way that
+ * showed up was a chat handing back a local file path instead of publishing.
+ */
+describe('a node seeds its own agent instructions', () => {
+  const boot = async (dataDir: string) => {
+    const a = await startNodeAgent({
+      port: port(),
+      host: '127.0.0.1',
+      token: TOKEN,
+      log: () => {},
+      archive: false,
+      dataDir,
+    });
+    stop = a.close;
+  };
+
+  it('writes the generated files at boot, with the rules a pane needs in them', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-node-'));
+    await boot(dir);
+
+    const instructions = readFileSync(join(dir, 'agent-instructions.md'), 'utf8');
+    // Not a hash check: the three rules a remote chat was observed to be
+    // missing. `publish` is the one that sent the user here.
+    expect(instructions).toContain('muxpad publish');
+    expect(instructions).toContain('muxpad cron');
+    expect(instructions).toContain('muxpad agent new');
+    expect(instructions).toContain(GENERATED_BANNER);
+    // Chat mode rides the same lifecycle; without it a pane marked `chat` got
+    // no contract at all.
+    expect(readFileSync(join(dir, 'chat-mode.md'), 'utf8')).toContain(GENERATED_BANNER);
+    // And `muxpad help` reads from disk, so it was blank here too.
+    expect(existsSync(join(dir, 'help'))).toBe(true);
+    // The user's own file is created once, empty of muxpad's text.
+    expect(readFileSync(join(dir, 'agent-notes.md'), 'utf8')).toContain('muxpad creates this file');
+  });
+
+  it('rewrites the generated file but never the user’s notes', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'muxpad-node-'));
+    writeFileSync(join(dir, 'agent-instructions.md'), 'stale text from an older build');
+    writeFileSync(join(dir, 'agent-notes.md'), 'the VM: repos live in ~/work');
+    await boot(dir);
+
+    // Generated: tracks this build, so upgrading the node is enough.
+    expect(readFileSync(join(dir, 'agent-instructions.md'), 'utf8')).not.toContain('stale text');
+    // The user's: untouched, forever.
+    expect(readFileSync(join(dir, 'agent-notes.md'), 'utf8')).toBe('the VM: repos live in ~/work');
   });
 });

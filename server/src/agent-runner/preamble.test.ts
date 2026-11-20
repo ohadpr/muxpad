@@ -59,8 +59,21 @@ describe('turnPreamble', () => {
   it('is cheap enough to send on every turn', () => {
     // The full document is ~33 KB. Re-sending THAT per turn would pay for the
     // rules in exactly the context pressure that lost them.
-    expect(STANDING_RULES.length).toBeLessThan(2500);
+    //
+    // Raised 2,500 → 2,700 on 2026-11-19, deliberately, for ONE bullet: the
+    // publish TRIGGER. It had been left in the help page when the manual moved
+    // out, and an agent that never thought to read that page handed back a
+    // local file path and hand-rolled an http.server instead — twice, in two
+    // different chats. +223 chars (~56 tokens) a turn is the cheapest fix
+    // there is for a rule that only works if it is already in front of you.
+    expect(STANDING_RULES.length).toBeLessThan(2700);
     expect(STANDING_RULES.length).toBeGreaterThan(400);
+  });
+
+  it('carries the publish trigger, not just a reference to the verb', () => {
+    // Naming `muxpad publish` is not the rule; knowing WHEN is.
+    expect(STANDING_RULES).toContain('IT, HAND BACK THE URL');
+    expect(STANDING_RULES).toContain('not a hand-rolled server');
   });
 
   it('appends a mode overlay after the rules, not before', () => {

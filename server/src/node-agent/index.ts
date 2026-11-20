@@ -4,6 +4,9 @@ import { createServer } from 'node:http';
 import { arch, cpus, homedir, platform, totalmem, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
+import { ensureAgentNotes } from '../agent-files.js';
+import { seedAgentInstructions } from '../agent-instructions.js';
+import { retireLegacyChatModeFile, seedChatMode } from '../agent-modes.js';
 import { ArchiveDb } from '../archive/ArchiveDb.js';
 import { Archiver } from '../archive/Archiver.js';
 import {
@@ -210,6 +213,32 @@ export async function startNodeAgent(opts: NodeAgentOptions): Promise<{ close: (
     opts.ptydSocket ?? process.env.MUXPAD_PTYD_SOCKET ?? join(homedir(), '.muxpad', 'ptyd.sock');
   const log = opts.log ?? ((l: string) => console.log(l));
   const dataDir = opts.dataDir ?? process.env.MUXPAD_DATA_DIR ?? join(homedir(), '.muxpad');
+
+  // ── THIS MACHINE'S OWN PROMPT FILES ─────────────────────────────────────
+  //
+  // An agent in a pane on this host reads <dataDir>/agent-instructions.md,
+  // chat-mode.md and agent-notes.md from THIS machine's data dir — the runner
+  // is a process here, so the mac's copies are not even on the filesystem it
+  // can see. Only the main server used to write them, and a missing file
+  // silently contributes nothing (readAgentInstructions swallows ENOENT), so
+  // every remote chat ran with NO muxpad instructions at all and no Chat mode
+  // contract: it had never heard of `muxpad publish`, `muxpad cron` or the
+  // delegation rules, and the symptom was a chat that handed back a local
+  // file path instead of a hosted link with nothing anywhere explaining why.
+  //
+  // Generated exactly as on the server: rewritten from THIS build on every
+  // boot, so a node that is upgraded gets the new text without a step anyone
+  // has to remember. `seedAgentInstructions` also writes the `muxpad help`
+  // pages, which were missing here for the same reason.
+  //
+  // What is NOT done here is migrateAgentFileEdits: the rescue of a
+  // user-owned copy from before these files were generated needs the server's
+  // database, and there was never a user-owned copy on a node — the files have
+  // never existed here. `ensureAgentNotes` still never touches an existing one.
+  seedAgentInstructions(dataDir);
+  seedChatMode(dataDir);
+  retireLegacyChatModeFile(dataDir);
+  ensureAgentNotes(dataDir);
 
   // ── THIS MACHINE'S OWN ARCHIVE ──────────────────────────────────────────
   //
