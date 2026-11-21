@@ -355,7 +355,11 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     const tab = db.prepare('SELECT * FROM tabs WHERE id = ?').get('t1') as Record<string, unknown>;
     expect(tab.name).toBe('My Tab');
     expect(tab.slug).toBe('tslug');
-    expect(tab.position).toBe(3);
+    // NOT 3 any more: v59 rewrites every workspace's positions once, dense
+    // from 0, so the sidebar stops reading oldest-first. The row is the only
+    // one in `w1`, so it lands at 0. That is a later step doing its job, not
+    // data lost in this one — everything else here is still verbatim.
+    expect(tab.position).toBe(0);
     // Defaults land on the pre-existing row: pinned 0 (auto-sorted block),
     // last_activity_at NULL (never observed — deliberately not backfilled).
     expect(tab.pinned).toBe(0);
@@ -569,7 +573,7 @@ describe('migrations v21 — agent modes + the living sidebar', () => {
     expect(v.version).toBe(LATEST_SCHEMA_VERSION);
     // Bumped with the migration that adds it, deliberately: a number that
     // tracks the list automatically would make this assertion say nothing.
-    expect(LATEST_SCHEMA_VERSION).toBe(58);
+    expect(LATEST_SCHEMA_VERSION).toBe(59);
   });
 
   /**
@@ -1689,5 +1693,87 @@ describe('migration 42 — a cron declares where its OUTPUT goes', () => {
     runMigrations(db);
     const row = db.prepare('SELECT card FROM crons WHERE id = ?').get('c1') as { card: unknown };
     expect(row.card).toBeNull();
+  });
+});
+
+describe('v59 — the backlog that was left oldest-first', () => {
+  /** A pre-v59 database with rows in APPEND order, the way creation wrote them
+   *  before `MIN(position) - 1`: position ascending, oldest first. */
+  const seeded = () => {
+    const db = new Database(':memory:');
+    runMigrations(db, { upTo: 58 });
+    const ws = db.prepare(
+      'INSERT INTO workspaces (id, slug, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    ws.run('wsA', 'a', 'A', 0, 0, 0);
+    ws.run('wsB', 'b', 'B', 1, 0, 0);
+    const tab = db.prepare(
+      'INSERT INTO tabs (id, slug, name, layout, workspace_id, position, created_at, updated_at, pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    // workspace A: two pinned rows the user arranged BY HAND (second one
+    // older, so "newest first" would reverse them if it touched them), then
+    // three unpinned in append order.
+    // Positions are SPARSE and partly negative, like the live install: 1,146
+    // appended rows at 0…1126 with the post-fix ones counting down below zero.
+    // A rewrite that merely re-sorts without re-numbering would leave them.
+    tab.run('pin-b', 's1', 'Pinned B', '"p"', 'wsA', 40, 5_000, 0, 1);
+    tab.run('pin-a', 's2', 'Pinned A', '"p"', 'wsA', 41, 1_000, 0, 1);
+    tab.run('old', 's3', 'oldest', '"p"', 'wsA', 42, 1_000, 0, 0);
+    tab.run('mid', 's4', 'middle', '"p"', 'wsA', 99, 2_000, 0, 0);
+    tab.run('new', 's5', 'newest', '"p"', 'wsA', -3, 3_000, 0, 0);
+    // workspace B exists to prove the rewrite is per-workspace: its own dense
+    // range, not a continuation of A's.
+    tab.run('b-old', 's6', 'B oldest', '"p"', 'wsB', 7, 1_000, 0, 0);
+    tab.run('b-new', 's7', 'B newest', '"p"', 'wsB', 8, 9_000, 0, 0);
+    return db;
+  };
+  const order = (db: Database.Database, ws: string) =>
+    (
+      db
+        .prepare('SELECT id FROM tabs WHERE workspace_id = ? ORDER BY position ASC, id ASC')
+        .all(ws) as Array<{ id: string }>
+    ).map((r) => r.id);
+
+  it('puts the newest chat at the top and leaves the pinned block alone', () => {
+    const db = seeded();
+    runMigrations(db);
+    // Pinned keep their MANUAL order (B before A, as positioned), and stay in
+    // front — `sortSidebarTabs` draws its divider at the count of them.
+    expect(order(db, 'wsA')).toEqual(['pin-b', 'pin-a', 'new', 'mid', 'old']);
+  });
+
+  it('is dense from zero, so the NEXT created chat still lands on top', () => {
+    // The creation rule is `MIN(position) - 1`. That only keeps working if the
+    // rewrite leaves 0 as the smallest position in the workspace.
+    const db = seeded();
+    runMigrations(db);
+    const min = db
+      .prepare('SELECT MIN(position) AS m FROM tabs WHERE workspace_id = ?')
+      .get('wsA') as { m: number };
+    expect(min.m).toBe(0);
+    const positions = (
+      db
+        .prepare('SELECT position FROM tabs WHERE workspace_id = ? ORDER BY position')
+        .all('wsA') as Array<{ position: number }>
+    ).map((r) => r.position);
+    expect(positions).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('numbers each workspace on its own, not as one global list', () => {
+    const db = seeded();
+    runMigrations(db);
+    expect(order(db, 'wsB')).toEqual(['b-new', 'b-old']);
+    const b = db
+      .prepare('SELECT MIN(position) AS lo, MAX(position) AS hi FROM tabs WHERE workspace_id = ?')
+      .get('wsB') as { lo: number; hi: number };
+    expect([b.lo, b.hi]).toEqual([0, 1]);
+  });
+
+  it('runs once — a second pass over the migrated rows changes nothing', () => {
+    const db = seeded();
+    runMigrations(db);
+    const first = order(db, 'wsA');
+    runMigrations(db);
+    expect(order(db, 'wsA')).toEqual(first);
   });
 });

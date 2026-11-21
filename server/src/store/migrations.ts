@@ -1932,6 +1932,57 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // ── THE BACKLOG WAS LEFT OLDEST-FIRST ──────────────────────────────────
+    //
+    // Creation used to be `MAX(position) + 1` — append — which put every new
+    // chat at the BOTTOM of a list people read from the top. That was fixed to
+    // `MIN(position) - 1` (TabStore.create), but only FORWARD: on this install
+    // the 1,146 rows that predate the fix still sit in append order, so the
+    // sidebar reads 2026-05 at the top and today's work 1,100 rows down, and
+    // the two halves of the list disagree about which way time runs.
+    //
+    // One rewrite, once, per workspace:
+    //
+    //   · PINNED rows keep their manual order and stay at the front. They are
+    //     the one block the user arranged by hand, and `sortSidebarTabs` draws
+    //     its divider at the count of them, so they have to stay contiguous.
+    //   · everything else goes NEWEST-FIRST by creation — the same order the
+    //     creation rule produces from now on, so the join between old and new
+    //     rows is invisible instead of being a reversal in the middle.
+    //
+    // Creation, not activity: the stable-order work deliberately took recency
+    // OUT of the sidebar (shared/src/tab-order.ts has the measurements), and
+    // ⌘K is where "what was I just doing" lives now. A backfill that ordered
+    // by last touch would be reintroducing the key that file exists to remove.
+    //
+    // Dense from 0 up, so the next created chat lands at -1 and the invariant
+    // continues. Nothing is hidden or deleted: a retired chat keeps its place
+    // in the collapsed section it was already in.
+    version: 59,
+    apply: (db) => {
+      const workspaces = db
+        .prepare('SELECT DISTINCT workspace_id AS id FROM tabs')
+        .all() as Array<{ id: string }>;
+      const setPos = db.prepare('UPDATE tabs SET position = ? WHERE id = ?');
+      for (const ws of workspaces) {
+        // The published read order (TabStore.listByWorkspace) for the pinned
+        // half, so a hand-arranged block comes out exactly as it went in, and
+        // created_at DESC for the rest.
+        const rows = db
+          .prepare(
+            `SELECT id FROM tabs WHERE workspace_id = ?
+             ORDER BY pinned DESC,
+                      CASE WHEN pinned = 1 THEN position END ASC,
+                      CASE WHEN pinned = 1 THEN created_at END ASC,
+                      CASE WHEN pinned = 0 THEN created_at END DESC,
+                      id ASC`,
+          )
+          .all(ws.id) as Array<{ id: string }>;
+        rows.forEach((r, i) => setPos.run(i, r.id));
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the
