@@ -266,9 +266,17 @@ describe('muxpad cron e2e (isolated instance, fake runner)', { timeout: 30_000 }
     expect(queued.runs[0]?.outcome).toBe('queued');
 
     // The turn ends → the queue drains → now it arrives.
+    //
+    // WAITED FOR, NOT SLEPT ON. This was `settle()` — a flat 250ms — and the
+    // drain is three hops away from `endTurn`: the frame crosses the socket,
+    // turn-done clears `turnActive`, drainQueue relays, and the `send` crosses
+    // back. Measured: it failed on an idle machine twice running, passed when
+    // a `console.warn` was added inside drainQueue, and passed in a suite run
+    // where other files held the event loop differently. That is a test
+    // measuring the machine's mood, and this file's own header says fixed
+    // sleeps are the thing it replaced with `until()`.
     runner.endTurn();
-    await settle();
-    expect(runner.sends()).toHaveLength(2);
+    await until('the queued fire to reach the runner', async () => runner.sends().length === 2);
     expect(runner.sends()[1]?.text).toContain('sweep the PRs');
     runner.endTurn();
     await settle();
