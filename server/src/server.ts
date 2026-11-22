@@ -44,6 +44,7 @@ import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { connectorRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
+import { tasksRoutes } from './routes/tasks.js';
 import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
@@ -402,6 +403,7 @@ export function createApp(deps: AppDeps): Hono {
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
   // because a card belongs to a chat; see routes/cards.ts.
   app.route('/api/tabs', cardsRoutes(resolved));
+  app.route('/api/tabs', tasksRoutes({ db: resolved.db }));
   app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', chatActionsRoutes(resolved));

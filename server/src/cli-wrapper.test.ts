@@ -1132,4 +1132,94 @@ exit 0`);
       ).rejects.toMatchObject({ code: 1 });
     });
   });
+  /**
+   * ── `muxpad task`, THROUGH THE BASH ──────────────────────────────────────
+   *
+   * The e2e in integration/task.test.ts drives the HTTP routes directly, so it
+   * proves the server and proves nothing about the 130 lines of shell in front
+   * of it. These run the real script against the real routes: the verbs an agent
+   * will actually type, including the two refusals that matter.
+   */
+  describe('muxpad task — the CLI an agent uses to declare one', () => {
+    const env = (tabId: string) => ({
+      ...process.env,
+      MUXPAD_API_URL: `http://127.0.0.1:${port}`,
+      MUXPAD_TAB_ID: tabId,
+    });
+    const freshTab = () =>
+      tabs.create({
+        name: 'T',
+        layout: 'p1',
+        workspace_id: workspaces.create({ name: `ws-task-${Math.random()}` }).id,
+      }).id;
+    const run = (tabId: string, args: string[]) =>
+      execFileAsync(MUXPAD_BIN, args, { env: env(tabId), encoding: 'utf-8' });
+
+    it('declares, shows, advances and finishes a task', async () => {
+      const tabId = freshTab();
+      const created = await run(tabId, [
+        'task',
+        'new',
+        'ship the sidebar fix',
+        '--done=the suite is green',
+        '--next=run the migration against a copy',
+      ]);
+      expect(created.stdout).toContain('open');
+      const id = created.stdout.match(/task (\w+)/)?.[1] as string;
+      expect(id).toBeTruthy();
+
+      const shown = await run(tabId, ['task', 'show']);
+      expect(shown.stdout).toContain('ship the sidebar fix');
+      expect(shown.stdout).toContain('the suite is green');
+      expect(shown.stdout).toContain('run the migration against a copy');
+      expect(shown.stdout).toContain('handed back: 0 time(s)');
+
+      await run(tabId, ['task', 'next', id, 'verified on a copy; now the tests']);
+      expect((await run(tabId, ['task', 'show'])).stdout).toContain('now the tests');
+
+      await run(tabId, ['task', 'done', id, '--evidence=commit 353364db, suite green']);
+      const after = await run(tabId, ['task', 'show']);
+      expect(after.stdout).toContain('no open task in this chat');
+      expect(after.stdout).toContain('done');
+    });
+
+    it('refuses `done` with no evidence, and says what is missing', async () => {
+      // The dated failure this exists for: a chat declared completion and six
+      // defects were still open the next morning. A completion claim with
+      // nothing to point at is not a completion.
+      const tabId = freshTab();
+      const created = await run(tabId, ['task', 'new', 'something', '--done=x']);
+      const id = created.stdout.match(/task (\w+)/)?.[1] as string;
+      await expect(run(tabId, ['task', 'done', id])).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('--evidence'),
+      });
+      expect((await run(tabId, ['task', 'show'])).stdout).toContain('open');
+    });
+
+    it('blocks with the question, and says who it is waiting for', async () => {
+      const tabId = freshTab();
+      const created = await run(tabId, ['task', 'new', 'spend decision', '--done=paid']);
+      const id = created.stdout.match(/task (\w+)/)?.[1] as string;
+      const blocked = await run(tabId, ['task', 'block', id, '--why=which card should it bill?']);
+      expect(blocked.stdout).toContain('waiting for the user');
+      expect((await run(tabId, ['task', 'show'])).stdout).toContain('blocked');
+    });
+
+    it('needs a chat: no --tab and no MUXPAD_TAB_ID is a refusal, not a guess', async () => {
+      await expect(
+        execFileAsync(MUXPAD_BIN, ['task', 'show'], {
+          env: { ...process.env, MUXPAD_API_URL: `http://127.0.0.1:${port}`, MUXPAD_TAB_ID: '' },
+          encoding: 'utf-8',
+        }),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('--tab=<id> required') });
+    });
+
+    it('prints usage for a verb it does not have, rather than doing something', async () => {
+      await expect(run(freshTab(), ['task', 'finish'])).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('muxpad task done'),
+      });
+    });
+  });
 });

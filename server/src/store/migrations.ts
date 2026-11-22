@@ -1961,9 +1961,9 @@ const MIGRATIONS: Migration[] = [
     // in the collapsed section it was already in.
     version: 59,
     apply: (db) => {
-      const workspaces = db
-        .prepare('SELECT DISTINCT workspace_id AS id FROM tabs')
-        .all() as Array<{ id: string }>;
+      const workspaces = db.prepare('SELECT DISTINCT workspace_id AS id FROM tabs').all() as Array<{
+        id: string;
+      }>;
       const setPos = db.prepare('UPDATE tabs SET position = ? WHERE id = ?');
       for (const ws of workspaces) {
         // The published read order (TabStore.listByWorkspace) for the pinned
@@ -1981,6 +1981,45 @@ const MIGRATIONS: Migration[] = [
           .all(ws.id) as Array<{ id: string }>;
         rows.forEach((r, i) => setPos.run(i, r.id));
       }
+    },
+  },
+  {
+    // ── A TASK THAT OUTLIVES THE TURN THAT STARTED IT ──────────────────────
+    //
+    // chat/TaskStore.ts carries the reasoning and the five dated requests this
+    // answers. The schema note is the lifecycle: one row per declared task,
+    // written by the agent through `muxpad task`, and the only state muxpad
+    // acts on is `open`.
+    //
+    //   continuations    how many times this task has been handed back. A
+    //                    budget, reset when a human speaks in the chat.
+    //   continued_from   `updated_at` as of the last continuation, so "did
+    //                    anything move since" is answerable without a second
+    //                    table. The anti-loop reads it, and it is the reason
+    //                    a stuck agent stops after one retry rather than six.
+    //
+    // No backfill: a chat with no task behaves exactly as it does today, which
+    // is the whole safety property. Autonomy is opt-in per task, by the agent
+    // writing one down.
+    version: 60,
+    apply: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        request TEXT NOT NULL,
+        criteria TEXT,
+        next_step TEXT,
+        state TEXT NOT NULL DEFAULT 'open',
+        evidence TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        continuations INTEGER NOT NULL DEFAULT 0,
+        continued_from INTEGER
+      )`);
+      // The read the turn-done hook makes on EVERY turn of every chat, so it
+      // is the one that has to be free: partial on the only state that matters.
+      db.exec("CREATE INDEX IF NOT EXISTS tasks_open_by_tab ON tasks(tab_id) WHERE state = 'open'");
     },
   },
 ];

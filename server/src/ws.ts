@@ -8,6 +8,7 @@ import {
   isMachineMessage,
   modeForBackend,
   parseCronMarker,
+  renderTaskContinuation,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -47,8 +48,10 @@ import {
   verifyCredential,
 } from './api-auth.js';
 import { readAttachmentForRelay } from './attachment-files.js';
+import { TaskStore } from './chat/TaskStore.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
+import { shouldContinue } from './chat/task-continue.js';
 import { remoteHostName } from './chat/transcript-access.js';
 import type { EventBus } from './events.js';
 import type { HostLinks } from './node-link/HostLinks.js';
@@ -627,6 +630,9 @@ export function attachWsServer(deps: {
   // feeding the agent even with no browser open; chat clients render the pending
   // bubbles from here, so they survive reloads and follow the user across devices.
   const queue = new AgentQueueStore(deps.db);
+  // Tasks that outlive a turn (chat/TaskStore.ts). Read on every turn-done of
+  // every chat, which is why its index is partial on `state = 'open'`.
+  const tasks = new TaskStore(deps.db);
   // Any headless writer / running status persisted by a previous process is a
   // turn that died with it (restart mid-turn) — clear it or panes look stuck.
   agents.reconcileStartup();
@@ -1785,6 +1791,35 @@ export function attachWsServer(deps: {
       void sweepDeadRunners();
     }
   };
+  /**
+   * A HUMAN SPOKE IN THIS CHAT — what that does to its open task.
+   *
+   * Two things, and both are about who is in charge. The continuation budget
+   * starts over, because somebody engaging is the one event that makes further
+   * autonomous work reasonable again (without it a long-lived chat would spend
+   * its six once and never continue anything again). And a BLOCKED task goes
+   * back to open, because "blocked" means it stopped to ask the user something
+   * and the user has now said something — holding it shut would make the
+   * answer worthless.
+   *
+   * Machine sends are excluded by `isHumanMessage`: a cron fire, a sub-chat
+   * report or a continuation of this very task must not look like engagement,
+   * or the budget could never run out and the bound would be decorative.
+   */
+  const noteHumanForTasks = (tabId: string, text: string): void => {
+    if (!isHumanMessage(text)) return;
+    const open = tasks.openFor(tabId);
+    if (open) {
+      tasks.resetBudget(tabId);
+      return;
+    }
+    const blocked = tasks.listFor(tabId, 5).find((t) => t.state === 'blocked');
+    if (blocked) {
+      tasks.reopen(blocked.id);
+      tasks.resetBudget(tabId);
+    }
+  };
+
   // Submit a user message. Idle + connected + nothing already waiting → start
   // the turn now. Otherwise persist to the queue (the drain loop feeds it when
   // the agent frees up / the runner returns). Only runner-owned agent panes
@@ -1807,6 +1842,7 @@ export function attachWsServer(deps: {
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
         activity.noteUserMessage(pane.tab_id);
+        noteHumanForTasks(pane.tab_id, t);
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
@@ -1836,6 +1872,7 @@ export function attachWsServer(deps: {
       };
     const row = queue.enqueue(paneId, t);
     activity.noteUserMessage(pane.tab_id);
+    noteHumanForTasks(pane.tab_id, t);
     broadcastQueue(paneId);
     // Nudge delivery: if the runner is idle we lost a relay race (drain now);
     // if it's absent, a sweep is the best "is it back yet?" probe.
@@ -2471,6 +2508,12 @@ export function attachWsServer(deps: {
             }
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
+            // SNAPSHOT BEFORE THE CLEAR. The task continuation below must not
+            // hand work back to a chat that is waiting on a question, and the
+            // very next line destroys the only record that it was — which is
+            // not a hypothetical: the e2e for it failed on exactly this
+            // ordering, sending a continuation over an open question card.
+            const askedSomething = conn.pendingQuestions.size > 0;
             conn.pendingQuestions.clear();
             // Retire the correlation stamp with the turn. Normally turn-start
             // already consumed it, but a `turn-done` can arrive with NO
@@ -2720,10 +2763,47 @@ export function attachWsServer(deps: {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }
+            // ─── DID THIS CHAT SAY IT WAS NOT FINISHED? ────────────────
+            //
+            // Decided BEFORE the drain, deliberately: `queued > 0` is one of
+            // the stop conditions, so the decision has to see the queue as it
+            // was. If anything is waiting, that IS the next step and the drain
+            // below is what runs it — a continuation here would jump a human's
+            // place in the line.
+            //
+            // The whole rule is chat/task-continue.ts, pure and model-free.
+            // What happens here is only the two halves it cannot do: read the
+            // live turn's state, and put the message on the ordinary send road
+            // so a continuation is indistinguishable from any other message —
+            // same durable queue, same one-per-turn drain, same Stop button.
+            const openTask = tasks.openFor(panes.getById(paneId)?.tab_id ?? '');
+            const carryOn = shouldContinue(openTask, {
+              queued: queue.count(paneId),
+              blocked: askedSomething,
+              stopped: conn.stoppedThisTurn,
+              turnFailed: frame.ok === false,
+            });
             // Turn finished → feed the next queued message. This is the loop
             // that drains a batch with no browser open: turn-done → drain →
             // turn-start → … until the queue empties.
             drainQueue(paneId);
+            if (carryOn.continue && openTask) {
+              const text = renderTaskContinuation(
+                { id: openTask.id, attempt: carryOn.attempt, limit: carryOn.limit },
+                openTask,
+              );
+              // Stamp FIRST. A send that is relayed and then fails to record
+              // its own attempt is an unbounded loop — the budget would never
+              // move and `continued_from` would stay null, so every turn-done
+              // would hand the same task back forever. Spending the attempt
+              // before the send can only ever cost one continuation.
+              tasks.noteContinuation(openTask.id);
+              const out = submitSend(paneId, text);
+              if (out.status === 'rejected')
+                console.warn(
+                  `[task] pane ${paneId}: continuation ${carryOn.attempt} refused — ${out.reason}`,
+                );
+            }
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             const firstOpen = conn.pendingQuestions.size === 0;

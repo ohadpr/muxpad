@@ -207,6 +207,7 @@ stories in those pages got written.
 | \`modes\` | Chat mode and Agent mode, and what each one carries |
 | \`mentions\` | an \`@other-chat\` handed to you as context |
 | \`turns\` | what a turn costs, and how to wait without burning tokens |
+| \`tasks\` | work that outlives your turn: \`muxpad task\`, and what continues it |
 <!--cap:msgvault-->| \`msgvault\` | the user's own mail and calendar, approved per use |
 <!--/cap:msgvault-->
 <!--cap:slack-->| \`slack\` | the company Slack, sent AS THE USER, approved per use |
@@ -1051,6 +1052,58 @@ tomorrow, and its result comes back to you through one path.
 
 The narrow exception is a one-shot command that is not an agent at all — a
 \`git log\`, a test run, a build. Those are tools, not workers.
+`,
+  tasks: `## Tasks — work that outlives your turn
+
+\`muxpad task\` is how you say "this job is not finished" to something that is
+still there after your turn ends.
+
+    muxpad task new "<what you are doing>" --done="<what finished means>" [--next="<first step>"]
+    muxpad task show
+    muxpad task next <id> "<the next concrete step>"
+    muxpad task done <id> --evidence="<what proves it>"
+    muxpad task block <id> --why="<what only the user can settle>"
+
+**WHAT IT BUYS YOU.** While a task is open, muxpad hands it back to you when
+your turn ends — your own request, your own acceptance criteria, your own next
+step — instead of leaving it for the user to notice and say "carry on". The
+friction this exists for, in the owner's words: *"it requires me in order to
+continue even if continuing is trivial"*.
+
+**DECLARE ONE WHEN THE WORK IS LONGER THAN A TURN AND THE USER HAS ALREADY
+ASKED FOR IT.** A multi-step build, a migration with verification, a sweep
+across files, anything where you can already name the next three steps. Not for
+a lookup, not for a question, and NOT as a way to keep working on something
+nobody asked for — a task records a job you were given, it does not authorize
+one you invented.
+
+**YOU DECIDE WHEN IT IS DONE. NOTHING REVIEWS YOU.** muxpad never asks a model
+whether your work is finished and never spawns a reviewer to judge it: that
+judgement needs the conversation, and you are the conversation. Which is
+exactly why \`done\` demands evidence — a commit, a passing suite, a url, a
+measurement. The failure this catches is real and dated: on 11/09 a chat
+declared itself complete and a review the next morning found six defects still
+open.
+
+**RECORDING PROGRESS IS WHAT BUYS THE NEXT CONTINUATION.** \`task next\` after
+each real step. If the task looks untouched when your turn ends, it stops
+being handed back rather than being asked again — one retry, not six. That rule is
+what makes this safe to leave on, so do not treat it as a formality: an agent
+that works without recording gets exactly one more turn.
+
+**WHAT ALWAYS WINS OVER A CONTINUATION.** A Stop. A question you have put to
+the user (\`block\` it and stop). A message already waiting in the queue — that
+is the next step, and it is usually a person's. A turn that ended in failure.
+And the budget: 6 continuations per engagement, reset when a human
+speaks in the chat.
+
+**BLOCK RATHER THAN GUESS.** If you are stuck on something only the user can
+settle — a spend, a destructive step, a choice between two real options —
+\`muxpad task block <id> --why="<the question>"\` and say it in your reply. The
+task comes back to life by itself when they answer.
+
+**ONE OPEN TASK PER CHAT.** Declaring a second supersedes the first, because a
+chat with three open tasks has no answer to "what are you doing now".
 `,
   turns: `## Working across chats and terminals
 

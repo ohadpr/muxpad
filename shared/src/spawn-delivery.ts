@@ -34,6 +34,7 @@
  */
 
 import { parseCronMarker } from './cron.js';
+import { parseTaskMarker } from './task-marker.js';
 
 /** One child's result, as it goes into the parent's message. */
 export interface SpawnDeliveryEntry {
@@ -280,5 +281,9 @@ export function parseSpawnDelivery(
  * message type after cron would have silently read as human.
  */
 export function isMachineMessage(text: string): boolean {
-  return parseCronMarker(text) !== null || parseSpawnDelivery(text) !== null;
+  return (
+    parseCronMarker(text) !== null ||
+    parseSpawnDelivery(text) !== null ||
+    parseTaskMarker(text) !== null
+  );
 }

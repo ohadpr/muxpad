@@ -1,9 +1,9 @@
 import type { Tab } from '@muxpad/shared';
+import { sortSidebarTabs } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { type PtydCache, cronsByTab, decorateTab } from './ptyd-cache.js';
 import { PaneStore } from './store/PaneStore.js';
 import { TabStore } from './store/TabStore.js';
-import { sortSidebarTabs } from '@muxpad/shared';
 import { type ClockSnapshot, clockSnapshot } from './tab-clock.js';
 
 /**
