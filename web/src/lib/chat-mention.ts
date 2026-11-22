@@ -596,7 +596,23 @@ export function spawnState(chat: MentionChat): SpawnState {
   // IT STOPPED TO ASK YOU SOMETHING. Ahead of the `done` check, because an
   // awaiting worker deliberately does NOT retire — so `!chat.done` would read it
   // as still working, and a spinner is as wrong here as the green tick was.
-  if (chat.report?.state === 'awaiting') return 'awaiting';
+  //
+  // …BUT THE CLAIM EXPIRES ON DELIVERY, and this is the second surface where
+  // that had to be said. `sidebar layout research` reported on 18 November,
+  // retired `delivered`, and sat in this drawer's RUNNING block wearing NEEDS
+  // YOU for three more days — the exact row, and the exact contradiction, that
+  // the server-side fix was written for the day before. That fix taught the
+  // SIDEBAR (ptyd-cache's `owes_report`) and stopped there, so the rail said
+  // delivered while the drawer said it was waiting on a person: two surfaces,
+  // one worker, two different claims — which is the failure `subChatLiveWord`
+  // already exists to have fixed once.
+  //
+  // `done && doneReason === 'delivered'` is the client's reading of the same
+  // fact the server checks: the round reached the parent, so there is nothing
+  // left for a human to answer here. An awaiting worker that has NOT retired is
+  // untouched by this and still reads `awaiting`, which is the live case.
+  const deliveredAlready = chat.done === true && chat.doneReason === 'delivered';
+  if (chat.report?.state === 'awaiting' && !deliveredAlready) return 'awaiting';
   if (!chat.done) return 'working';
   return chat.doneReason === 'delivered' ? 'delivered' : 'done';
 }
