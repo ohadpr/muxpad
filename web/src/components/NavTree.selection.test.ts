@@ -557,12 +557,20 @@ describe('unread has to be visible from across the room', () => {
    * from muted to full white AND from regular to bold, which reads peripherally
    * down a whole list and costs no width.
    */
-  it('read and unread differ in COLOUR, not only in weight', () => {
+  // REVERSED, ON PURPOSE. This used to require a step of COLOUR between read
+  // and unread. The owner's next ask — "give me better contrast in all
+  // themes", against Slack's mobile list, where the hierarchy is weight and
+  // size and nothing is faded — put read names back on full ink. The step is
+  // now weight alone, and it is a wide one: 450 → 700.
+  it('read and unread share the ink and differ in WEIGHT', () => {
     const base = ruleBody(NAV_CSS, '.navtree-tab-row');
     const unread = ruleBody(NAV_CSS, `.navtree-tab-row[data-unread="true"] .navtree-name-text`);
     expect(decl(base, 'color')).toBe('var(--nt-ink-read)');
+    expect(NT_TOKENS['--nt-ink-read']).toBe('var(--fg)');
     expect(decl(unread, 'color')).toBe('var(--fg)');
-    expect(decl(base, 'color')).not.toBe(decl(unread, 'color'));
+    expect(
+      Number(decl(unread, 'font-weight')) - Number(decl(base, 'font-weight')),
+    ).toBeGreaterThanOrEqual(250);
   });
 
   it('A CHILD ROW IS NOT EXEMPT — the cascade, not the rule, is the test', () => {
@@ -586,8 +594,7 @@ describe('unread has to be visible from across the room', () => {
     const kid = getComputedStyle(document.getElementById('kid') as HTMLElement);
     const read = getComputedStyle(document.getElementById('read') as HTMLElement);
     expect(kid.fontWeight).toBe('700');
-    expect(read.fontWeight).toBe('500');
-    expect(kid.color).not.toBe(read.color);
+    expect(read.fontWeight).toBe('450');
   });
 
   it('the sheet says it in ink too, not only in weight', () => {
@@ -891,7 +898,9 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     const label = ruleBody(NAV_CSS, '.navtree-ws-row .navtree-name-text');
     expect(decl(label, 'text-transform')).toBe('uppercase');
     expect(Number.parseFloat(decl(label, 'font-size'))).toBeLessThan(13);
-    expect(decl(label, 'color')).toBe('var(--fg-dim)');
+    // Full ink since the contrast pass: caps, tracking and bold carry "this is
+    // a container"; the grey only carried "this is hard to read".
+    expect(decl(label, 'color')).toBe('var(--fg)');
     expect(
       decl(ruleBody(NAV_CSS, '.navtree-ws-row[data-active="true"] .navtree-name-text'), 'color'),
     ).toBe('var(--fg)');
@@ -1012,8 +1021,8 @@ describe('a chat name is legible on every rail', () => {
   interface Rail {
     name: string;
     surface: string;
+    ink: string;
     dim: string;
-    faint: string;
     fg: string;
   }
   const rails: Rail[] = [];
@@ -1022,10 +1031,10 @@ describe('a chat name is legible on every rail', () => {
     if (!name || !body) continue;
     const tok = (k: string) => new RegExp(`--${k}:\\s*(#[0-9a-fA-F]{3,8});`).exec(body)?.[1];
     const surface = tok('rail-surface');
+    const ink = tok('rail-ink');
     const dim = tok('rail-ink-dim');
-    const faint = tok('rail-ink-faint');
     const fg = tok('fg');
-    if (surface && dim && faint && fg) rails.push({ name, surface, dim, faint, fg });
+    if (surface && ink && dim && fg) rails.push({ name, surface, ink, dim, fg });
   }
 
   const rgb = (hex: string) => {
@@ -1053,22 +1062,24 @@ describe('a chat name is legible on every rail', () => {
 
   it('reads the tokens this test assumes out of the stylesheet', () => {
     // The arithmetic below is only true while these are the values in use.
-    expect(NT_TOKENS['--nt-ink-read']).toBe('var(--fg-dim)');
-    expect(NT_TOKENS['--nt-ink-read-child']).toMatch(/--fg-dim\) 70%/);
+    // Read is full ink and a child is one rung down on the quiet token (see the
+    // contrast pass in NavTree.css; themes.test.ts sweeps every role).
+    expect(NT_TOKENS['--nt-ink-read']).toBe('var(--fg)');
+    expect(NT_TOKENS['--nt-ink-read-child']).toBe('var(--fg-dim)');
   });
 
   it.each(rails.map((r) => [r.name, r] as const))(
     '%s clears AA for a read name, on the rail and in the band',
     (_n, rail) => {
-      expect(ratio(rgb(rail.dim), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
-      expect(ratio(rgb(rail.dim), band(rail))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(rgb(rail.ink), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(rgb(rail.ink), band(rail))).toBeGreaterThanOrEqual(4.5);
     },
   );
 
   it.each(rails.map((r) => [r.name, r] as const))(
     '%s clears AA for a sub-chat name on the rail',
     (_n, rail) => {
-      expect(ratio(mix(rail.dim, rail.faint, 70), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(rgb(rail.dim), rgb(rail.surface))).toBeGreaterThanOrEqual(4.5);
     },
   );
 });

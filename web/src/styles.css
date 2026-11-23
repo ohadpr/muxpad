@@ -284,6 +284,9 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #313443;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #9a9aa8;
   --rail-ink: #c0caf5;
   --rail-ink-dim: #a3acd1;
   --rail-ink-faint: #7b82a0;
@@ -324,6 +327,10 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #454750;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff7b72;
+  --rail-status-dead: #a6a8b4;
   --rail-ink: #f8f8f2;
   --rail-ink-dim: #d4d5d2;
   --rail-ink-faint: #a2a3a4;
@@ -388,6 +395,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #3d345f;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8a80;
+  --rail-status-dead: #aaa5c4;
   --rail-ink: #ffffff;
   --rail-ink-dim: #cccad6;
   --rail-ink-faint: #9794a5;
@@ -460,6 +471,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #2a3c50;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8f87;
+  --rail-status-dead: #a2abb6;
   --rail-ink: #ffffff;
   --rail-ink-dim: #d2d4d6;
   --rail-ink-faint: #979ca2;
@@ -539,6 +554,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #3b3659;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8a80;
+  --rail-status-dead: #aaa6bc;
   --rail-ink: #fffdf6;
   --rail-ink-dim: #cec8c2;
   --rail-ink-faint: #928d8e;
@@ -596,6 +615,9 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #3e325a;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #a8a3bd;
   --rail-ink: #ebe5d2;
   --rail-ink-dim: #c8c1ba;
   --rail-ink-faint: #988f99;
@@ -705,6 +727,9 @@
      border, seam) re-steps with it, and the dim ink lands at 6.2:1 on
      its own field against the 4.5 floor. */
   --rail-surface: #1c3a3d;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #9ab0b2;
   --rail-ink: #d8f6ff;
   --rail-ink-dim: #a7cad4;
   --rail-ink-faint: #7ba39f;
@@ -1079,6 +1104,10 @@
      a shadow at the edge of the sheet; it is the one panel that is filled
      in. */
   --rail-surface: #1d5693;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ffb0a8;
+  --rail-status-dead: #b9cade;
   --rail-ink: #eaf3ff;
   --rail-ink-dim: #d2e3f8;
   --rail-ink-faint: #9fbddb;
@@ -1253,6 +1282,14 @@
   --danger: #d4002b;
 
   --rail-surface: #1333c4;
+
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ffb3a8;
+
+  --rail-status-dead: #bcc6f0;
   --rail-ink: #ffffff;
   --rail-ink-dim: #cdd6fa;
   --rail-ink-faint: #94a4e8;
@@ -1440,6 +1477,12 @@
   --danger: #e01b2e;
 
   --rail-surface: #17151d;
+
+  /* The rail's own blocked mark: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ff4d5e;
   --rail-ink: #fbf8f1;
   --rail-ink-dim: #cfc9d6;
   --rail-ink-faint: #928ca0;
@@ -1700,6 +1743,14 @@
   --danger: #c41a1a;
 
   --rail-surface: #006b6b;
+
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ffb0a8;
+
+  --rail-status-dead: #c5dedd;
   --rail-ink: #ffffff;
   --rail-ink-dim: #d4eeec;
   --rail-ink-faint: #8fcfca;
