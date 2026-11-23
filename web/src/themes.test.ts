@@ -432,6 +432,14 @@ describe('every theme’s tree reads, rail and phone', () => {
       .filter(Boolean)
       .pop();
 
+  /** EVERY declaration of `prop` for `sel`, in source order. `decl` keeps only
+   *  the last, which hides the case where a rule is deliberately overridden
+   *  later — e.g. a base value plus a `display-mode: standalone` floor. */
+  const occurrences = (css: string, sel: string, prop: string): string[] =>
+    rulesFor(css, sel)
+      .map((r) => r[prop])
+      .filter((v): v is string => !!v);
+
   const tokens = (body: string): Ctx => {
     const out: Ctx = {};
     for (const d of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g))
@@ -763,9 +771,22 @@ describe('every theme’s tree reads, rail and phone', () => {
     // the top half of the bar on a real phone — "bottom bar icons too high".
     // Headless browsers report an inset of 0, so only this can see it.
     expect(decl(MOBILE, '.mcl-tabs', '--mcl-inset')).toBe('env(safe-area-inset-bottom, 0px)');
-    expect(decl(MOBILE, '.mcl-tabs', 'padding-bottom')).toBe(
+    // TWO RULES NOW, and the second is the one a phone needs. Removing
+    // `viewport-fit=cover` (index.html, the other half of the iOS 26 Liquid
+    // Glass fix) made the insets report 0 — measured on his phone, a web view
+    // 812 tall inside an 874 screen, 62px taken at the TOP and nothing at the
+    // bottom — so the base formula yields 0 and the bar sits flush against an
+    // edge the home indicator still crosses: "bottom bar still too clipped".
+    //
+    // The standalone floor is 14px because that is what the base formula
+    // produces at the 34px inset it was tuned against: a phone that reports
+    // its inset and one that does not now look the same. A browser tab keeps
+    // 0 — there the page is under nothing.
+    expect(occurrences(MOBILE, '.mcl-tabs', 'padding-bottom')).toEqual([
       'max(0px, calc(var(--mcl-inset) - 20px))',
-    );
+      'max(14px, calc(var(--mcl-inset) - 20px))',
+    ]);
+    expect(MOBILE).toMatch(/@media \(display-mode: standalone\)\s*\{\s*\.mcl-tabs/);
     expect(decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface')).toBe('var(--rail-surface)');
     // And the selected row turns back to the rail: the base active rule hands
     // every token to the PANE (on the desktop the row IS the pane), which on
