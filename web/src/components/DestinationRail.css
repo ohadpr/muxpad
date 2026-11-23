@@ -88,3 +88,33 @@
   font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px var(--rail-surface, var(--bg-chrome));
 }
+
+/* ─── The left side's frame: one header over both strips ──────────────────
+   AppLayout: `aside.sidenav` (the rail's token island — ink, surface, and the
+   seam to the pane on its right edge) holds the brand row on top and, under
+   it, this rail beside the chat list. The aside sizes to its two strips; the
+   chat list's column carries the dragged width. */
+.sidenav.sidenav-with-rail {
+  flex: 0 0 auto;
+}
+.sidenav-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+/* The rail's own right edge is the divider between the two strips. It starts
+   UNDER the header's bottom rule, so the two lines meet as a clean T rather
+   than one running into the other. */
+.sidenav-body > .dest-rail {
+  align-self: stretch;
+}
+.sidenav-list {
+  /* Fallback before React mounts; the inline flex-basis is the persisted or
+     dragged width (settings.sidebarWidth), as it was on the old aside. */
+  flex: 0 0 280px;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}

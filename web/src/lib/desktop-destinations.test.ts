@@ -61,8 +61,17 @@ describe('the chat list beside it', () => {
     expect(nav.match(/<HostedFoot/g) ?? []).toHaveLength(1); // the phone's sheet only
   });
 
-  it('is mounted beside the rail in AppLayout, on the desktop only', () => {
+  it('sits under ONE header that spans both strips, on the desktop only', () => {
     const layout = readFileSync(join(__dirname, '../components/AppLayout.tsx'), 'utf8');
-    expect(layout).toContain('{sidebarMode && <DestinationRail lastWsSlug={lastWsSlug} />}');
+    const aside = layout.indexOf('<aside className="sidenav sidenav-with-rail">');
+    const brand = layout.indexOf('<div className="sidenav-brand">', aside);
+    const body = layout.indexOf('<div className="sidenav-body">', brand);
+    const rail = layout.indexOf('<DestinationRail', body);
+    const list = layout.indexOf('className="sidenav-list"', rail);
+    // header, THEN the two strips side by side under it — rail first.
+    expect(aside).toBeGreaterThan(-1);
+    expect([brand, body, rail, list].every((x, k, a) => x > (a[k - 1] ?? aside))).toBe(true);
+    // The dragged width belongs to the chat list's column, not the whole side.
+    expect(layout).toMatch(/className="sidenav-list"\s+ref=\{sidenavRef\}/);
   });
 });

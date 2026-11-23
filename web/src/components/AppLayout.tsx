@@ -80,7 +80,7 @@ export function AppLayout() {
   const shellRoute = keepsShell(pathname);
   const chrome = shellChrome({ isMobile, inWorkspace: !!wsSlug || shellRoute, embedded });
   const sidebarMode = chrome.sidebar;
-  const sidenavRef = useRef<HTMLElement>(null);
+  const sidenavRef = useRef<HTMLDivElement>(null);
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
   /**
    * WHICH WORKSPACE THE RAIL SHOULD LOOK LIKE on a destination route.
@@ -192,41 +192,58 @@ export function AppLayout() {
       )}
       {rendersAppBody({ wsSlug, shellRoute, sidebarMode, chatList, onChatList }) ? (
         <div className="app-body">
-          {/* THE DESTINATION RAIL: Home, Unread, Activity, Artifacts, Apps.
-              The chat list beside it holds every workspace as sections. */}
-          {sidebarMode && <DestinationRail lastWsSlug={lastWsSlug} />}
+          {/* ── THE LEFT SIDE: ONE HEADER OVER TWO STRIPS ─────────────────────
+              "muxpad top header should extend all the way to the left
+              including the icon rail as well." So the brand row is the head
+              of the WHOLE left side — the destination rail (Home, Unread,
+              Activity, Artifacts, Apps) and the chat list beside it both start
+              under it — rather than a label for the chat list's column with a
+              cut-off corner beside it.
+
+              The outer <aside> is `.sidenav`, the rail's token ISLAND (ink,
+              surface, seam), so the header, the destination rail and the list
+              all wear the rail's tokens from one rule. The chat list's own
+              column (`.sidenav-list`) holds the WIDTH you drag: the resize
+              grip measures and persists it, exactly as it did the old aside,
+              so a saved sidebarWidth still means the chat list's width. */}
           {sidebarMode && (
-            <aside
-              className="sidenav"
-              ref={sidenavRef}
-              style={{ flexBasis: `${settings.sidebarWidth}px` }}
-            >
+            <aside className="sidenav sidenav-with-rail">
               <div className="sidenav-brand">
                 {/* Search rides the brand row rather than owning one of its
                     own — see RailSearchButton. The spacer on the other side
-                    keeps the wordmark optically centred. */}
+                    keeps the wordmark optically centred — now over the whole
+                    left side, so it reads as the app's, not one column's. */}
                 <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
                 <span className="sidenav-brand-spacer" aria-hidden="true" />
               </div>
-              <NavTree
-                variant="sidebar"
-                activeWorkspaceSlug={wsSlug ?? lastWsSlug}
-                activeTabSlug={activeTabSlug}
-              />
-              <SidenavResizeHandle asideRef={sidenavRef} />
-              <div className="sidenav-footer">
-                <a
-                  className="sidenav-build"
-                  href={REPO_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`muxpad — build ${__MUXPAD_VERSION__}`}
+              <div className="sidenav-body">
+                <DestinationRail lastWsSlug={lastWsSlug} />
+                <div
+                  className="sidenav-list"
+                  ref={sidenavRef}
+                  style={{ flexBasis: `${settings.sidebarWidth}px` }}
                 >
-                  {__MUXPAD_VERSION__}
-                </a>
-                <ThemeSwitch />
-                <SettingsMenu />
+                  <NavTree
+                    variant="sidebar"
+                    activeWorkspaceSlug={wsSlug ?? lastWsSlug}
+                    activeTabSlug={activeTabSlug}
+                  />
+                  <SidenavResizeHandle asideRef={sidenavRef} />
+                  <div className="sidenav-footer">
+                    <a
+                      className="sidenav-build"
+                      href={REPO_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`muxpad — build ${__MUXPAD_VERSION__}`}
+                    >
+                      {__MUXPAD_VERSION__}
+                    </a>
+                    <ThemeSwitch />
+                    <SettingsMenu />
+                  </div>
+                </div>
               </div>
             </aside>
           )}
