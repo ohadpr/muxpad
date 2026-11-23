@@ -3533,6 +3533,9 @@ body.sidenav-resizing iframe {
   .navtree-tab-row:not([data-active="true"])
   .navtree-name-text {
   color: var(--fg-dim);
+  /* A size down as well as a rung of ink — see THE PHONE'S TYPE SCALE. */
+  font-size: 0.9375rem;
+  font-weight: 400;
 }
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on
@@ -3603,7 +3606,8 @@ body.sidenav-resizing iframe {
    Every role steps up with the names rather than leaving them alone at the
    desktop's sizes, and the steps BETWEEN roles are what separates them — not
    fading. A read name is 17/500 and an unread one 17/700; an older chat steps
-   DOWN a size as well as a rung of ink (15/400), so retired rows recede by
+   DOWN a size as well as a rung of ink (15/400, declared with the older-row
+   ink further down, where the swipe shells are matched), so retired rows recede by
    being smaller, which a list of a thousand chats needs to scan. The section
    header stays a caps label a size under the names. None of this reaches the
    desktop rail: the sheet only mounts under MOBILE_BREAKPOINT (AppLayout's
@@ -3611,13 +3615,6 @@ body.sidenav-resizing iframe {
 .navtree[data-variant="sheet"] .navtree-ws-row .navtree-name-text {
   font-size: 0.8125rem;
   letter-spacing: 0.1em;
-}
-.navtree[data-variant="sheet"]
-  .navtree-done-head
-  ~ .navtree-tab-row:not([data-active="true"])
-  .navtree-name-text {
-  font-size: 0.9375rem;
-  font-weight: 400;
 }
 .navtree[data-variant="sheet"] .navtree-done-head {
   font-size: 0.9375rem;

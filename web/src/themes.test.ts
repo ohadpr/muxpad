@@ -572,6 +572,9 @@ describe('every theme’s tree reads, rail and phone', () => {
     {
       role: 'older chat (quiet)',
       base: '.navtree-done-head ~ .navtree-tab-row:not([data-active="true"]) .navtree-name-text',
+      // On the phone every row is wrapped in a swipe shell, so the older rows
+      // are matched through it — and that rule is the one that inks them.
+      phone: '.navtree[data-variant="sheet"] .navtree-done-head ~ .swiperow .navtree-name-text',
       bar: 4.5,
     },
     { role: 'older chats disclosure', base: '.navtree-done-head', bar: 4.5 },
