@@ -36,6 +36,11 @@ async function errorEnvelope(res: Response): Promise<{ message: string; code: st
  * server's answer. Still an Error, so every existing `e instanceof Error`
  * message path keeps working unchanged.
  */
+/** One chat's last message (server chat/last-message), or `elsewhere` when the
+ *  chat runs on another machine and its transcript is deliberately unreadable
+ *  from here. `null` on the wire is every other absence. */
+export type TabPreview = { text: string; by: 'user' | 'assistant' } | { elsewhere: true };
+
 export class ApiError extends Error {
   readonly status: number;
   /**
@@ -250,7 +255,7 @@ export const api = {
   /** Each chat's last message, for the phone's Activity list — its own request,
    *  never on the polled tab row (see server chat/last-message). */
   tabPreviews: (ids: readonly string[]) =>
-    req<{ previews: Record<string, { text: string; by: 'user' | 'assistant' } | null> }>(
+    req<{ previews: Record<string, TabPreview | null> }>(
       `/api/tabs/previews?ids=${ids.map(encodeURIComponent).join(',')}`,
     ),
 

@@ -1,8 +1,9 @@
 import type { Tab, Workspace } from '@muxpad/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
+import { type SearchableTab, toSearchableTabs } from './nav-search';
 
 /**
  * Every visible workspace's tabs, for the navigator's flat 'recent' view.
@@ -69,4 +70,26 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
     // already cached — which for the workspace you are in is always something.
     tabs: byId.get(w.id) ?? cachedTabsFor(w.id),
   }));
+}
+
+/**
+ * The same chats as {@link useAllChats}, flattened into the corpus shape the
+ * search and the section rules read (lib/nav-search, lib/chat-sections) —
+ * one memoised flattening per publish, for the desktop rail's Unread filter
+ * and the Activity page.
+ */
+export function useChatCorpus(): SearchableTab[] {
+  const groups = useAllChats();
+  return useMemo(
+    () =>
+      toSearchableTabs(
+        groups.map((g) => ({
+          id: g.workspace.id,
+          slug: g.workspace.slug,
+          name: g.workspace.name,
+          tabs: g.tabs,
+        })),
+      ),
+    [groups],
+  );
 }

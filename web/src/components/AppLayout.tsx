@@ -15,6 +15,7 @@ import { MobileChatHeader, MobileChatList, useBackToList } from './MobileNav';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
+import { RailUnreadChip } from './RailUnread';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
@@ -192,7 +193,8 @@ export function AppLayout() {
                     keeps the wordmark optically centred. */}
                 <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
-                <span className="sidenav-brand-spacer" aria-hidden="true" />
+                {/* The right-hand slot is the Unread chip — see RailUnread. */}
+                <RailUnreadChip />
               </div>
               <NavTree
                 variant="sidebar"
@@ -286,6 +288,7 @@ export function AppLayout() {
 /** The header's name for a phone destination that is not a chat. */
 function destinationTitle(pathname: string): string {
   if (pathname.startsWith('/artifacts')) return 'Artifacts';
+  if (pathname.startsWith('/activity')) return 'Activity';
   if (pathname.startsWith('/apps') || pathname.startsWith('/hosted')) return 'Apps';
   return '';
 }

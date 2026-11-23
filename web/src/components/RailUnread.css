@@ -1,0 +1,38 @@
+/* The rail's Unread chip. It takes the brand row's right-hand slot (the
+   34px `.sidenav-brand-spacer`, NavTree.css), so these rules only dress it. */
+
+.rail-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.rail-unread:disabled {
+  cursor: default;
+}
+.rail-unread-count {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  /* OFF: a quiet count, the same weight as the rail's other counts. */
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.rail-unread:hover .rail-unread-count {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
+}
+/* ON: filled, so the rail's state is legible from the chip alone. */
+.rail-unread[data-on="true"] .rail-unread-count {
+  color: var(--accent-fg);
+  background: var(--accent);
+}

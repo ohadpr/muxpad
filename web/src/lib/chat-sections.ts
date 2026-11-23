@@ -95,3 +95,64 @@ export function shortAgo(ts: number | null | undefined, now: number): string {
 function cmpId(a: SearchableTab, b: SearchableTab): number {
   return a.tabId < b.tabId ? -1 : a.tabId > b.tabId ? 1 : 0;
 }
+
+// ─── The desktop rail's Unread FILTER ───────────────────────────────────────
+//
+// On the desktop the rail is the MAP — it is on screen while you work — so
+// Unread is not a tab that replaces it but a filter on it: the same rows, in
+// the same places, fewer of them. HIDING, NEVER REORDERING. The rail's order
+// is manual and stable (shared/tab-order), and a row that moves under the
+// cursor is the bug that file exists to end; every function below returns its
+// input in its input's order, with rows taken out.
+
+/** The rail holds wire rows, not corpus rows: the same rule as
+ *  {@link isUnreadChat}, in the wire's spelling. */
+export function isUnreadTab(t: {
+  unread?: boolean | undefined;
+  spawned_by?: string | null | undefined;
+}): boolean {
+  return t.unread === true && !t.spawned_by;
+}
+
+/**
+ * Which rows of ONE workspace's list survive the filter, in their order.
+ *
+ * The row you are ON stays, unread or not. Opening a chat is reading it, so
+ * without this the row would vanish from under the pointer the moment you
+ * clicked it — the filter would punish using it. It leaves when you leave it,
+ * which is the "reading takes it out" you would expect.
+ */
+export function unreadFilterRows<
+  T extends { id: string; unread?: boolean | undefined; spawned_by?: string | null | undefined },
+>(rows: readonly T[], activeTabId: string | null): T[] {
+  return rows.filter((t) => t.id === activeTabId || isUnreadTab(t));
+}
+
+/** How many chats the rail's chip counts — every visible workspace's. */
+export function unreadCount(tabs: readonly SearchableTab[]): number {
+  return tabs.filter(isUnreadChat).length;
+}
+
+/**
+ * Is the filter actually filtering? Only with something to show. When the last
+ * unread chat is read the filter has nothing left, and an empty rail — or one
+ * holding only the chat you are standing on — is worse than the map: so it
+ * falls back to everything, and the chip reads as off.
+ */
+export function unreadFilterActive(wanted: boolean, count: number): boolean {
+  return wanted && count > 0;
+}
+
+/**
+ * Which workspaces the filtered rail shows: those holding an unread chat, plus
+ * the one you are in (its row stays — see {@link unreadFilterRows}). Order is
+ * the input's — the workspace order you arranged.
+ */
+export function unreadFilterWorkspaces<W extends { id: string; slug: string }>(
+  workspaces: readonly W[],
+  tabs: readonly SearchableTab[],
+  activeWorkspaceSlug: string | null,
+): W[] {
+  const has = new Set(tabs.filter(isUnreadChat).map((t) => t.workspaceId));
+  return workspaces.filter((w) => has.has(w.id) || w.slug === activeWorkspaceSlug);
+}

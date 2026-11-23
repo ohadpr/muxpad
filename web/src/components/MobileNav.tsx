@@ -1,5 +1,5 @@
 import type { PaneStatus, Workspace } from '@muxpad/shared';
-import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
+import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
 import {
   type ReactNode,
   useCallback,
@@ -10,21 +10,15 @@ import {
   useState,
 } from 'react';
 import { flushSync } from 'react-dom';
-import { api } from '../api';
-import {
-  CHAT_SECTIONS,
-  type ChatSection,
-  activityChats,
-  shortAgo,
-  unreadChats,
-} from '../lib/chat-sections';
+import { CHAT_SECTIONS, type ChatSection, activityChats, unreadChats } from '../lib/chat-sections';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
-import { type SearchableTab, toSearchableTabs } from '../lib/nav-search';
+import { toSearchableTabs } from '../lib/nav-search';
 import { useAllChats } from '../lib/use-all-chats';
 import { useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
+import { PreviewList } from './ChatPreviewList';
 import { ChatSearch } from './CommandPalette';
 import { NavContextMenu, NavTree, createHouseTab } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
@@ -229,96 +223,6 @@ function CaughtUp() {
       <p className="mcl-empty-title">You’re all caught up</p>
       <p className="mcl-empty-sub">Nothing unread in any chat.</p>
     </div>
-  );
-}
-
-/**
- * Unread and Activity: chats, each with THE LAST MESSAGE IT HAD — the line
- * Slack's DM list puts under every name, and the whole point of Activity.
- * Fetched for these rows only, only while the tab is showing, and again only
- * when one of them moves (the key is ids + last activity).
- */
-function PreviewList({
-  rows,
-  active,
-  empty,
-}: {
-  rows: SearchableTab[];
-  active: boolean;
-  empty: ReactNode;
-}) {
-  const [previews, setPreviews] = useState<Record<string, Preview | null>>({});
-  const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `key` — the ids and their activity — not on the array's identity, which changes every corpus publish.
-  useEffect(() => {
-    if (!active || rows.length === 0) return;
-    let cancelled = false;
-    api
-      .tabPreviews(rows.map((r) => r.tabId))
-      .then((r) => {
-        if (!cancelled) setPreviews((p) => ({ ...p, ...r.previews }));
-      })
-      // An older server has no such route: the rows keep their headline.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [key, active]);
-  return (
-    <div className="mcl-scroll">
-      {rows.length === 0
-        ? empty
-        : rows.map((t) => <ChatRow key={t.tabId} tab={t} preview={previews[t.tabId] ?? null} />)}
-    </div>
-  );
-}
-
-type Preview = { text: string; by: 'user' | 'assistant' };
-
-/**
- * One chat in Unread or Activity: emoji, name, workspace and time on the first
- * line; the last message under it — "You: " when it was yours, as Slack writes
- * it — falling back to the chat's headline (its topic) until a preview lands.
- */
-function ChatRow({ tab, preview }: { tab: SearchableTab; preview: Preview | null }) {
-  const now = Date.now();
-  const second = preview
-    ? preview.by === 'user'
-      ? `You: ${preview.text}`
-      : preview.text
-    : (tab.headline ?? '');
-  const status = tab.status ?? 'idle';
-  return (
-    <Link
-      to="/w/$wsSlug/t/$tabSlug"
-      params={{ wsSlug: tab.workspaceSlug, tabSlug: tab.tabSlug }}
-      className="mcl-row"
-      data-unread={tab.unread ? 'true' : undefined}
-    >
-      <span className="mcl-row-emoji" aria-hidden="true">
-        {tab.icon || '💬'}
-      </span>
-      <span className="mcl-row-main">
-        <span className="mcl-row-top">
-          <span className="mcl-row-name" dir="auto">
-            {tab.tabName}
-          </span>
-          {(status === 'working' || status === 'blocked') && (
-            <span className="mcl-row-status">
-              <StatusMark status={status} />
-            </span>
-          )}
-          <span className="mcl-row-meta">
-            {tab.workspaceName} · {shortAgo(tab.lastActivityAt, now)}
-          </span>
-        </span>
-        {second && (
-          <span className="mcl-row-preview" dir="auto" data-fallback={preview ? undefined : 'true'}>
-            {second}
-          </span>
-        )}
-      </span>
-    </Link>
   );
 }
 

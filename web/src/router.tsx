@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
+import { ActivityView } from './pages/ActivityView';
 import { ChatListFallback } from './pages/ChatListFallback';
 import { DocView } from './pages/DocView';
 import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
@@ -112,6 +113,16 @@ const artifactsRoute = createRoute({
   component: ArtifactsView,
 });
 
+// /activity — recent chats with their last message. The third destination
+// that belongs to no workspace, beside Artifacts and Apps and built the same
+// way (lib/shell-routes). Reached from the desktop rail's foot; the phone has
+// it as a tab of its list instead.
+const activityRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/activity',
+  component: ActivityView,
+});
+
 const appsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/apps',
@@ -144,6 +155,7 @@ const routeTree = rootRoute.addChildren([
     chatListRoute,
     artifactsRoute,
     appsRoute,
+    activityRoute,
     hostedRedirectRoute,
     hostedAppRoute,
     workspaceLayoutRoute.addChildren([tabRoute]),

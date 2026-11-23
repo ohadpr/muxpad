@@ -13,6 +13,7 @@ describe('keepsShell', () => {
   it('keeps the rail for the two destination lists', () => {
     expect(keepsShell('/artifacts')).toBe(true);
     expect(keepsShell('/apps')).toBe(true);
+    expect(keepsShell('/activity')).toBe(true);
   });
 
   it('tolerates a trailing slash', () => {

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { ChatEvent } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
@@ -88,6 +89,15 @@ describe('GET /api/tabs/previews', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { previews: Record<string, unknown> };
     expect(body.previews).toEqual({ [a]: null });
+  });
+
+  it('says a chat on ANOTHER MACHINE is elsewhere, rather than reading as empty', async () => {
+    const ws = new WorkspaceStore(db).create({ name: 'R' }).id;
+    const remote = new TabStore(db).create({ name: 'r', layout: '', workspace_id: ws }).id;
+    new PaneStore(db).create({ tab_id: remote, shell: '/bin/zsh', cwd: '/tmp', node_id: 'trayo' });
+    const res = await test.app.request(`/api/tabs/previews?ids=${remote},${a}`);
+    const body = (await res.json()) as { previews: Record<string, unknown> };
+    expect(body.previews).toEqual({ [remote]: { elsewhere: true }, [a]: null });
   });
 
   it('is routed ahead of `/:id` — "previews" is not a tab id', async () => {

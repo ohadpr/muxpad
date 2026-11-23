@@ -63,7 +63,7 @@ const foot = (variant: 'sidebar' | 'sheet') => {
   }));
 };
 
-it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps on the %s', (variant) => {
+it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps first on the %s', (variant) => {
   // ARTIFACTS FIRST: it is the half reached by the question that gets asked
   // (the same portal was asked for three times in five days), and the half
   // whose contents expire — a reason to meet the list rather than recall it.
@@ -71,10 +71,19 @@ it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps on the %s', (v
   // THE SHEET CASE IS THE REGRESSION. It answered with an empty list while
   // the foot lived in the workspace picker, which is exactly what "where do I
   // see artifacts on mobile" turned out to mean.
-  expect(foot(variant)).toEqual([
+  expect(foot(variant).slice(0, 2)).toEqual([
     { href: '/artifacts', text: 'Artifacts' },
     { href: '/apps', text: 'Apps' },
   ]);
+});
+
+it('adds Activity on the desktop rail only — the phone has it as a tab of its list', () => {
+  expect(foot('sidebar')).toEqual([
+    { href: '/artifacts', text: 'Artifacts' },
+    { href: '/apps', text: 'Apps' },
+    { href: '/activity', text: 'Activity' },
+  ]);
+  expect(foot('sheet').map((l) => l.href)).not.toContain('/activity');
 });
 
 it('no longer offers a single "Hosted" entry', () => {

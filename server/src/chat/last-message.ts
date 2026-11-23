@@ -42,6 +42,16 @@ export interface LastMessage {
 }
 
 /**
+ * What a row gets back: the message, or WHY there is none when the reason is
+ * one the row should say. A chat on ANOTHER MACHINE has its transcript there,
+ * and this server deliberately cannot read it (transcript-access) — that is a
+ * design decision, not a failure, and the row says so instead of looking
+ * broken. Every other absence (a terminal, a chat with nothing said yet) is
+ * plain `null`.
+ */
+export type Preview = LastMessage | { elsewhere: true };
+
+/**
  * The last message a PERSON would see in the chat, out of normalized events.
  *
  * Pure. Three things are not messages, and each would make the line lie:
@@ -78,14 +88,15 @@ export function oneLine(text: string): string {
 }
 
 /** Read one pane's transcript tail and answer {@link lastMessageOf}. */
-function lastMessageForPane(db: Database.Database, paneId: string): LastMessage | null {
+function lastMessageForPane(db: Database.Database, paneId: string): Preview | null {
   const sess = new AgentSessionStore(db).getByPane(paneId);
-  const sid = sess?.current_sid;
-  if (!sid) return null;
   // Through the chokepoint, like every other transcript read: a pane on
-  // another machine must not cause a search of this disk.
-  const access = transcriptForPane(db, paneId, sid, sess.assistant);
-  if (access.kind !== 'local') return null;
+  // another machine must not cause a search of this disk. Asked BEFORE the
+  // session is required — the machine is decided by the pane alone, and a
+  // remote chat whose session this server never saw is still a remote chat.
+  const access = transcriptForPane(db, paneId, sess?.current_sid ?? null, sess?.assistant);
+  if (access.kind === 'elsewhere') return { elsewhere: true };
+  if (access.kind !== 'local' || !sess) return null;
   let lines: string[];
   try {
     lines = readTailLines(access.path, TAIL_BYTES);
@@ -114,7 +125,7 @@ function lastMessageForPane(db: Database.Database, paneId: string): LastMessage 
   return lastMessageOf(events);
 }
 
-const memo = new Map<string, { at: number | null; value: LastMessage | null }>();
+const memo = new Map<string, { at: number | null; value: Preview | null }>();
 
 /**
  * Previews for a set of tabs, memoised on each tab's `last_activity_at`.
@@ -123,10 +134,10 @@ const memo = new Map<string, { at: number | null; value: LastMessage | null }>()
 export function lastMessagesForTabs(
   db: Database.Database,
   tabIds: readonly string[],
-): Record<string, LastMessage | null> {
+): Record<string, Preview | null> {
   const tabs = new TabStore(db);
   const panes = new PaneStore(db);
-  const out: Record<string, LastMessage | null> = {};
+  const out: Record<string, Preview | null> = {};
   for (const id of tabIds) {
     const tab = tabs.getById(id);
     if (!tab) continue;
@@ -138,7 +149,7 @@ export function lastMessagesForTabs(
     }
     // A tab holds one thing; an old row may still hold a stray second pane.
     // The first pane that has anything to say answers.
-    let value: LastMessage | null = null;
+    let value: Preview | null = null;
     for (const p of panes.listByTab(id)) {
       value = lastMessageForPane(db, p.id);
       if (value) break;

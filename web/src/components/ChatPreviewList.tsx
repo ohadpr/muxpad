@@ -1,0 +1,169 @@
+import { Link } from '@tanstack/react-router';
+import { type ReactNode, useEffect, useState } from 'react';
+import { type TabPreview, api } from '../api';
+import { shortAgo } from '../lib/chat-sections';
+import type { SearchableTab } from '../lib/nav-search';
+import { StatusMark } from './StatusMark';
+// The row's styles live with the phone list that introduced them; the desktop
+// Activity page re-scales them under its own root (ActivityView.css) rather
+// than keeping a second copy of every rule.
+import './MobileNav.css';
+
+/**
+ * A LIST OF CHATS, each with THE LAST MESSAGE IT HAD — the line Slack's DM
+ * list puts under every name. Two hosts: the phone's Unread and Activity tabs
+ * (MobileNav), and the desktop Activity destination (pages/ActivityView).
+ *
+ * Previews come from `GET /api/tabs/previews` (server chat/last-message),
+ * fetched for these rows only, only while the list is showing, and again only
+ * when one of them moves (the key is ids + last activity).
+ */
+export function PreviewList({
+  rows,
+  active,
+  empty,
+  explainAbsent = false,
+}: {
+  rows: SearchableTab[];
+  active: boolean;
+  empty: ReactNode;
+  /**
+   * Say WHY a row has no preview when the reason is by design — a chat on
+   * another machine, whose transcript this server cannot read. Off, such a row
+   * falls back to the chat's headline like any other row without one.
+   */
+  explainAbsent?: boolean;
+}) {
+  const [previews, setPreviews] = useState<Record<string, TabPreview | null>>({});
+  const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `key` — the ids and their activity — not on the array's identity, which changes every corpus publish.
+  useEffect(() => {
+    if (!active || rows.length === 0) return;
+    let cancelled = false;
+    api
+      .tabPreviews(rows.map((r) => r.tabId))
+      .then((r) => {
+        if (!cancelled) setPreviews((p) => ({ ...p, ...r.previews }));
+      })
+      // An older server has no such route: the rows keep their headline.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [key, active]);
+  return (
+    <div className="mcl-scroll">
+      {rows.length === 0
+        ? empty
+        : rows.map((t) => (
+            <ChatRow
+              key={t.tabId}
+              tab={t}
+              preview={previews[t.tabId] ?? null}
+              explainAbsent={explainAbsent}
+            />
+          ))}
+    </div>
+  );
+}
+
+/**
+ * The second line a row shows, and how. Pure, so what an absent preview reads
+ * as is decided in one place.
+ *
+ *   message      the last message — "You: …" when it was yours, as Slack writes
+ *   elsewhere    the chat runs on another machine: said plainly, as a fact
+ *   fallback     the chat's headline (its topic), until/unless a preview lands
+ *   none         nothing at all
+ */
+export function previewLine(
+  preview: TabPreview | null,
+  headline: string | undefined,
+  explainAbsent: boolean,
+): { kind: 'message' | 'elsewhere' | 'fallback' | 'none'; text: string } {
+  if (preview && 'text' in preview) {
+    return { kind: 'message', text: preview.by === 'user' ? `You: ${preview.text}` : preview.text };
+  }
+  if (preview && explainAbsent) {
+    return { kind: 'elsewhere', text: 'Runs on another machine — no preview here' };
+  }
+  if (headline) return { kind: 'fallback', text: headline };
+  return { kind: 'none', text: '' };
+}
+
+/**
+ * One chat: emoji, name, workspace and time on the first line; the second line
+ * from {@link previewLine}.
+ */
+export function ChatRow({
+  tab,
+  preview,
+  explainAbsent = false,
+}: {
+  tab: SearchableTab;
+  preview: TabPreview | null;
+  explainAbsent?: boolean;
+}) {
+  const now = Date.now();
+  const second = previewLine(preview, tab.headline, explainAbsent);
+  const status = tab.status ?? 'idle';
+  return (
+    <Link
+      to="/w/$wsSlug/t/$tabSlug"
+      params={{ wsSlug: tab.workspaceSlug, tabSlug: tab.tabSlug }}
+      className="mcl-row"
+      data-unread={tab.unread ? 'true' : undefined}
+    >
+      <span className="mcl-row-emoji" aria-hidden="true">
+        {tab.icon || '💬'}
+      </span>
+      <span className="mcl-row-main">
+        <span className="mcl-row-top">
+          <span className="mcl-row-name" dir="auto">
+            {tab.tabName}
+          </span>
+          {(status === 'working' || status === 'blocked') && (
+            <span className="mcl-row-status">
+              <StatusMark status={status} />
+            </span>
+          )}
+          <span className="mcl-row-meta">
+            {tab.workspaceName} · {shortAgo(tab.lastActivityAt, now)}
+          </span>
+        </span>
+        {second.kind !== 'none' && (
+          <span
+            className="mcl-row-preview"
+            dir="auto"
+            data-fallback={second.kind === 'fallback' ? 'true' : undefined}
+            data-elsewhere={second.kind === 'elsewhere' ? 'true' : undefined}
+          >
+            {second.kind === 'elsewhere' && <SvgElsewhere />}
+            {second.text}
+          </span>
+        )}
+      </span>
+    </Link>
+  );
+}
+
+/** A small monitor — "over there", not "broken". */
+function SvgElsewhere() {
+  return (
+    <svg
+      className="mcl-row-elsewhere-icon"
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </svg>
+  );
+}

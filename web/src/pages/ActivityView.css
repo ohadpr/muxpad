@@ -1,0 +1,51 @@
+/* ──────────────────────────────────────────────────────────────────────
+   ActivityView — the desktop Activity destination.
+
+   The rows are the phone list's (ChatPreviewList → MobileNav.css), sized
+   there for a thumb; this re-scales them for a pointer and a reading column,
+   under this page's root only, so the phone is untouched.
+   ────────────────────────────────────────────────────────────────────── */
+
+.activity-view .mcl-scroll {
+  overflow: visible;
+  padding-block: 0;
+  border-top: 1px solid var(--border);
+}
+.activity-view .mcl-row {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+.activity-view .mcl-row:hover {
+  background: var(--bg-hover);
+}
+.activity-view .mcl-row-emoji {
+  flex-basis: 24px;
+  font-size: 18px;
+  line-height: 24px;
+}
+.activity-view .mcl-row-name {
+  font-size: 0.9375rem;
+}
+.activity-view .mcl-row-meta {
+  font-size: 0.75rem;
+}
+.activity-view .mcl-row-preview {
+  font-size: 0.875rem;
+  -webkit-line-clamp: 2;
+}
+/* A chat on another machine: said as a fact, in the quiet ink, with a small
+   monitor — not italic like a fallback, and not red like a failure. */
+.activity-view .mcl-row-preview[data-elsewhere="true"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-style: normal;
+  color: var(--fg-faint);
+}
+.activity-view .mcl-row-elsewhere-icon {
+  flex: 0 0 auto;
+}
+.activity-view .mcl-empty {
+  padding-top: 64px;
+}

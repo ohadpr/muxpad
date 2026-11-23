@@ -4,6 +4,12 @@ import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
+import {
+  unreadCount,
+  unreadFilterActive,
+  unreadFilterRows,
+  unreadFilterWorkspaces,
+} from '../lib/chat-sections';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
@@ -12,7 +18,9 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
+import { useRailUnreadFilter } from '../lib/rail-filter';
 import { activeAge } from '../lib/short-age';
+import { useChatCorpus } from '../lib/use-all-chats';
 
 import { reorderByDrop } from '../lib/reorder';
 import { orderAfterDrop } from '../lib/tab-drag';
@@ -342,6 +350,15 @@ function SidebarTree({
   // across the whole tree.
   const [editing, setEditing] = useState<Editing>(null);
   const [creatingWs, setCreatingWs] = useState(false);
+  // ── THE UNREAD FILTER (the chip in the rail's head toggles it) ────────────
+  // A filter on the map, not a mode: the workspaces holding an unread chat,
+  // forced open, showing only those chats — in their places. Falls back to the
+  // whole rail when there is nothing unread left (unreadFilterActive).
+  const corpus = useChatCorpus();
+  const unreadOnly = unreadFilterActive(useRailUnreadFilter(), unreadCount(corpus));
+  const shownWorkspaces = unreadOnly
+    ? unreadFilterWorkspaces(workspaces, corpus, activeWorkspaceSlug)
+    : workspaces;
 
   // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
   // refresh; on failure refresh anyway to snap back to the server's truth.
@@ -422,12 +439,15 @@ function SidebarTree({
             picking a workspace did not reliably land you in the chat), then a
             row at the TOP of each list (fine, but still a row — and the list is
             for chats). The header had been the right place the whole time. */}
-        {workspaces.map((w) => (
+        {shownWorkspaces.map((w) => (
           <WorkspaceNode
             key={w.id}
             workspace={w}
             isActive={w.slug === activeWorkspaceSlug}
-            expanded={isExpanded(expansion, w.slug, activeWorkspaceSlug)}
+            // OPEN while filtering, without touching the stored expansion: the
+            // filter is showing you these rows, and a collapsed group would be
+            // hiding them again. Turn it off and every group is as you left it.
+            expanded={unreadOnly || isExpanded(expansion, w.slug, activeWorkspaceSlug)}
             activeWorkspaceSlug={activeWorkspaceSlug}
             activeTabSlug={activeTabSlug}
             variant={variant}
@@ -435,6 +455,7 @@ function SidebarTree({
             setEditing={setEditing}
             onNavigate={onNavigate}
             rowDnd={variant === 'sidebar' ? wsDnd(w.id) : undefined}
+            unreadOnly={unreadOnly}
           />
         ))}
         {/* The one create action that is still a ROW, and it has to be: a new
@@ -453,7 +474,7 @@ function SidebarTree({
             of it: artifacts and apps belong to no workspace and occupy no tab —
             that is the whole point. Rendered in both variants, so the mobile
             sheet reaches them too. */}
-        <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
+        <HostedFoot activity={true} {...(onNavigate ? { onNavigate } : {})} />
       </div>
     </nav>
   );
@@ -474,7 +495,18 @@ function SidebarTree({
  * five days), and the one whose contents expire, which is a reason to meet the
  * list rather than remember it.
  */
-function HostedFoot({ onNavigate }: { onNavigate?: (() => void) | undefined }) {
+function HostedFoot({
+  onNavigate,
+  activity = false,
+}: {
+  onNavigate?: (() => void) | undefined;
+  /**
+   * The desktop rail only: ACTIVITY, the third destination that belongs to no
+   * workspace — recent chats with their last message, a page of its own
+   * (pages/ActivityView). The phone has it as a tab of its list instead.
+   */
+  activity?: boolean;
+}) {
   return (
     <div className="navtree-foot">
       <Link
@@ -495,7 +527,37 @@ function HostedFoot({ onNavigate }: { onNavigate?: (() => void) | undefined }) {
         <SvgApps />
         <span className="navtree-name-text">Apps</span>
       </Link>
+      {activity && (
+        <Link
+          className="navtree-foot-link"
+          to="/activity"
+          activeProps={{ 'data-active': 'true' }}
+          onClick={() => onNavigate?.()}
+        >
+          <SvgActivity />
+          <span className="navtree-name-text">Activity</span>
+        </Link>
+      )}
     </div>
+  );
+}
+
+/** A bell — the same glyph as the phone's Activity tab, at the foot's size. */
+function SvgActivity() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0" />
+    </svg>
   );
 }
 
@@ -1003,6 +1065,8 @@ interface WorkspaceNodeProps {
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
   rowDnd?: DragItemProps | undefined;
+  /** The desktop rail's Unread filter is on: see TabList. */
+  unreadOnly?: boolean | undefined;
 }
 
 function WorkspaceNode({
@@ -1016,6 +1080,7 @@ function WorkspaceNode({
   setEditing,
   onNavigate,
   rowDnd,
+  unreadOnly,
 }: WorkspaceNodeProps) {
   const navigate = useNavigate();
   const isEditing = editing?.kind === 'workspace' && editing.id === workspace.id;
@@ -1346,6 +1411,7 @@ function WorkspaceNode({
           editing={editing}
           setEditing={setEditing}
           onNavigate={onNavigate}
+          unreadOnly={unreadOnly}
         />
       )}
     </div>
@@ -1360,6 +1426,13 @@ interface TabListProps {
   editing: Editing;
   setEditing: (e: Editing) => void;
   onNavigate?: (() => void) | undefined;
+  /**
+   * Show only the chats with something unread (lib/chat-sections
+   * `unreadFilterRows`) — HIDING rows, never reordering them, and with the
+   * live/done blocks flattened so an unread chat that has decayed is not
+   * hidden a second time behind "older chats".
+   */
+  unreadOnly?: boolean | undefined;
 }
 
 /**
@@ -1381,6 +1454,7 @@ export function TabList({
   editing,
   setEditing,
   onNavigate,
+  unreadOnly,
 }: TabListProps) {
   const { tabs: serverTabs } = useTabs(workspace.id);
   // Archive / delete / unread / icon / pin, shared verbatim with the flat
@@ -1579,6 +1653,20 @@ export function TabList({
   const renderGroup = (g: ChatGroup) => (
     <Fragment key={g.chat.id}>{renderRow(g.chat, g.worker)}</Fragment>
   );
+
+  // ── THE UNREAD FILTER: same rows, fewer of them ──────────────────────────
+  // Hiding only. The kept rows are the live block then the done block, each in
+  // its own stored order — exactly the order they sit in unfiltered, with the
+  // "older chats" door taken out of the way because a filter that hid an
+  // unread chat behind it would be hiding the thing it exists to show.
+  if (unreadOnly && variant === 'sidebar') {
+    const keep = new Set(unreadFilterRows(tabs, activeTabId).map((t) => t.id));
+    return (
+      <div className="navtree-tab-list" data-filter="unread">
+        {[...liveGroups, ...doneGroups].filter((g) => keep.has(g.chat.id)).map(renderGroup)}
+      </div>
+    );
+  }
 
   return (
     <div className="navtree-tab-list">
