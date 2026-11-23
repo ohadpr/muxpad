@@ -21,7 +21,43 @@ beforeEach(() => {
 });
 
 describe('the status bar tint', () => {
-  it('follows the theme’s CHROME, which is what the bar actually sits above', () => {
+  it('takes the colour the TOP BAR actually painted, not a token', () => {
+    // It read `--bg-chrome`, which was the same thing until the chat header
+    // moved onto the list's ground (so the two views would stop looking like
+    // separate products) — and on the light themes that left a pale strip
+    // above a now-dark header. Measuring survives the next palette change
+    // without anyone remembering this file exists.
+    document.head.innerHTML = '<meta name="theme-color" content="#1e1e2e">';
+    setVars({ '--bg-chrome': '#e0e0e0', '--bg': '#f8f5e2' });
+    const bar = document.createElement('div');
+    bar.className = 'mcl-head';
+    bar.style.backgroundColor = 'rgb(0, 71, 71)';
+    document.body.appendChild(bar);
+    syncStatusBarTint();
+    expect(document.querySelector('meta[name="theme-color"]')?.getAttribute('content')).toBe(
+      'rgb(0, 71, 71)',
+    );
+    bar.remove();
+  });
+
+  it('walks up from a transparent header to the surface that IS painted', () => {
+    // A header with no background of its own tells us nothing; the answer is
+    // whatever it is sitting on.
+    document.head.innerHTML = '<meta name="theme-color" content="#1e1e2e">';
+    const ground = document.createElement('div');
+    ground.style.backgroundColor = 'rgb(17, 17, 17)';
+    const bar = document.createElement('div');
+    bar.className = 'mobile-chat-head';
+    ground.appendChild(bar);
+    document.body.appendChild(ground);
+    syncStatusBarTint();
+    expect(document.querySelector('meta[name="theme-color"]')?.getAttribute('content')).toBe(
+      'rgb(17, 17, 17)',
+    );
+    ground.remove();
+  });
+
+  it('falls back to the theme’s CHROME when no bar is mounted yet', () => {
     // Not `--bg`: the status bar's neighbour is the app's top bar (the chat
     // header, the list header), so matching the chrome is what makes the seam
     // disappear.

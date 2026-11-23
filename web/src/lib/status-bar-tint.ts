@@ -20,12 +20,22 @@
  * palette, and is wrong the moment eleven themes can be in force. A cream
  * paper app under a `#1e1e2e` bar reads as a rendering fault.
  *
- * ─── WHAT COLOUR, AND WHY `--bg-chrome` ─────────────────────────────────────
+ * ─── WHAT COLOUR: WHATEVER THE TOP BAR ACTUALLY PAINTED ─────────────────────
  * The status bar sits directly above the app's own top bar — the chat header
  * on a phone, the muxpad header on the list — so the colour that makes the
- * seam disappear is the CHROME's, not the page's. `--bg` is the fallback for a
- * theme that does not set one; black is the last resort and should never be
- * reached.
+ * seam disappear is that bar's.
+ *
+ * It read `--bg-chrome`, which was the same thing until it wasn't: the chat
+ * header moved onto the list's ground so the two views would stop looking like
+ * separate products, and on the light themes that left a pale strip above a
+ * now-dark header. Reported by the agent that made the move, which is the
+ * right way round — it changed the bar and could see what the tint assumed.
+ *
+ * So this MEASURES rather than guesses. Whatever either header computes to is
+ * the answer, which survives the next palette change without anybody
+ * remembering this file exists. The tokens remain as fallbacks for the moment
+ * before a header is mounted (the first paint, a test fixture): `--bg-chrome`,
+ * then `--bg`, then black, which should never be reached.
  *
  * ─── IT ONLY TAKES EFFECT ON RE-ADD ─────────────────────────────────────────
  * iOS reads the status-bar style when the app is ADDED to the home screen. An
@@ -34,8 +44,22 @@
  * code can route around, and it is the one part of this fix a person has to do.
  */
 
-/** Resolve a CSS custom property to something `theme-color` accepts. */
+/** The two bars that can sit under the status bar on a phone: the list's
+ *  header and a chat's. Only one is ever mounted. */
+const TOP_BARS = '.mcl-head, .mobile-chat-head';
+
+/** Is this a real colour, or the transparent default? A transparent header
+ *  tells us nothing — keep walking up for the surface actually painted. */
+const PAINTED = (c: string): boolean => !!c && c !== 'transparent' && !/,\s*0\s*\)$/.test(c);
+
 function tint(): string {
+  const bar = document.querySelector(TOP_BARS);
+  for (let el: Element | null = bar; el; el = el.parentElement) {
+    const c = getComputedStyle(el).backgroundColor;
+    if (PAINTED(c)) return c;
+  }
+  // No header mounted yet — first paint, or a fixture. Fall back to the
+  // tokens, in the order of how close each sits to the bar.
   const cs = getComputedStyle(document.documentElement);
   const chrome = cs.getPropertyValue('--bg-chrome').trim();
   if (chrome) return chrome;
@@ -47,7 +71,15 @@ function tint(): string {
  * Point `<meta name="theme-color">` at the theme in force.
  *
  * Called from the one place the theme lands on the document, so the two cannot
- * drift. Creates the tag when the document has none — the meta is in
+ * drift.
+ *
+ * WHICH MEANS IT RE-READS ON A THEME CHANGE AND NOT ON NAVIGATION, and that is
+ * only correct while the two headers agree. They do, deliberately — the chat's
+ * bar was moved onto the list's chrome so the two views stop reading as
+ * separate products, and `themes.test.ts` pins their colours as identical. If
+ * that ever stops being true, this needs to run on navigation too, and the
+ * symptom will be a status bar wearing the colour of the view you were last
+ * in. Creates the tag when the document has none — the meta is in
  * index.html, but a test fixture mounting this module is not obliged to carry
  * the whole head.
  */
