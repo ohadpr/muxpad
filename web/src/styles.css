@@ -1849,6 +1849,30 @@
   background: var(--bg-chrome);
 }
 
+/* ── HOVER MUST NOT ERASE THE PINSTRIPES ──────────────────────────────────
+   The bar is a background-IMAGE on `.sidenav-brand`, and the wordmark, mark
+   and search button each punch a clear patch by painting `--bg-chrome` behind
+   themselves. `.brand:hover` sets `background: var(--bg-hover)`, which is a
+   flat fill over the whole link — so hovering the wordmark wiped the rules
+   from that span of the bar and left a lavender slab where the stripes had
+   been. Reported with a screenshot; it is the only theme that draws chrome
+   with a background-image, which is why no other one shows it.
+
+   Keeping the chrome colour here is also the more faithful answer: a System 7
+   menu title did nothing on hover and INVERTED on click. The affordance is
+   already carried by the two rules that brighten the rainbow mark and darken
+   the wordmark, and those are theme-agnostic. */
+[data-theme="wokintosh"] .sidenav-brand .brand:hover,
+[data-theme="wokintosh"] .ws-tabbar .brand:hover {
+  /* TRANSPARENT, not `--bg-chrome`: the clear patches are painted by the
+     CHILDREN (.brand-text, .brand-mark, .navtree-search), each exactly as wide
+     as itself. Any opaque fill on the link covers the span BETWEEN them, which
+     is where the rules show — so the first fix here swapped a lavender slab
+     for a grey one and looked just as wrong. The link has no resting
+     background either; this simply keeps it that way. */
+  background: transparent;
+}
+
 /* THE MENU-BAR WORDMARK. Geneva bold in ink, beside the six-stripe rainbow
    mark that sat at the left of every menu bar. */
 [data-theme="wokintosh"] .brand-text {
