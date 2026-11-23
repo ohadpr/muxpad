@@ -407,7 +407,9 @@
   --rail-seam: transparent;
   --rail-accent: #a98cff;
   --rail-status-ready: #98bca8;
-  --rail-status-working: #d0c19f;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   /* Rail: a decisive step toward the ink, so the pane reads as a separate
      surface at last (ΔL* 78 against the pane, from 2.7). */
   --bg: #f5f4fb;
@@ -483,7 +485,9 @@
   --rail-seam: transparent;
   --rail-accent: #79b8ff;
   --rail-status-ready: #9bc3ae;
-  --rail-status-working: #d5c19d;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -566,7 +570,9 @@
   --rail-seam: transparent;
   --rail-accent: #b3a3ff;
   --rail-status-ready: #9bc3ae;
-  --rail-status-working: #d5c19d;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -1760,7 +1766,9 @@
   --rail-seam: transparent;
   --rail-accent: #fff0a0;
   --rail-status-ready: #b8ffc0;
-  --rail-status-working: #fff0a0;
+  /* A YELLOW, not #fff0a0: that read as white on the teal, so the working mark
+     was a black-and-white object belonging to neither. 4.86:1 on --rail-surface. */
+  --rail-status-working: #ffe14a;
 
   /* --bg, not the washed face: the active-pane wash is laid OVER the
      terminal's canvas too, so the canvas has to start where the paper does. */

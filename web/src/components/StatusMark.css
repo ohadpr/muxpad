@@ -293,13 +293,12 @@
 
 /* ── demoscene · the tape-loading border ─────────────────────────────────
    The C64 said "LOADING" by flickering bands of colour across the border
-   while the tape ran, every scener's first progress bar. A framed block of
-   two-colour bands, the working ink and the theme's own phosphor, that
-   swap places on every beat (opacity only, 0.9s a cycle, slow enough to read
-   as a loader and not a flash).
-   EVERY frame is two colours, never one colour with gaps and never solid: a
-   band set with gaps standing still is a boxed "≡" (a menu), and a solid
-   block in a frame is "■", the Stop button. */
+   while the tape ran, every scener's first progress bar. A framed block split
+   into TWO thick bands, the working ink and the theme's phosphor cyan, that
+   swap places on every beat (opacity only, 0.9s a cycle).
+   Two bands, not the 2px ones it had: a repeating pattern finer than ~3px
+   aliases into shimmer at 1:1. And every frame is two colours, never one
+   colour with gaps (a boxed "≡", a menu) and never solid ("■", Stop). */
 [data-theme="demoscene"]
   :is(
     .navtree-mark[data-state="working"],
@@ -309,8 +308,7 @@
   border: 1.5px solid var(--wm-ink);
   border-radius: 2px;
   padding: 1.5px;
-  background: repeating-linear-gradient(to bottom, var(--wm-ink) 0 2px, var(--pane-accent) 2px 4px)
-    content-box;
+  background: linear-gradient(to bottom, var(--wm-ink) 0 50%, var(--pane-accent) 50%) content-box;
 }
 [data-theme="demoscene"]
   :is(
@@ -319,7 +317,7 @@
     .navtree-status[data-status="working"]
   )::after {
   margin: 3px;
-  background: repeating-linear-gradient(to bottom, var(--pane-accent) 0 2px, var(--wm-ink) 2px 4px);
+  background: linear-gradient(to bottom, var(--pane-accent) 0 50%, var(--wm-ink) 50%);
   animation: wm-flip 0.9s step-end infinite;
 }
 @keyframes wm-flip {
@@ -359,7 +357,10 @@
    The two-dot orbit spinner, which is a riso print in miniature: one flat
    spot of each ink, the working yellow and the second-pass pink, going round
    like the drum. It replaced a registration mark (a crosshair in a circle),
-   which at row size reads as "+" (new) or as a locate target. */
+   which at row size reads as "+" (new) or as a locate target.
+   The pink is the accent cut 30% with --fg, which lifts it on the deep rail
+   (raw, #ff4d9d measured 2.96:1 on #1333c4; mixed, ~3.9) and deepens it on
+   the paper, the same self-correcting move as --armed-fill. */
 [data-theme="riso"]
   :is(
     .navtree-mark[data-state="working"],
@@ -369,7 +370,7 @@
   background: radial-gradient(circle at 50% 18%, var(--wm-ink) 0 2.3px, transparent 2.7px),
     radial-gradient(
       circle at 50% 82%,
-      color-mix(in srgb, var(--accent) 90%, transparent) 0 2.3px,
+      color-mix(in srgb, var(--accent) 70%, var(--fg)) 0 2.3px,
       transparent 2.7px
     );
   animation: navtree-state-spin 0.9s linear infinite;
@@ -421,15 +422,20 @@
 }
 
 /* ── wokintosh · the barber pole ─────────────────────────────────────────
-   System 7's own answer to "working, duration unknown": the indeterminate
-   progress bar, black diagonal stripes marching through a white bar in a
-   black frame, 1-bit like the rest of the theme. It replaced the wristwatch
-   cursor, which was period-correct and wrong here: at row size a watch is a
-   CLOCK FACE, and in muxpad a clock means scheduled work (`muxpad cron`):
-   "this busy-indicator feels like cron".
-   The stripes travel exactly one period, so the loop is seamless; the host is
-   clipped to the bar so the extra period waiting on the left never shows, and
-   black stripes over the black frame leave the frame intact. */
+   System 7's answer to "working, duration unknown": the indeterminate
+   progress bar, diagonal bands marching through a framed bar. It replaced the
+   wristwatch cursor, which at row size is a CLOCK FACE, and in muxpad a clock
+   means scheduled work ("this busy-indicator feels like cron").
+   In ONE INK and in COLOUR, not the 1-bit black and white of the original:
+   "u can't do this in white". A black bar full of near-white stripes on the
+   teal was a dark blob with noise in it, belonging to neither the Mac nor the
+   desktop it sat on. Frame and bands are --wm-ink (on the rail #ffe14a,
+   4.86:1 against the teal; on the grey title bar, the paper's amber), and the
+   gaps between bands are the ground itself showing through.
+   BANDS 3px THICK on a 6px period, so one or two cross the mark at a time:
+   at 1:1 you see a couple of bars moving, not a texture vibrating. They
+   travel exactly one period so the loop is seamless; the host is clipped to
+   the bar so the waiting extra period never shows. */
 [data-theme="wokintosh"]
   :is(
     .navtree-mark[data-state="working"],
@@ -445,8 +451,7 @@
     .navtree-status[data-status="working"]
   )::before {
   inset: calc(var(--wm-inset) + 2px) var(--wm-inset);
-  border: 1.5px solid #000;
-  background: #fff;
+  border: 1.5px solid var(--wm-ink);
 }
 [data-theme="wokintosh"]
   :is(
@@ -455,14 +460,14 @@
     .navtree-status[data-status="working"]
   )::after {
   inset: calc(var(--wm-inset) + 3.5px) calc(var(--wm-inset) + 1.5px) calc(var(--wm-inset) + 3.5px)
-    calc(var(--wm-inset) + 1.5px - 5.657px);
-  background: repeating-linear-gradient(-45deg, #000 0 2px, transparent 2px 4px);
-  animation: wm-march-pole 0.6s linear infinite;
+    calc(var(--wm-inset) + 1.5px - 8.485px);
+  background: repeating-linear-gradient(-45deg, var(--wm-ink) 0 3px, transparent 3px 6px);
+  animation: wm-march-pole 0.8s linear infinite;
 }
-/* 5.657px = the stripes' 4px period measured along the bar (4 ÷ sin 45°). */
+/* 8.485px = the bands' 6px period measured along the bar (6 ÷ sin 45°). */
 @keyframes wm-march-pole {
   to {
-    transform: translateX(5.657px);
+    transform: translateX(8.485px);
   }
 }
 
