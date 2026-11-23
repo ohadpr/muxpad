@@ -10,7 +10,8 @@ export type Theme =
   | 'demoscene'
   | 'blueprint'
   | 'riso'
-  | 'memphis';
+  | 'memphis'
+  | 'wokintosh';
 
 /** What the picker offers: a theme, or "whatever the OS is doing". */
 export type ThemeChoice = Theme | 'system';
@@ -34,6 +35,7 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'blueprint', label: 'Blueprint' },
   { value: 'riso', label: 'Riso' },
   { value: 'memphis', label: 'Memphis' },
+  { value: 'wokintosh', label: 'Wokintosh' },
 ];
 
 const VALID_THEMES = new Set<Theme>(THEMES.map((t) => t.value));

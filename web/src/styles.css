@@ -1653,6 +1653,262 @@
   color: var(--fg);
 }
 
+/* ─── WOKINTOSH ─────────────────────────────────────────────────────────────
+   The Color Classic desktop, after anandman/wokintosh: a flat teal desktop,
+   cream paper windows, light-grey title bars ruled with pinstripes, a 1.5px
+   black frame and a hard, unblurred drop shadow down and to the right. One
+   colour of selection — System 7's periwinkle — and black ink on everything.
+
+   THE RAIL IS THE DESKTOP AND THE PANE IS A WINDOW. That is the mapping, and
+   it is why the rail is teal rather than the menu bar's grey: grey against
+   the paper measured 1.21:1, under the floor themes.test.ts sets for the two
+   surfaces, and the selected row (the pane's paper reaching into the rail)
+   then reads as a window's tab lifted off the desktop.
+
+   The teal is wokintosh's #008c8c taken down two steps, because white
+   section names on the original measured 4.09:1, and the search field's
+   resting label (dim ink on the rail's raised box) needs room under that.
+   #006b6b is 6.33:1 for white and still reads as the same desktop. */
+[data-theme="wokintosh"] {
+  /* Arial is what wokintosh sets its content in; Geneva is its title-bar
+     face and System 7's own, and ships on every Mac; Monaco is the classic
+     Mac monospace and a system font, so the terminal never waits for it. */
+  --ui-font: Arial, "Helvetica Neue", Helvetica, system-ui, sans-serif;
+  --chrome-font: Geneva, Verdana, "DejaVu Sans", Tahoma, system-ui, sans-serif;
+  --term-font: Monaco, Menlo, monospace;
+
+  /* Warmer than wokintosh's #f6f5ea on purpose: the visible pane wears a 5%
+     wash of the accent (tab.css), and the periwinkle took the original paper
+     to a cool grey. This lands the washed face at #f0ede4 — the cream. */
+  --bg: #f8f5e2;
+  --bg-elev: #ffffff;
+  --bg-hover: #e9e7f8;
+  --bg-chrome: #e0e0e0;
+  --bg-tabbar: #d6d6d6;
+
+  --fg: #000000;
+  --fg-dim: #525252;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #8a8a8a;
+  /* The row rules between list items are a pale stone in the original; the
+     window FRAME is black, and that is --border-strong. */
+  --border: #cfccbc;
+  --border-strong: #000000;
+
+  --accent: #5e52e8;
+  --accent-fg: #ffffff;
+  --danger: #c41a1a;
+
+  --rail-surface: #006b6b;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #d4eeec;
+  --rail-ink-faint: #8fcfca;
+  /* Darker, not lighter: a lighter teal took the dim ink under 4:1. */
+  --rail-hover: #005c5c;
+  --rail-border: #2a8484;
+  --rail-seam: transparent;
+  --rail-accent: #fff0a0;
+  --rail-status-ready: #b8ffc0;
+  --rail-status-working: #fff0a0;
+
+  /* --bg, not the washed face: the active-pane wash is laid OVER the
+     terminal's canvas too, so the canvas has to start where the paper does. */
+  --xterm-bg: #f8f5e2;
+  --xterm-fg: #000000;
+
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  --clock-base: #dcd9c8;
+
+  /* Light re-step (see :root). Ready is wokintosh's "Working" green and
+     blocked its red; working is its amber, a step darker so the ring holds
+     3:1 on the paper with no word beside it. */
+  --status-blocked: #c41a1a;
+  --status-working: #8f5a00;
+  --status-ready: #006b0f;
+  --status-quiet: #b3b0a0;
+  --status-dead: #6b6960;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+
+  /* The rainbow mark's yellow. */
+  --hit-bg: #ffd126;
+  --hit-ink: #000000;
+  --hit-rule: #8a6a00;
+}
+
+/* EVERY WINDOW HAS A FRAME AND A SHADOW, AND NEITHER IS SOFT. 1.5px of black
+   and a 3×4 offset with no blur — the one gesture that makes the whole look.
+   Nothing on a 1991 screen was rounded except the screen. */
+[data-theme="wokintosh"] .chat-bubble,
+[data-theme="wokintosh"] .chat-composer,
+[data-theme="wokintosh"] .settings-dialog {
+  background-color: var(--bg-elev);
+  border: 1.5px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 3px 4px 0 var(--fg);
+}
+
+/* A card is furniture, one step down from a window: the frame without the
+   shadow, so two of them stacked do not outrank the message above. */
+[data-theme="wokintosh"] .chat-card {
+  background-color: var(--bg-elev);
+  border-radius: 0;
+  border: 1.5px solid var(--fg);
+  box-shadow: none;
+}
+
+/* A sub-chat's card is a small window of its own: white, framed, with the
+   shadow at two-thirds — it is inside the transcript, not on the desktop. */
+[data-theme="wokintosh"] .chat-mention-card {
+  background: var(--bg-elev);
+  border: 1.5px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 2px 3px 0 var(--fg);
+}
+
+/* An act is a dialog box's line, not a window: square and framed, with the
+   outcome hues taken to the paper's step. The defaults are tuned for a white
+   card and measured under 3:1 as text on this grey. */
+[data-theme="wokintosh"] .action-card {
+  --a-wait: #8f5a00;
+  --a-sent: #006b0f;
+  --a-failed: #c41a1a;
+  --a-declined: #5b5b78;
+  background: var(--bg-elev);
+  border-radius: 0;
+}
+[data-theme="wokintosh"] .chat-md :not(pre) > code {
+  border-radius: 0;
+}
+
+/* The focused composer is the selected window: System 7 drew selection in
+   one colour, and so does this. */
+[data-theme="wokintosh"] .chat-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 3px 4px 0 var(--fg), 0 0 0 1.5px var(--accent);
+}
+
+/* CODE IS A DOCUMENT WINDOW. White, framed, square, with a smaller shadow
+   than a message has — it sits inside one. */
+[data-theme="wokintosh"] .chat-md pre {
+  background: var(--bg-elev);
+  border: 1px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--fg);
+}
+
+[data-theme="wokintosh"] .navtree-mark,
+[data-theme="wokintosh"] .navtree-state-dot {
+  border-radius: 0;
+}
+
+/* THE MENU BAR. On a phone the strip above the pane is the menu bar, and the
+   menu bar was plain grey with a black rule under it — no pinstripes. Those
+   were a window's, and on this strip they ran straight through the
+   breadcrumb's text. */
+[data-theme="wokintosh"] .ws-tabbar {
+  background-color: var(--bg-chrome);
+  border-bottom: 1.5px solid var(--fg);
+}
+
+/* THE TITLE BAR IS THE RAIL'S HEAD. The desktop has no tab strip, so the
+   window-title treatment lives on the brand row:
+   grey, pinstriped edge to edge, a black rule under it, and the wordmark set
+   on a clear patch. It is a pane-ink island inside the rail's, so the search
+   button and the wordmark go back to black on grey. */
+[data-theme="wokintosh"] .sidenav-brand {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
+  color: var(--pane-ink);
+  background-color: var(--bg-chrome);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    #00000094 2px 3px,
+    transparent 3px 4px
+  );
+  background-size: calc(100% - 16px) 19px;
+  background-position: 8px center;
+  background-repeat: no-repeat;
+  border-bottom: 1.5px solid var(--fg);
+}
+[data-theme="wokintosh"] .sidenav-brand .brand-text {
+  background: var(--bg-chrome);
+  padding: 0 8px;
+}
+[data-theme="wokintosh"] .sidenav-brand .brand-mark {
+  box-shadow: 0 0 0 10px var(--bg-chrome);
+}
+/* The search button sits where a window's close box did, on its own clear
+   patch of the bar. */
+[data-theme="wokintosh"] .sidenav-brand .navtree-search {
+  background: var(--bg-chrome);
+}
+
+/* THE MENU-BAR WORDMARK. Geneva bold in ink, beside the six-stripe rainbow
+   mark that sat at the left of every menu bar. */
+[data-theme="wokintosh"] .brand-text {
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  color: var(--fg);
+}
+[data-theme="wokintosh"] .brand-mark rect {
+  fill: transparent;
+}
+[data-theme="wokintosh"] .brand-mark {
+  background: linear-gradient(
+    to bottom,
+    #33ab47 0 16.6%,
+    #ffd126 16.6% 33.3%,
+    #ff8224 33.3% 50%,
+    #e33838 50% 66.6%,
+    #ab1fb0 66.6% 83.3%,
+    #009ecc 83.3%
+  );
+  outline: 1px solid #000000b3;
+  outline-offset: -1px;
+}
+
+/* SECTION NAMES ARE ICON LABELS ON THE DESKTOP: Geneva, bold, in the rail's
+   ink. --fg, not --rail-ink — the mobile sheet sits on the paper, not the
+   desktop, and the island rebinds --fg to the rail's ink where there is one. */
+[data-theme="wokintosh"] .navtree-ws-name .navtree-name-text {
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-weight: 700;
+}
+[data-theme="wokintosh"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  font-weight: 700;
+}
+
+/* THE SEND KEY IS THE DEFAULT BUTTON: a white rounded rectangle in a black
+   frame, with the thick outer ring that meant "Return presses this". The one
+   rounded thing in the theme, because it was the one rounded thing on the
+   screen. */
+[data-theme="wokintosh"] .chat-send {
+  border-radius: 8px;
+  border: 1.5px solid var(--fg);
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--fg);
+}
+
+/* THE SCROLLBAR IS A SCROLLBAR. A 50% grey dither for the track and a white
+   thumb in a black frame. */
+[data-theme="wokintosh"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="wokintosh"] .chat-list::-webkit-scrollbar-thumb {
+  background: var(--bg-elev);
+  border: 1px solid var(--fg);
+  border-radius: 0;
+}
+[data-theme="wokintosh"] .chat-list::-webkit-scrollbar-track {
+  background: repeating-conic-gradient(#0000002e 0 25%, transparent 0 50%) 0 0 / 2px 2px;
+}
+
 * {
   box-sizing: border-box;
 }

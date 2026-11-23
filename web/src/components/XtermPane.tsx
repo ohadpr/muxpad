@@ -1,6 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Terminal } from '@xterm/xterm';
+import { type ITheme, Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { decodeServerMessage, encodeInput, encodePing, encodeResize } from '@muxpad/shared';
@@ -77,6 +77,29 @@ export interface XtermPaneProps {
   paneActive?: boolean | undefined;
 }
 
+/** The sixteen ANSI colours, which a theme MAY set. Left out, xterm's own
+ *  defaults apply — tuned for a black terminal, so on a light ground its
+ *  yellow and white are the first things to vanish. */
+type AnsiColours = Pick<
+  ITheme,
+  | 'black'
+  | 'red'
+  | 'green'
+  | 'yellow'
+  | 'blue'
+  | 'magenta'
+  | 'cyan'
+  | 'white'
+  | 'brightBlack'
+  | 'brightRed'
+  | 'brightGreen'
+  | 'brightYellow'
+  | 'brightBlue'
+  | 'brightMagenta'
+  | 'brightCyan'
+  | 'brightWhite'
+>;
+
 const XTERM_THEMES: Record<
   Theme,
   {
@@ -84,7 +107,7 @@ const XTERM_THEMES: Record<
     foreground: string;
     cursor: string;
     selectionBackground: string;
-  }
+  } & AnsiColours
 > = {
   // Matches the stylesheet's `[data-theme="demoscene"]` --xterm-* pair; the
   // cursor is the accent, so the caret glows like the rest of the theme.
@@ -114,6 +137,31 @@ const XTERM_THEMES: Record<
     foreground: '#121016',
     cursor: '#d6006e',
     selectionBackground: '#ffe8f3',
+  },
+  // The window's paper, Monaco in black, and System 7's one selection colour.
+  // The only theme with its own ANSI set: every colour clears 4.5:1 on the
+  // washed paper (#f0ede4), where xterm's defaults put yellow at ~2:1.
+  wokintosh: {
+    background: '#f8f5e2',
+    foreground: '#000000',
+    cursor: '#5e52e8',
+    selectionBackground: '#dcd8fa',
+    black: '#000000',
+    red: '#b3141b',
+    green: '#0b6e1a',
+    yellow: '#7a5a00',
+    blue: '#2a3fbf',
+    magenta: '#8f2a9e',
+    cyan: '#00666b',
+    white: '#5c5c5c',
+    brightBlack: '#5e5e5e',
+    brightRed: '#c41a1a',
+    brightGreen: '#177a24',
+    brightYellow: '#8a6400',
+    brightBlue: '#4b3fd6',
+    brightMagenta: '#9a2fae',
+    brightCyan: '#007177',
+    brightWhite: '#000000',
   },
   'tokyo-night': {
     background: '#1a1b26',
