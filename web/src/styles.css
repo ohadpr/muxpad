@@ -1957,6 +1957,21 @@
   background: transparent;
 }
 
+/* THE PHONE'S TAB BAR IS THE MENU BAR, AT THE BOTTOM. The title bar above
+   the list is grey with a black rule under it; the bar below is the same
+   grey with a black rule above it — the list is the desktop between them.
+   A pane-ink island like the title bar, so the labels go back to System 7's
+   black and grey on grey (6.2:1 resting, 15.9:1 current). The hard rule is
+   the edge; wokintosh draws nothing soft, so no shadow. */
+[data-theme="wokintosh"] .mcl-tabs {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --bg-elev: var(--bg-chrome);
+  background: var(--bg-chrome);
+  border-top: 1.5px solid var(--pane-ink);
+  box-shadow: none;
+}
+
 /* THE SELECTED ROW ON THE PHONE IS AN INVERTED ICON LABEL. On the desktop the
    selected row is the pane's paper reaching into the rail; on the phone there
    is no pane beside the list, and the shared selection — a 20% wash of the

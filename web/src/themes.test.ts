@@ -519,7 +519,18 @@ describe('every theme’s tree reads, rail and phone', () => {
 
   /** The two surfaces, as the browser builds them. */
   const surfaces = (theme: string) => {
-    const pane: Ctx = { ...ROOT, ...tokens(block(theme)) };
+    // Every token on <html> is substituted THERE: `--pane-ink: var(--fg)`
+    // means the page's --fg even inside an island that rebinds --fg. So the
+    // page's colour tokens are frozen to literals before any island sees them.
+    const raw: Ctx = { ...ROOT, ...tokens(block(theme)) };
+    const pane: Ctx = {};
+    for (const [k, v] of Object.entries(raw)) {
+      try {
+        pane[k] = lit(resolve(v, raw));
+      } catch {
+        pane[k] = v;
+      }
+    }
     // The rail island: its rebinds resolve against the PANE's values (that is
     // where a custom property is substituted), then the tree's own tokens
     // resolve lazily against the island.
@@ -593,16 +604,42 @@ describe('every theme’s tree reads, rail and phone', () => {
       bar: 4.5,
     },
     // The phone list's own chrome, on the same island (MobileNav.css).
-    { role: 'tab bar label', base: '.mcl-tab', css: 'mobile', only: 'phone', bar: 4.5 },
+    // The tab bar has its own raised ground and a theme may make it an island
+    // of its own (wokintosh's menu bar), so its labels are measured THERE.
+    {
+      role: 'tab bar label',
+      base: '.mcl-tab',
+      css: 'mobile',
+      scope: '.mcl-tabs',
+      only: 'phone',
+      bar: 4.5,
+    },
     {
       role: 'tab bar label (current)',
       base: '.mcl-tab[aria-current="page"]',
       css: 'mobile',
+      scope: '.mcl-tabs',
       only: 'phone',
       bar: 4.5,
     },
-    { role: 'header title', base: '.mcl-head', css: 'mobile', only: 'phone', bar: 4.5 },
-    { role: 'header icons', base: '.mcl-head .icon-btn', css: 'mobile', only: 'phone', bar: 3 },
+    // The header too may be its own island (wokintosh's title bar: pane ink
+    // on grey), so it is measured on its own ground.
+    {
+      role: 'header title',
+      base: '.mcl-head',
+      css: 'mobile',
+      scope: '.mcl-head',
+      only: 'phone',
+      bar: 4.5,
+    },
+    {
+      role: 'header icons',
+      base: '.mcl-head .icon-btn',
+      css: 'mobile',
+      scope: '.mcl-head',
+      only: 'phone',
+      bar: 3,
+    },
     { role: 'activity: preview', base: '.mcl-row-preview', css: 'mobile', only: 'phone', bar: 4.5 },
     { role: 'activity: time', base: '.mcl-row-meta', css: 'mobile', only: 'phone', bar: 4.5 },
   ];
@@ -643,14 +680,18 @@ describe('every theme’s tree reads, rail and phone', () => {
     let ctx: Ctx = s.ctx;
     let ground: RGBA = s.ground;
     if (r.scope) {
-      const scoped = rulesFor(NAV, r.scope).reduce((a, x) => Object.assign(a, x), {} as Ctx);
+      const scoped = [
+        ...rulesFor(r.css === 'mobile' ? MOBILE : NAV, r.scope),
+        ...rulesFor(SHEET, `[data-theme="${theme}"] ${r.scope}`),
+      ].reduce((a, x) => Object.assign(a, x), {} as Ctx);
       ctx = { ...s.ctx };
       for (const [k, v] of Object.entries(scoped))
         if (k.startsWith('--')) ctx[k] = lit(resolve(v, s.ctx));
       // A theme may repaint the selection (wokintosh inverts it); its rule wins.
       const wash =
         decl(SHEET, `[data-theme="${theme}"] ${r.scope}`, 'background-color') ??
-        scoped['background-color'];
+        scoped['background-color'] ??
+        scoped.background;
       if (wash) ground = over(resolve(wash, ctx), ground);
     }
     const fillExpr = r.fill ? decl(src, r.base, r.fill) : undefined;
@@ -683,7 +724,9 @@ describe('every theme’s tree reads, rail and phone', () => {
     expect(Object.keys(sidenav).length).toBeGreaterThanOrEqual(10);
     expect(rebinds(MOBILE, '.mobile-chat-list')).toEqual(sidenav);
     expect(decl(MOBILE, '.mobile-chat-list', 'background')).toBe('var(--rail-surface)');
-    expect(decl(MOBILE, '.mcl-tabs', 'background')).toBe('var(--rail-surface)');
+    // The tab bar is the rail's RAISED surface — same family, lifted off the
+    // list it sits over ("it blends with the list too much").
+    expect(decl(MOBILE, '.mcl-tabs', 'background')).toBe('var(--bg-elev)');
     expect(decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface')).toBe('var(--rail-surface)');
     // And the selected row turns back to the rail: the base active rule hands
     // every token to the PANE (on the desktop the row IS the pane), which on

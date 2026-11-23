@@ -306,10 +306,36 @@
 .mcl-tabs {
   flex: 0 0 auto;
   display: flex;
-  border-top: 1px solid var(--border);
-  /* The rail's own ground: the bar is part of the list, not a pane under it. */
-  background: var(--rail-surface);
-  /* Above the home indicator in the installed PWA (viewport-fit=cover). */
+  /* ─── A BAR THE LIST SCROLLS UNDER, NOT THE LIST'S LAST ROW ──────────────
+     "Make it a bit more distinct visually — it blends with the list too
+     much." It was --rail-surface under a 1px --border: once the list moved
+     onto the rail too, the two grounds were the same colour and a hairline
+     was the whole of the separation — teal on teal in wokintosh.
+
+     Three moves, all in the rail's own family so no theme gets a foreign
+     object: the rail's own ground RAISED by a mix of its ink (below); a top edge
+     drawn in the rail's ink rather than a border the colour of the ground;
+     and a soft shadow cast UPWARD, so a row passing out of view reads as
+     passing beneath. Stacked above the list so the shadow lands on its rows.
+
+     Flat, full width, same height. Not a floating pill: Slack carries one on
+     a white, flat list, and on demoscene's scanlines or riso's ultramarine
+     it would read as a stray sticker. */
+  position: relative;
+  z-index: 1;
+  /* 8% of the rail's ink over the rail, not --rail-elev's 6%: at 6% the lift
+     was there and hard to see at arm's length. 8% is the ceiling — at 10%
+     tokyo-night's resting label (the dimmest pairing) measured 4.37:1, and the
+     tree sweep in themes.test.ts, which holds every theme's labels on THIS
+     ground, failed it. The edge and the shadow carry the rest.
+     Declared as --bg-elev so the badge's ring and anything else inside the bar
+     reads the bar's ground, and so a theme can replace it (wokintosh does). */
+  --bg-elev: color-mix(in srgb, var(--rail-ink) 8%, var(--rail-surface));
+  background: var(--bg-elev);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+  box-shadow: 0 -12px 22px -10px rgb(0 0 0 / 0.6);
+  /* Above the home indicator in the installed PWA (viewport-fit=cover). The
+     raised ground runs under it, so the bar reaches the screen's edge. */
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 /* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
@@ -357,5 +383,6 @@
   font-weight: 700;
   line-height: 17px;
   text-align: center;
-  box-shadow: 0 0 0 2px var(--rail-surface);
+  /* The bar's own ground, so the ring reads as a cut-out, not a halo. */
+  box-shadow: 0 0 0 2px var(--bg-elev);
 }
