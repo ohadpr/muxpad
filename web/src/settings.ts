@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { syncStatusBarTint } from './lib/status-bar-tint.js';
 
 export type Theme =
   | 'tokyo-night'
@@ -209,6 +210,9 @@ export function themeInForce(s: Settings): ThemeChoice {
 function applyToDocument(s: Settings) {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.theme = resolveTheme(themeInForce(s), systemPrefersDark());
+  // The iPhone status bar is tinted by `theme-color`, and there are eleven
+  // themes — see lib/status-bar-tint.ts for why that stopped being a constant.
+  syncStatusBarTint();
 }
 
 /**

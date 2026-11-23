@@ -12,7 +12,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="muxpad" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- NO `apple-mobile-web-app-status-bar-style`, deliberately.
+         `black-translucent` ran the page under the status bar, and on iOS 26
+         it also earns a SYSTEM-drawn Liquid Glass blur about 40pt deep over
+         the top of the page that no CSS can turn off — reported from a real
+         phone as a frosted header with the rows bleeding through it. The
+         default style starts the page below an OPAQUE status bar tinted by
+         `theme-color` below.
+         iOS reads this when the app is ADDED to the home screen, so an
+         existing install keeps the blur until it is removed and re-added. -->
     <meta name="theme-color" content="#1e1e2e" />
     <!-- No <link> to fonts.googleapis.com. It was render-blocking on EVERY
          load (cross-origin DNS + TLS to the public internet before first
