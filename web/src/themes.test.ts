@@ -686,7 +686,14 @@ describe('every theme’s tree reads, rail and phone', () => {
       ].reduce((a, x) => Object.assign(a, x), {} as Ctx);
       ctx = { ...s.ctx };
       for (const [k, v] of Object.entries(scoped))
-        if (k.startsWith('--')) ctx[k] = lit(resolve(v, s.ctx));
+        if (k.startsWith('--')) {
+          // Only colours: a scope may also carry lengths (the tab bar's inset).
+          try {
+            ctx[k] = lit(resolve(v, s.ctx));
+          } catch {
+            ctx[k] = v;
+          }
+        }
       // A theme may repaint the selection (wokintosh inverts it); its rule wins.
       const wash =
         decl(SHEET, `[data-theme="${theme}"] ${r.scope}`, 'background-color') ??
@@ -727,6 +734,14 @@ describe('every theme’s tree reads, rail and phone', () => {
     // The tab bar is the rail's RAISED surface — same family, lifted off the
     // list it sits over ("it blends with the list too much").
     expect(decl(MOBILE, '.mcl-tabs', 'background')).toBe('var(--bg-elev)');
+    // The ground runs under the home indicator; the CONTENT clears the pill,
+    // not the whole strip. Clearing the full ~34px inset left the labels in
+    // the top half of the bar on a real phone — "bottom bar icons too high".
+    // Headless browsers report an inset of 0, so only this can see it.
+    expect(decl(MOBILE, '.mcl-tabs', '--mcl-inset')).toBe('env(safe-area-inset-bottom, 0px)');
+    expect(decl(MOBILE, '.mcl-tabs', 'padding-bottom')).toBe(
+      'max(0px, calc(var(--mcl-inset) - 20px))',
+    );
     expect(decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface')).toBe('var(--rail-surface)');
     // And the selected row turns back to the rail: the base active rule hands
     // every token to the PANE (on the desktop the row IS the pane), which on

@@ -334,9 +334,27 @@
   background: var(--bg-elev);
   border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
   box-shadow: 0 -12px 22px -10px rgb(0 0 0 / 0.6);
-  /* Above the home indicator in the installed PWA (viewport-fit=cover). The
-     raised ground runs under it, so the bar reaches the screen's edge. */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* ─── THE HOME INDICATOR, AND HOW MUCH OF IT TO CLEAR ────────────────────
+     The raised ground runs to the screen's edge under the indicator. The
+     CONTENT used to clear the whole inset (`padding-bottom: env(…)`), which on
+     a phone with a home indicator is ~34px: "bottom bar icons too high in the
+     bar" — the labels sat in the top half with an empty band of the bar's
+     ground under them nearly as deep as the icons. Invisible headless, where
+     the inset is 0.
+
+     The indicator strip is a region apps may draw under — the system paints
+     its pill over it — so the content clears the PILL, not the strip: the
+     inset less 20px. At 34px that is 14px, which with the tab's own 6px puts
+     the labels' baseline ~20px above the edge and ~7px above the pill, the
+     proportion of Slack's bar. At an inset of 0 (a browser, a desktop PWA,
+     Android without gesture nav) max() leaves it 0 — the bar as it was.
+     The tap target is the tab, which this does not touch: 52px tall.
+
+     Through a custom property so the inset can be simulated in a browser by
+     setting --mcl-inset on the bar — the formula under test is the shipped
+     one. */
+  --mcl-inset: env(safe-area-inset-bottom, 0px);
+  padding-bottom: max(0px, calc(var(--mcl-inset) - 20px));
 }
 /* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
    labels, a row's time, a fallback preview, the empty state) were --fg-faint,
