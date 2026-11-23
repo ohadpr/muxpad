@@ -86,3 +86,374 @@
     animation: none;
   }
 }
+
+/* ═══ EVERY THEME'S OWN "WORKING" ═══════════════════════════════════════════
+   "i hate these working indicators … for each theme come up with something
+   better/different — more normative but with a twist." Every theme drew the
+   same mark and only recoloured it, and at row size in wokintosh that was a
+   yellow angular fragment with no meaning.
+
+   So each theme quotes a convention anybody reads as "working" on sight, and
+   does it its own way. The rules do not move:
+     · ONLY working moves. Every animation below sits on a working mark's ::after
+       and nothing else; blocked and ready stay still (themes.test-style sweep
+       in StateChip.test.tsx).
+     · Transform and opacity only, one animated layer per mark: twenty working
+       rows cost twenty composited layers, no layout, no per-frame paint.
+     · Reduced motion stops the moving layer and leaves its rest frame, which
+       is a complete glyph on every theme — never a fainter mark.
+     · It reads at row size: each design is drawn in a ~14px box with ≥1.5px
+       strokes in the surface-tuned --status-working.
+
+   ONE DRAWING, THREE HOSTS. There are three working marks in the chrome — the
+   rail row's 10px mark (NavTree), StateChip's spinner (the phone list, pane
+   rows) and this component's 22px column — and they all get the same design,
+   so the rail, the drawer, the chat header and the phone list agree without
+   any markup changing. The host is emptied; ::before is the still face, ::after
+   is the one thing that moves. --wm-inset sizes the drawing to ~14px in each.
+   Two themes share with their sibling — dracula/alucard and acme/acme-dark —
+   because "System" swaps between them at sunrise, and the working mark should
+   not change vocabulary when the paper changes colour. */
+[data-theme] .navtree-mark[data-state="working"],
+[data-theme] .navtree-state-spin,
+[data-theme] .navtree-status[data-status="working"] {
+  --wm-ink: var(--status-working);
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  animation: none;
+}
+[data-theme] .navtree-mark[data-state="working"] {
+  /* The row's mark is a 10px slot; the drawing overflows it by 2px a side
+     rather than resizing the slot, so a row never shifts when it starts. */
+  --wm-inset: -2px;
+}
+[data-theme] .navtree-state-spin {
+  --wm-ink: var(--state-hue);
+  --wm-inset: 0px;
+}
+[data-theme] .navtree-tab-row[data-active="true"] .navtree-state-spin,
+[data-theme] .navtree-pane-row-wrap[data-active="true"] .navtree-state-spin {
+  --wm-ink: var(--accent-fg);
+}
+[data-theme] .navtree-status[data-status="working"] {
+  --wm-inset: 4px;
+}
+[data-theme] .navtree-status[data-status="working"] svg {
+  display: none;
+}
+[data-theme] .navtree-mark[data-state="working"]::before,
+[data-theme] .navtree-mark[data-state="working"]::after,
+[data-theme] .navtree-state-spin::before,
+[data-theme] .navtree-state-spin::after,
+[data-theme] .navtree-status[data-status="working"]::before,
+[data-theme] .navtree-status[data-status="working"]::after {
+  content: "";
+  position: absolute;
+  inset: var(--wm-inset);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* ── tokyo-night · the modern indeterminate spinner, done properly ────────
+   An arc on a faint track (Material/iOS), but the arc is a TAPERED comet whose
+   tail fades into the track — a neon streak at night — instead of a cut ring
+   with two hard ends. */
+[data-theme="tokyo-night"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--wm-ink) 22%, transparent);
+}
+[data-theme="tokyo-night"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 12%, var(--wm-ink));
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  animation: navtree-state-spin 0.9s linear infinite;
+}
+
+/* ── dracula & alucard · the spoked activity indicator ──────────────────
+   The eight-spoke wheel macOS and iOS have said "busy" with for twenty years,
+   stepping a spoke at a time. The twist: the trailing spokes fade into the
+   theme's own violet rather than to nothing, so the wheel is amber at its
+   head and Dracula behind it. */
+:is([data-theme="dracula"], [data-theme="alucard"])
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  background: conic-gradient(
+    color-mix(in srgb, var(--wm-ink) 20%, var(--accent)) 0 18deg,
+    transparent 0 45deg,
+    color-mix(in srgb, var(--wm-ink) 30%, var(--accent)) 45deg 63deg,
+    transparent 0 90deg,
+    color-mix(in srgb, var(--wm-ink) 42%, var(--accent)) 90deg 108deg,
+    transparent 0 135deg,
+    color-mix(in srgb, var(--wm-ink) 54%, var(--accent)) 135deg 153deg,
+    transparent 0 180deg,
+    color-mix(in srgb, var(--wm-ink) 66%, var(--accent)) 180deg 198deg,
+    transparent 0 225deg,
+    color-mix(in srgb, var(--wm-ink) 78%, var(--accent)) 225deg 243deg,
+    transparent 0 270deg,
+    color-mix(in srgb, var(--wm-ink) 90%, var(--accent)) 270deg 288deg,
+    transparent 0 315deg,
+    var(--wm-ink) 315deg 333deg,
+    transparent 0
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent 36%, #000 40%);
+  mask: radial-gradient(farthest-side, transparent 36%, #000 40%);
+  animation: navtree-state-spin 0.8s steps(8) infinite;
+}
+
+/* ── github-light · Primer's animated ellipsis ───────────────────────────
+   "…" is how GitHub itself says something is loading. The twist: rather
+   than the three dots breathing together, one lit dot walks along the three
+   like a pager, so it reads as progress at a glance. */
+[data-theme="github-light"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  --d: color-mix(in srgb, var(--wm-ink) 35%, transparent);
+  background: radial-gradient(circle at 17% 50%, var(--d) 0 1.6px, transparent 2px),
+    radial-gradient(circle at 50% 50%, var(--d) 0 1.6px, transparent 2px),
+    radial-gradient(circle at 83% 50%, var(--d) 0 1.6px, transparent 2px);
+}
+[data-theme="github-light"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  background: radial-gradient(circle at 17% 50%, var(--wm-ink) 0 2px, transparent 2.4px);
+  animation: wm-walk 1.2s steps(3, jump-none) infinite;
+}
+@keyframes wm-walk {
+  to {
+    transform: translateX(66%);
+  }
+}
+
+/* ── acme & acme-dark · the "live" ping ──────────────────────────────────
+   The radar pulse that a live indicator or a sending message uses: a ring
+   sends out a wave that widens and fades. The twist: the core is a RING, not
+   a dot, so it can never be mistaken for the filled ready/blocked marks. */
+:is([data-theme="acme"], [data-theme="acme-dark"])
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  background: radial-gradient(closest-side, transparent 46%, var(--wm-ink) 50% 72%, transparent 76%);
+}
+:is([data-theme="acme"], [data-theme="acme-dark"])
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  border: 1.5px solid var(--wm-ink);
+  animation: wm-ping 1.3s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+@keyframes wm-ping {
+  from {
+    transform: scale(0.55);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+
+/* ── demoscene · the tape-loading border ─────────────────────────────────
+   The C64 said "LOADING" by flickering bands of colour across the border
+   while the tape ran — every scener's first progress bar. A framed box of
+   bands, the second set of bands flipping in over the first (opacity only),
+   in the working ink and the theme's own phosphor. Slow enough (0.9s a
+   cycle) that it reads as a loader, not a flash. */
+[data-theme="demoscene"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  border: 1.5px solid var(--wm-ink);
+  border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, var(--wm-ink) 0 2px, transparent 2px 4px)
+    content-box;
+  padding: 1.5px;
+}
+[data-theme="demoscene"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  margin: 3px;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    color-mix(in srgb, var(--accent) 85%, transparent) 2px 4px
+  );
+  animation: wm-flip 0.9s step-end infinite;
+}
+@keyframes wm-flip {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── blueprint · the construction circle ─────────────────────────────────
+   A dashed circle turning is the oldest web loader there is ("marching
+   ants"); on a drafting sheet it is a construction line being swung by a
+   compass round a centre mark — so the centre's crosshair stays put and the
+   dashed circle turns about it. */
+[data-theme="blueprint"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  background: linear-gradient(var(--wm-ink), var(--wm-ink)) center / 1.5px 46% no-repeat,
+    linear-gradient(var(--wm-ink), var(--wm-ink)) center / 46% 1.5px no-repeat;
+}
+[data-theme="blueprint"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  border: 1.5px dashed var(--wm-ink);
+  animation: navtree-state-spin 2.4s linear infinite;
+}
+
+/* ── riso · a registration mark, out of register ─────────────────────────
+   A crosshair in a circle turning is a spinner anybody reads; on a riso it is
+   the registration mark itself. The twist is the process's own flaw: a ghost
+   of the mark in the second ink sits a pixel off, as the second drum never
+   quite lands. Only the first ink turns. */
+[data-theme="riso"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before,
+[data-theme="riso"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  background: linear-gradient(var(--c), var(--c)) center / 1.5px 100% no-repeat,
+    linear-gradient(var(--c), var(--c)) center / 100% 1.5px no-repeat,
+    radial-gradient(closest-side, transparent 52%, var(--c) 56% 74%, transparent 78%);
+}
+[data-theme="riso"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  --c: color-mix(in srgb, var(--accent) 80%, transparent);
+  transform: translate(1px, 1px);
+}
+[data-theme="riso"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  --c: var(--wm-ink);
+  animation: navtree-state-spin 1.6s linear infinite;
+}
+
+/* ── memphis · the tumbling square ───────────────────────────────────────
+   A square flipping a quarter-turn at a time is a stock loader; Memphis makes
+   it a sticker: an outlined square that tumbles over its own hard offset
+   shadow in the theme's magenta, which stays put. */
+[data-theme="memphis"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  /* --pane-accent, not --accent: inside the rail --accent is the rail's
+     yellow, the same ink as the square, and the two merged into one blob. */
+  background: linear-gradient(var(--pane-accent), var(--pane-accent)) 85% 85% / 58% 58% no-repeat;
+}
+[data-theme="memphis"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  inset: calc(var(--wm-inset) + 2px);
+  border: 2px solid var(--wm-ink);
+  animation: wm-tumble 0.7s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+}
+@keyframes wm-tumble {
+  to {
+    transform: rotate(90deg);
+  }
+}
+
+/* ── wokintosh · the wristwatch ──────────────────────────────────────────
+   The Macintosh said "busy" with a wristwatch for a decade before it ever had
+   a beachball. A white face in a black rim, an hour hand at three, and a
+   minute hand that ticks round in eight steps as the cursor's frames did.
+   Black on white, not the working amber: it is the cursor, and on the teal
+   desktop and the grey title bar alike it reads as one. */
+[data-theme="wokintosh"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
+  border-radius: 50%;
+  border: 1.5px solid #000;
+  background: #fff linear-gradient(#000, #000) no-repeat 82% 50% / 36% 1.5px;
+}
+[data-theme="wokintosh"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  background: linear-gradient(#000, #000) no-repeat 50% 16% / 1.5px 36%;
+  animation: navtree-state-spin 1.6s steps(8) infinite;
+}
+
+/* Reduced motion: the moving layer stops at its rest frame, and every rest
+   frame above is a complete glyph — the watch at three, the comet, the wheel,
+   the ellipsis with its first dot lit, the ringed ping, the banded box, the
+   crosshair in its dashed circle, the registration mark, the square on its
+   shadow. Nothing gets fainter. (StateChip's spinner still hands over to the
+   WORKING word there, as it always has.) */
+@media (prefers-reduced-motion: reduce) {
+  [data-theme] .navtree-mark[data-state="working"]::after,
+  [data-theme] .navtree-state-spin::after,
+  [data-theme] .navtree-status[data-status="working"]::after {
+    animation: none;
+  }
+}

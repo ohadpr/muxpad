@@ -3,57 +3,74 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * RISO'S WORKING MARK IS TWO INK DOTS, NOT A CUT RING.
+ * RISO'S WORKING MARK IS A REGISTRATION MARK, OUT OF REGISTER.
  *
- * The shared mark is a 10px circle with a 1.5px stroke and one quadrant
- * removed. On every other theme that is an amber arc on a dark grey rail, so
- * the way a thin curve aliases at 10px never shows. Riso puts `#ffd84d` on
- * `#1333c4` — about as far apart as two inks get — and at that contrast the
- * stair-stepping and the hard cut become the two loudest things in the mark.
- * It reads as a chunky yellow "U" flipping about rather than a ring turning.
+ * It was two ink dots riding the shared spin, after a cut ring aliased into "a
+ * chunky yellow U flipping about" at riso's contrast. Then every theme got a
+ * working mark of its own ("i hate these working indicators … for each theme
+ * come up with something better/different — more normative but with a
+ * twist"), and riso's is the print process's own target: a crosshair in a
+ * circle turning (a spinner anybody reads) over a still ghost of itself in the
+ * second ink, a pixel off — the drum that never quite lands.
  *
- * A filled circle aliases better than a thin arc, because its edge is where
- * the colour IS rather than where it stops. And two ink dots going round is
- * what a risograph actually looks like: one flat spot ink per pass,
- * registration marks, overprint.
+ * Rewritten rather than deleted: what the old file guarded still holds and is
+ * pinned here — the drawing is FILLED gradients, not a stroked arc, and reduced
+ * motion leaves a complete mark rather than a fainter one.
  */
-const CSS = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
-const flat = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-const rule = (sel: string): string => {
-  const i = flat.indexOf(sel);
-  return i === -1 ? '' : flat.slice(i, flat.indexOf('}', i) + 1);
-};
+const flat = readFileSync(join(__dirname, 'StatusMark.css'), 'utf8').replace(
+  /\/\*[\s\S]*?\*\//g,
+  '',
+);
+const rules = [...flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+  sel: (m[1] ?? '').trim(),
+  body: m[2] ?? '',
+}));
+const riso = (layer: '::before' | '::after') =>
+  rules
+    .filter((r) => r.sel.includes('[data-theme="riso"]') && r.sel.includes(layer))
+    .map((r) => r.body)
+    .join('\n');
 
 describe('the riso working mark', () => {
-  const riso = rule('[data-theme="riso"] .navtree-mark[data-state="working"]');
-
-  it('exists, and drops the stroke that was aliasing', () => {
-    expect(riso).not.toBe('');
-    expect(riso).toMatch(/border:\s*0/);
+  it('exists on both layers, and is drawn in fills, not a stroked arc', () => {
+    expect(riso('::before')).not.toBe('');
+    expect(riso('::after')).not.toBe('');
+    expect(`${riso('::before')}${riso('::after')}`).toMatch(/radial-gradient/);
+    expect(`${riso('::before')}${riso('::after')}`).not.toMatch(/border:/);
   });
 
-  it('draws two dots, the second one lighter — the overprint read', () => {
-    expect(riso.match(/radial-gradient/g) ?? []).toHaveLength(2);
-    expect(riso).toMatch(/color-mix\(in srgb, var\(--status-working\) 55%/);
-  });
-
-  it('declares NO animation of its own', () => {
-    // One keyframe in this rail is pinned by StateChip.test — two that agree
-    // today are two that can disagree tomorrow. Riso changes the DRAWING and
-    // rides the same spin.
-    expect(riso).not.toContain('animation');
-  });
-
-  it('still collapses to a solid mark under reduced motion', () => {
-    // The generic fallback sets `background`, and this theme's own rule sets
-    // `background` at higher specificity — so without an arm of its own, riso
-    // would get two STATIC dots, which is "indistinguishable from a
-    // decoration", the one outcome that fallback exists to avoid.
-    const start = flat.indexOf('@media (prefers-reduced-motion: reduce)');
-    const block = flat.slice(
-      start,
-      flat.indexOf('\n}', flat.indexOf('[data-theme="riso"]', start)),
+  it('the ghost is the second ink, a pixel off, and STILL', () => {
+    const ghost = rules.filter(
+      (r) =>
+        r.sel.includes('[data-theme="riso"]') &&
+        r.sel.includes('::before') &&
+        !r.sel.includes('::after'),
     );
-    expect(block).toMatch(/\[data-theme="riso"\][^}]*background:\s*var\(--status-working\)/);
+    const body = ghost.map((r) => r.body).join('\n');
+    expect(body).toMatch(/--c:\s*color-mix\(in srgb, var\(--accent\)/);
+    expect(body).toMatch(/transform:\s*translate\(1px, 1px\)/);
+    expect(body).not.toMatch(/animation:/);
+  });
+
+  it('only the first ink turns', () => {
+    const turning = rules.filter(
+      (r) =>
+        r.sel.includes('[data-theme="riso"]') &&
+        r.sel.includes('::after') &&
+        /animation:/.test(r.body),
+    );
+    expect(turning).toHaveLength(1);
+    expect(turning[0]?.body).toMatch(/--c:\s*var\(--wm-ink\)/);
+  });
+
+  it('reduced motion stops the turn and keeps the whole mark', () => {
+    const start = flat.indexOf('@media (prefers-reduced-motion: reduce)', flat.indexOf('EVERY'));
+    const block = flat.slice(
+      Math.max(start, flat.lastIndexOf('@media (prefers-reduced-motion: reduce)')),
+    );
+    expect(block).toMatch(/\.navtree-mark\[data-state="working"\]::after[\s\S]*animation:\s*none/);
+    // …and nothing in it touches opacity: a fainter mark is the one thing the
+    // reduced-motion fallback must never be.
+    expect(block).not.toMatch(/opacity/);
   });
 });

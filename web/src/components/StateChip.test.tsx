@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { PaneStatus } from '@muxpad/shared';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { THEMES } from '../settings';
 import { StateChip } from './StateChip';
 
 /**
@@ -392,20 +393,56 @@ describe('the CSS mapping — selection is not a state', () => {
 });
 
 describe('only WORKING moves', () => {
-  it('the rail runs exactly ONE animation, and it is the spinner', () => {
-    // Comments stripped FIRST: prose about animations is not an animation, and
-    // a sentence containing the word was enough to fail this outright.
-    const css = `${STATE_CSS} ${NAV_CSS}`.replace(/\/\*[\s\S]*?\*\//g, '');
-    const animations = [...css.matchAll(/animation: ([^;]+);/g)].map((m) => m[1]);
-    // DISTINCT animations, not declarations. Two rails draw the working
-    // spinner now — StateChip's chip (the sheet, the pane rows) and the chat
-    // rows' 10px mark — and they must use the SAME one: two keyframes that
-    // happen to agree today are two that can disagree tomorrow. So the set is
-    // what is pinned, and it is still a set of one.
-    expect([...new Set(animations)]).toEqual(['navtree-state-spin 0.8s linear infinite']);
-    // …and every site really is that one, so a second animation cannot hide
-    // behind a duplicate of the first.
-    expect(animations.every((a) => a === 'navtree-state-spin 0.8s linear infinite')).toBe(true);
+  // REWRITTEN, ON PURPOSE. This pinned the whole chrome to ONE animation. The
+  // owner then asked for every theme to say "working" its own way ("i hate
+  // these working indicators … for each theme come up with something
+  // better/different"), which cannot be one keyframe. What the old test was
+  // FOR survives, stated more strictly: anything that moves is a working mark,
+  // it moves by transform/opacity only, and blocked/ready never move.
+  const ALL = `${STATE_CSS} ${NAV_CSS} ${css('StatusMark.css')}`.replace(/\/\*[\s\S]*?\*\//g, '');
+  const WORKING =
+    /\.navtree-state-spin|\.navtree-mark\[data-state="working"\]|\.navtree-status\[data-status="working"\]|\.navtree-status-arc/;
+  const animated = [...ALL.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map((m) => ({ sel: (m[1] ?? '').trim(), body: m[2] ?? '' }))
+    .filter((r) => /animation:\s*(?!none)[^;]+;/.test(r.body) && !r.sel.startsWith('@'));
+
+  it('finds the animated rules at all', () => {
+    expect(animated.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('only a WORKING mark animates — every selector of every animated rule', () => {
+    const strays = animated.flatMap((r) =>
+      r.sel
+        .split(/,(?![^(]*\))/)
+        .map((x) => x.trim())
+        .filter((x) => !WORKING.test(x)),
+    );
+    expect(strays, 'these animate and are not a working mark').toEqual([]);
+  });
+
+  it('blocked and ready never move', () => {
+    for (const r of animated)
+      expect(r.sel).not.toMatch(/data-(?:state|status)="(?:blocked|ready|dead)"/);
+  });
+
+  it('every keyframe moves by transform or opacity only — no layout, no paint', () => {
+    const frames = [...ALL.matchAll(/@keyframes ([\w-]+)\s*\{([\s\S]*?)\}\s*\}/g)];
+    expect(frames.length).toBeGreaterThanOrEqual(2);
+    for (const [, name, body] of frames) {
+      const props = [...(body ?? '').matchAll(/([\w-]+)\s*:/g)].map((m) => m[1]);
+      expect(
+        props.filter((p) => p !== 'transform' && p !== 'opacity'),
+        name,
+      ).toEqual([]);
+    }
+  });
+
+  it('every theme draws its own working mark', () => {
+    const SM = css('StatusMark.css');
+    for (const t of THEMES.map((x) => x.value))
+      expect(SM, `${t} has no working design`).toMatch(
+        new RegExp(`\\[data-theme="${t}"\\][^{]*\\.navtree-mark\\[data-state="working"\\]`),
+      );
   });
 
   it('the spinner is a 13px ring on a 2px stroke, turning once every 0.8s', () => {
