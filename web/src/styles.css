@@ -1911,6 +1911,28 @@
   box-shadow: -7px 0 0 0 var(--bg-chrome), 7px 0 0 0 var(--bg-chrome);
 }
 
+/* …AND THE CHAT IS A WINDOW ON THE SAME DESKTOP. "No color tie-in from list
+   view to chat view": the headers matched, but the list is the teal desktop
+   and a chat was the cream paper edge to edge, so nothing carried across the
+   transition. A System 7 window SITS ON the desktop rather than replacing it,
+   so on the phone the chat's paper is inset on the teal: a strip of desktop
+   either side and above it, the window's 1.5px black frame, and the theme's
+   hard shadow down and to the right. It runs off the bottom of the screen,
+   as a window taller than the screen does, which spends nothing on the
+   composer or the home indicator. The menu bar above stays full width — it
+   is the same bar as the list's, and it is not part of the window.
+   The cost is width, measured: the paper is 390 → 375px and the reading
+   column 339 → 322px (−17px, −5.0%) — roughly one word in twenty on a line. */
+[data-theme="wokintosh"] .mobile-pane-slot:has(.chat-pane) {
+  background: var(--rail-surface);
+  padding: 8px 9px 0 6px;
+}
+[data-theme="wokintosh"] .mobile-pane-slot:has(.chat-pane) .chat-pane {
+  border: 1.5px solid var(--pane-ink);
+  border-bottom: 0;
+  box-shadow: 3px 4px 0 #000000d9;
+}
+
 /* THE TITLE BAR IS THE RAIL'S HEAD. The desktop has no tab strip, so the
    window-title treatment lives on the brand row:
    grey, pinstriped edge to edge, a black rule under it, and the wordmark set
