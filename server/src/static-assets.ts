@@ -4,7 +4,6 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { buildIdFromHtml } from '@muxpad/shared';
 import type { Context, Hono } from 'hono';
 import { COOKIE_NAME, apiCredential } from './api-auth.js';
-import { currentBuildId } from './runner-build.js';
 
 /**
  * Serving the built web bundle.
@@ -222,7 +221,14 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
     c.header('Content-Type', 'application/manifest+json');
     try {
       const raw = JSON.parse(readFileSync(join(webRoot, 'manifest.webmanifest'), 'utf-8'));
-      return c.body(JSON.stringify({ ...raw, start_url: `/?b=${currentBuildId()}` }));
+      // STAMPED WITH THE SHELL'S OWN VALIDATOR, not the server's build id.
+      // `currentBuildId()` measures server/dist and shared/dist, so a WEB-only
+      // deploy — which is most of them, and every one of the fixes that could
+      // not reach his phone — left the start URL unchanged and a new install
+      // could inherit the cached response again. The shell's ETag changes
+      // whenever the shell does, which is exactly the question being asked.
+      const stamp = validators(join(webRoot, 'index.html'))?.etag.replace(/\W/g, '') ?? 'x';
+      return c.body(JSON.stringify({ ...raw, start_url: `/?b=${stamp}` }));
     } catch {
       return c.text('not found', 404);
     }

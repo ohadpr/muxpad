@@ -47,31 +47,6 @@ self.addEventListener('push', (event) => {
 // web/src/lib/push-target.ts). NOT a fetch-handling cache — nothing is
 // intercepted and no app asset is stored; these are two key/value entries in
 // the only storage a service worker and a window can both reach.
-/**
- * NAVIGATIONS ALWAYS COME FROM THE NETWORK.
- *
- * This worker caches push payloads and nothing else — there is no app-shell
- * cache here and there never was. The staleness it fixes is the BROWSER's:
- * an installed iOS app kept serving a previous shell after the one on the
- * server changed, through a delete-and-re-add, while a Safari tab on the same
- * URL served the new one.
- *
- * `cache: 'reload'` makes the request bypass the HTTP cache on the way out and
- * update it on the way back. If the network is unreachable the request is
- * retried normally, so an offline launch is no worse than it was before this
- * existed — it must not be, because a tool that will not open when the tailnet
- * is down is worse than one showing yesterday's build.
- *
- * Only navigations. Hashed assets are immutable by construction and the API
- * must not have its own caching second-guessed here.
- */
-self.addEventListener('fetch', (event) => {
-  if (event.request.mode !== 'navigate') return;
-  event.respondWith(
-    fetch(event.request, { cache: 'reload' }).catch(() => fetch(event.request)),
-  );
-});
-
 const PUSH_CACHE = 'muxpad-push-v1';
 const VAPID_CACHE_URL = '/api/push/vapid-public-key';
 const TARGET_CACHE_URL = '/__muxpad/push-target';

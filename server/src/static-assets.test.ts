@@ -163,6 +163,9 @@ describe('serving', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     const m = JSON.parse(await res.text()) as { start_url: string; name: string };
     expect(m.start_url).toMatch(/^\/\?b=.+/);
+    // Stamped from the SHELL's validator, so a web-only deploy moves it. The
+    // server's build id does not: it measures server/dist and shared/dist, and
+    // every fix that failed to reach his phone was web-only.
     // Everything else is still the file's.
     expect(m.name).toBe('muxpad');
   });
