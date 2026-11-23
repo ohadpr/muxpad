@@ -226,7 +226,7 @@
   margin-inline-start: auto;
   padding-inline-start: 8px;
   font-size: 0.75rem;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   white-space: nowrap;
 }
 .mcl-row-preview {
@@ -241,7 +241,7 @@
 }
 .mcl-row-preview[data-fallback="true"] {
   font-style: italic;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 
 /* ─── Empty states ────────────────────────────────────────────────────── */
@@ -253,7 +253,7 @@
   gap: 6px;
   padding: 96px 32px 0;
   text-align: center;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 .mcl-empty svg {
   color: var(--accent, var(--fg-dim));
@@ -282,7 +282,11 @@
   margin: 4px 12px 6px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
+  /* --bg-elev, which the list's island points at the rail's raised box. It was
+     --bg — the PANE's ground, which this island does not rebind — so on a
+     deep rail the query was typed in rail ink on the pane's paper: white on
+     cream in wokintosh. */
+  background: var(--bg-elev);
 }
 .mcl-search .cmdk-input {
   /* 16px or iOS zooms the page when the field takes focus. */
@@ -306,6 +310,11 @@
   /* Above the home indicator in the installed PWA (viewport-fit=cover). */
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+/* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
+   labels, a row's time, a fallback preview, the empty state) were --fg-faint,
+   and once the list moved onto the rail they measured 3.26–4.40:1 on ten of
+   eleven themes — 11px text. Dim is the quiet rung every theme holds at 4.5:1
+   or better (themes.test.ts, the tree sweep). */
 .mcl-tab {
   flex: 1;
   display: flex;
@@ -315,7 +324,7 @@
   padding: 7px 0 6px;
   background: transparent;
   border: 0;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   font: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;

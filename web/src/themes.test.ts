@@ -553,6 +553,8 @@ describe('every theme’s tree reads, rail and phone', () => {
      *  whose background-color is laid over the ground. */
     scope?: string;
     only?: 'rail' | 'phone';
+    /** Which stylesheet declares it — NavTree.css unless said. */
+    css?: 'mobile';
     bar: number;
   }[] = [
     { role: 'section header', base: '.navtree-ws-row .navtree-name-text', bar: 4.5 },
@@ -587,6 +589,19 @@ describe('every theme’s tree reads, rail and phone', () => {
       only: 'phone',
       bar: 4.5,
     },
+    // The phone list's own chrome, on the same island (MobileNav.css).
+    { role: 'tab bar label', base: '.mcl-tab', css: 'mobile', only: 'phone', bar: 4.5 },
+    {
+      role: 'tab bar label (current)',
+      base: '.mcl-tab[aria-current="page"]',
+      css: 'mobile',
+      only: 'phone',
+      bar: 4.5,
+    },
+    { role: 'header title', base: '.mcl-head', css: 'mobile', only: 'phone', bar: 4.5 },
+    { role: 'header icons', base: '.mcl-head .icon-btn', css: 'mobile', only: 'phone', bar: 3 },
+    { role: 'activity: preview', base: '.mcl-row-preview', css: 'mobile', only: 'phone', bar: 4.5 },
+    { role: 'activity: time', base: '.mcl-row-meta', css: 'mobile', only: 'phone', bar: 4.5 },
   ];
 
   /** A theme may restate a role's ink (memphis and wokintosh set the section
@@ -616,10 +631,11 @@ describe('every theme’s tree reads, rail and phone', () => {
   });
 
   it.each(cases)('%s', (_n, theme, r, s) => {
+    const src = r.css === 'mobile' ? MOBILE : NAV;
     const ink =
       themed(theme, r.role, r.base) ??
       (s.name === 'phone' && r.phone ? decl(NAV, r.phone, 'color') : undefined) ??
-      decl(NAV, r.base, 'color');
+      decl(src, r.base, 'color');
     expect(ink, `${r.base} declares no colour`).toBeTruthy();
     let ctx: Ctx = s.ctx;
     let ground: RGBA = s.ground;
@@ -634,9 +650,9 @@ describe('every theme’s tree reads, rail and phone', () => {
         scoped['background-color'];
       if (wash) ground = over(resolve(wash, ctx), ground);
     }
-    const fillExpr = r.fill ? decl(NAV, r.base, r.fill) : undefined;
+    const fillExpr = r.fill ? decl(src, r.base, r.fill) : undefined;
     if (fillExpr) ground = over(resolve(fillExpr, ctx), ground);
-    const opacity = Number(decl(NAV, r.base, 'opacity') ?? 1);
+    const opacity = Number(decl(src, r.base, 'opacity') ?? 1);
     const fg = resolve(ink as string, ctx);
     const seen = over([fg[0], fg[1], fg[2], fg[3] * opacity], ground);
     const h = (c: RGBA) =>
