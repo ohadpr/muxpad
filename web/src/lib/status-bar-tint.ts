@@ -52,11 +52,37 @@ const TOP_BARS = '.mcl-head, .mobile-chat-head';
  *  tells us nothing — keep walking up for the surface actually painted. */
 const PAINTED = (c: string): boolean => !!c && c !== 'transparent' && !/,\s*0\s*\)$/.test(c);
 
+/**
+ * `rgb(224, 224, 224)` → `#e0e0e0`.
+ *
+ * ALWAYS HEX, because iOS is the consumer. `getComputedStyle` hands back an
+ * `rgb()` string and the meta used to carry a hex token; the switch to
+ * measuring quietly changed the FORMAT as well as the value, and the glass
+ * came back on the next launch — an unparsed `theme-color` is no
+ * `theme-color`, and a standalone app with none gets the system's own
+ * treatment. Anything this cannot convert is passed through rather than
+ * dropped: a colour we do not recognise is still better than none.
+ */
+function toHex(colour: string): string {
+  const m = colour.match(/^rgba?\(([^)]+)\)$/);
+  if (!m) return colour;
+  const parts = (m[1] as string)
+    .split(/[,\s/]+/)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (parts.length < 3) return colour;
+  const hex = parts.map((p) => {
+    const n = Math.max(0, Math.min(255, Math.round(Number(p))));
+    return Number.isFinite(n) ? n.toString(16).padStart(2, '0') : '00';
+  });
+  return `#${hex.join('')}`;
+}
+
 function tint(): string {
   const bar = document.querySelector(TOP_BARS);
   for (let el: Element | null = bar; el; el = el.parentElement) {
     const c = getComputedStyle(el).backgroundColor;
-    if (PAINTED(c)) return c;
+    if (PAINTED(c)) return toHex(c);
   }
   // No header mounted yet — first paint, or a fixture. Fall back to the
   // tokens, in the order of how close each sits to the bar.

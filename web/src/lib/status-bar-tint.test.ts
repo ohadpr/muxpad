@@ -34,8 +34,13 @@ describe('the status bar tint', () => {
     bar.style.backgroundColor = 'rgb(0, 71, 71)';
     document.body.appendChild(bar);
     syncStatusBarTint();
+    // AS HEX. iOS is the consumer and it is picky: an unparsed `theme-color`
+    // is no `theme-color`, and a standalone app with none gets the system's
+    // own treatment — which is how the Liquid Glass came back the moment this
+    // started measuring (`getComputedStyle` returns `rgb()`, the meta had
+    // always carried hex).
     expect(document.querySelector('meta[name="theme-color"]')?.getAttribute('content')).toBe(
-      'rgb(0, 71, 71)',
+      '#004747',
     );
     bar.remove();
   });
@@ -52,7 +57,7 @@ describe('the status bar tint', () => {
     document.body.appendChild(ground);
     syncStatusBarTint();
     expect(document.querySelector('meta[name="theme-color"]')?.getAttribute('content')).toBe(
-      'rgb(17, 17, 17)',
+      '#111111',
     );
     ground.remove();
   });
