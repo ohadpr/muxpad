@@ -221,20 +221,21 @@
   animation: navtree-state-spin 0.8s steps(8) infinite;
 }
 
-/* ── github-light · Primer's animated ellipsis ───────────────────────────
-   "…" is how GitHub itself says something is loading. The twist: rather
-   than the three dots breathing together, one lit dot walks along the three
-   like a pager, so it reads as progress at a glance. */
+/* ── github-light · Primer's spinner, from pending to running ────────────
+   Primer's own Spinner (a quarter arc going round a full track), with the
+   track drawn DOTTED, the way GitHub draws a check that is still pending, so
+   the mark reads as a check run that has started. It replaced Primer's
+   animated ellipsis: at rest a row of three dots is the "···" overflow menu
+   every workspace row already carries, so a working chat looked like a
+   button. */
 [data-theme="github-light"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  --d: color-mix(in srgb, var(--wm-ink) 45%, transparent);
-  background: radial-gradient(circle at 15% 50%, var(--d) 0 1.8px, transparent 2.2px),
-    radial-gradient(circle at 50% 50%, var(--d) 0 1.8px, transparent 2.2px),
-    radial-gradient(circle at 85% 50%, var(--d) 0 1.8px, transparent 2.2px);
+  border-radius: 50%;
+  border: 2px dotted color-mix(in srgb, var(--wm-ink) 55%, transparent);
 }
 [data-theme="github-light"]
   :is(
@@ -242,13 +243,15 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  background: radial-gradient(circle at 15% 50%, var(--wm-ink) 0 2.2px, transparent 2.6px);
-  animation: wm-walk 1.2s steps(3, jump-none) infinite;
-}
-@keyframes wm-walk {
-  to {
-    transform: translateX(70%);
-  }
+  border-radius: 50%;
+  background: conic-gradient(var(--wm-ink) 0 90deg, transparent 0);
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  animation: navtree-state-spin 0.9s linear infinite;
 }
 
 /* ── acme & acme-dark · the "live" ping ──────────────────────────────────
@@ -286,10 +289,12 @@
 
 /* ── demoscene · the tape-loading border ─────────────────────────────────
    The C64 said "LOADING" by flickering bands of colour across the border
-   while the tape ran — every scener's first progress bar. A framed box of
-   bands, the second set of bands flipping in over the first (opacity only),
-   in the working ink and the theme's own phosphor. Slow enough (0.9s a
-   cycle) that it reads as a loader, not a flash. */
+   while the tape ran, every scener's first progress bar. A framed block of
+   the working ink with bands of the theme's phosphor magenta flickering
+   across it (opacity only, 0.9s a cycle, slow enough to read as a loader and
+   not a flash). The bands lie over a SOLID block, never over a gap: amber
+   bands with gaps between them, standing still, were a boxed "≡", which is a
+   menu button. */
 [data-theme="demoscene"]
   :is(
     .navtree-mark[data-state="working"],
@@ -298,9 +303,8 @@
   )::before {
   border: 1.5px solid var(--wm-ink);
   border-radius: 2px;
-  background: repeating-linear-gradient(to bottom, var(--wm-ink) 0 2px, transparent 2px 4px)
-    content-box;
   padding: 1.5px;
+  background: var(--wm-ink) content-box;
 }
 [data-theme="demoscene"]
   :is(
@@ -312,7 +316,7 @@
   background: repeating-linear-gradient(
     to bottom,
     transparent 0 2px,
-    color-mix(in srgb, var(--accent) 85%, transparent) 2px 4px
+    color-mix(in srgb, var(--accent) 90%, transparent) 2px 4px
   );
   animation: wm-flip 0.9s step-end infinite;
 }
@@ -324,17 +328,17 @@
 
 /* ── blueprint · the construction circle ─────────────────────────────────
    A dashed circle turning is the oldest web loader there is ("marching
-   ants"); on a drafting sheet it is a construction line being swung by a
-   compass round a centre mark — so the centre's crosshair stays put and the
-   dashed circle turns about it. */
+   ants"). On a drafting sheet it is a construction line being swung by a
+   compass, so the compass's centre point stays put and the dashed circle turns
+   round it. The centre is a POINT, not the crosshair it first had: a
+   crosshair at the end of a row is a "+", which in muxpad means "new". */
 [data-theme="blueprint"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  background: linear-gradient(var(--wm-ink), var(--wm-ink)) center / 1.5px 46% no-repeat,
-    linear-gradient(var(--wm-ink), var(--wm-ink)) center / 46% 1.5px no-repeat;
+  background: radial-gradient(circle, var(--wm-ink) 0 1.8px, transparent 2.2px);
 }
 [data-theme="blueprint"]
   :is(
@@ -347,60 +351,49 @@
   animation: navtree-state-spin 2.4s linear infinite;
 }
 
-/* ── riso · a registration mark, out of register ─────────────────────────
-   A crosshair in a circle turning is a spinner anybody reads; on a riso it is
-   the registration mark itself. The twist is the process's own flaw: a ghost
-   of the mark in the second ink sits a pixel off, as the second drum never
-   quite lands. Only the first ink turns. */
-[data-theme="riso"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before,
+/* ── riso · two inks going round ─────────────────────────────────────────
+   The two-dot orbit spinner, which is a riso print in miniature: one flat
+   spot of each ink, the working yellow and the second-pass pink, going round
+   like the drum. It replaced a registration mark (a crosshair in a circle),
+   which at row size reads as "+" (new) or as a locate target. */
 [data-theme="riso"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  border-radius: 50%;
-  background: linear-gradient(var(--c), var(--c)) center / 1.5px 100% no-repeat,
-    linear-gradient(var(--c), var(--c)) center / 100% 1.5px no-repeat,
-    radial-gradient(closest-side, transparent 52%, var(--c) 56% 74%, transparent 78%);
-}
-[data-theme="riso"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before {
-  --c: color-mix(in srgb, var(--accent) 80%, transparent);
-  transform: translate(1px, 1px);
-}
-[data-theme="riso"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::after {
-  --c: var(--wm-ink);
-  animation: navtree-state-spin 1.6s linear infinite;
+  background: radial-gradient(circle at 50% 18%, var(--wm-ink) 0 2.3px, transparent 2.7px),
+    radial-gradient(
+      circle at 50% 82%,
+      color-mix(in srgb, var(--accent) 90%, transparent) 0 2.3px,
+      transparent 2.7px
+    );
+  animation: navtree-state-spin 0.9s linear infinite;
 }
 
-/* ── memphis · the tumbling square ───────────────────────────────────────
-   A square flipping a quarter-turn at a time is a stock loader; Memphis makes
-   it a sticker: an outlined square that tumbles over its own hard offset
-   shadow in the theme's magenta, which stays put. */
+/* ── memphis · the indeterminate bar, in zigzag ──────────────────────────
+   The indeterminate progress bar, the stripe that runs along a track, with
+   Memphis's zigzag as the stripe: yellow teeth marching over a magenta track.
+   It replaced a square tumbling over its own offset shadow, which at rest
+   is two overlapping squares (the copy icon), or an empty checkbox beside
+   the ✓ that marks a finished row. The bar is clipped on the host (see
+   wokintosh), so the teeth can travel one period and loop seamlessly. */
+[data-theme="memphis"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  ) {
+  clip-path: inset(calc(var(--wm-inset) + 3px) var(--wm-inset));
+}
 [data-theme="memphis"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  /* --pane-accent, not --accent: inside the rail --accent is the rail's
-     yellow, the same ink as the square, and the two merged into one blob. */
-  background: linear-gradient(var(--pane-accent), var(--pane-accent)) 85% 85% / 58% 58% no-repeat;
+  inset: calc(var(--wm-inset) + 3px) var(--wm-inset);
+  background: var(--pane-accent);
 }
 [data-theme="memphis"]
   :is(
@@ -408,31 +401,48 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  inset: calc(var(--wm-inset) + 2px);
-  border: 2px solid var(--wm-ink);
-  animation: wm-tumble 0.7s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+  inset: calc(var(--wm-inset) + 3px) var(--wm-inset) calc(var(--wm-inset) + 3px)
+    calc(var(--wm-inset) - 8px);
+  background:
+    linear-gradient(135deg, var(--wm-ink) 25%, transparent 25%) -4px 0 / 8px 8px,
+    linear-gradient(225deg, var(--wm-ink) 25%, transparent 25%) -4px 0 / 8px 8px,
+    linear-gradient(315deg, var(--wm-ink) 25%, transparent 25%) 0 0 / 8px 8px,
+    linear-gradient(45deg, var(--wm-ink) 25%, transparent 25%) 0 0 / 8px 8px;
+  animation: wm-march-8 0.7s linear infinite;
 }
-@keyframes wm-tumble {
+@keyframes wm-march-8 {
   to {
-    transform: rotate(90deg);
+    transform: translateX(8px);
   }
 }
 
-/* ── wokintosh · the wristwatch ──────────────────────────────────────────
-   The Macintosh said "busy" with a wristwatch for a decade before it ever had
-   a beachball. A white face in a black rim, an hour hand at three, and a
-   minute hand that ticks round in eight steps as the cursor's frames did.
-   Black on white, not the working amber: it is the cursor, and on the teal
-   desktop and the grey title bar alike it reads as one. */
+/* ── wokintosh · the barber pole ─────────────────────────────────────────
+   System 7's own answer to "working, duration unknown": the indeterminate
+   progress bar, black diagonal stripes marching through a white bar in a
+   black frame, 1-bit like the rest of the theme. It replaced the wristwatch
+   cursor, which was period-correct and wrong here: at row size a watch is a
+   CLOCK FACE, and in muxpad a clock means scheduled work (`muxpad cron`):
+   "this busy-indicator feels like cron".
+   The stripes travel exactly one period, so the loop is seamless; the host is
+   clipped to the bar so the extra period waiting on the left never shows, and
+   black stripes over the black frame leave the frame intact. */
+[data-theme="wokintosh"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  ) {
+  clip-path: inset(calc(var(--wm-inset) + 2px) var(--wm-inset));
+}
 [data-theme="wokintosh"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  border-radius: 50%;
+  inset: calc(var(--wm-inset) + 2px) var(--wm-inset);
   border: 1.5px solid #000;
-  background: #fff linear-gradient(#000, #000) no-repeat 82% 50% / 36% 1.5px;
+  background: #fff;
 }
 [data-theme="wokintosh"]
   :is(
@@ -440,15 +450,23 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  background: linear-gradient(#000, #000) no-repeat 50% 16% / 1.5px 36%;
-  animation: navtree-state-spin 1.6s steps(8) infinite;
+  inset: calc(var(--wm-inset) + 3.5px) calc(var(--wm-inset) + 1.5px) calc(var(--wm-inset) + 3.5px)
+    calc(var(--wm-inset) + 1.5px - 5.657px);
+  background: repeating-linear-gradient(-45deg, #000 0 2px, transparent 2px 4px);
+  animation: wm-march-pole 0.6s linear infinite;
+}
+/* 5.657px = the stripes' 4px period measured along the bar (4 ÷ sin 45°). */
+@keyframes wm-march-pole {
+  to {
+    transform: translateX(5.657px);
+  }
 }
 
 /* Reduced motion: the moving layer stops at its rest frame, and every rest
-   frame above is a complete glyph — the watch at three, the comet, the wheel,
-   the ellipsis with its first dot lit, the ringed ping, the banded box, the
-   crosshair in its dashed circle, the registration mark, the square on its
-   shadow. Nothing gets fainter. (StateChip's spinner still hands over to the
+   frame above is a complete glyph: the striped bar, the comet, the wheel, the
+   arc on its dotted track, the ringed ping, the banded block, the dashed
+   circle round its point, the two inks, the zigzag on its track. Nothing gets
+   fainter. (StateChip's spinner still hands over to the
    WORKING word there, as it always has.) */
 @media (prefers-reduced-motion: reduce) {
   [data-theme] .navtree-mark[data-state="working"]::after,
