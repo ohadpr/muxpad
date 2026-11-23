@@ -99,6 +99,23 @@ describe('the list renders beside the kept-alive workspace hosts', () => {
     expect(nav).toContain('hideBar={true}');
   });
 
+  it('switches sections from a BOTTOM bar, keeping each section mounted once visited', () => {
+    const nav = read('../components/MobileNav.tsx');
+    // The bar sits after the body, i.e. at the bottom — Slack's placement.
+    expect(nav.indexOf('<SectionBar')).toBeGreaterThan(nav.indexOf('className="mcl-body"'));
+    // Unread, Activity and Search mount on first visit and are then only
+    // hidden, with their scroll recorded (KeptScroll) — never unmounted.
+    for (const s of ['unread', 'activity', 'search'])
+      expect(nav).toContain(`visited.has('${s}') && (`);
+    expect(nav).toMatch(/<KeptScroll visible=\{shown\('home'\)\}/);
+  });
+
+  it('searches with the ⌘K search itself, not a second one', () => {
+    const nav = read('../components/MobileNav.tsx');
+    expect(nav).toContain("import { ChatSearch } from './CommandPalette';");
+    expect(read('../components/CommandPalette.tsx')).toMatch(/<ChatSearch\s/);
+  });
+
   it('has replaced the drop-down switcher entirely', () => {
     expect(read('../components/AppLayout.tsx')).not.toContain('MobileNavSwitcher');
   });

@@ -15,12 +15,6 @@
 .mobile-chat-list[hidden] {
   display: none;
 }
-.mobile-chat-list > .navtree {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
 
 /* ─── The chat's header, in the top bar ─────────────────────────────── */
 
@@ -120,4 +114,212 @@
   flex: 0 0 auto;
   height: auto;
   align-items: center;
+}
+
+/* ─── Sections: each kept mounted, only the current one shown ─────────── */
+
+.mcl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-section[hidden] {
+  display: none;
+}
+.mcl-section > .navtree {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 4px 12px;
+}
+
+/* ─── A row in Unread / Activity: name over its last message ──────────── */
+
+.mcl-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px 10px 14px;
+  color: var(--fg);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.mcl-row:active {
+  background: var(--bg-hover);
+}
+.mcl-row-emoji {
+  flex: 0 0 28px;
+  font-size: 22px;
+  line-height: 28px;
+  text-align: center;
+}
+.mcl-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mcl-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.mcl-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.mcl-row[data-unread="true"] .mcl-row-name {
+  font-weight: 800;
+}
+.mcl-row-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-self: center;
+}
+.mcl-row-meta {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  padding-inline-start: 8px;
+  font-size: 0.75rem;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.mcl-row-preview {
+  font-size: 0.875rem;
+  line-height: 1.3;
+  color: var(--fg-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.mcl-row-preview[data-fallback="true"] {
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+/* ─── Empty states ────────────────────────────────────────────────────── */
+
+.mcl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 96px 32px 0;
+  text-align: center;
+  color: var(--fg-faint);
+}
+.mcl-empty svg {
+  color: var(--accent, var(--fg-dim));
+  margin-bottom: 6px;
+}
+.mcl-empty-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+.mcl-empty-sub {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* ─── Search: the ⌘K body, inline ─────────────────────────────────────── */
+
+.mcl-search {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-search .cmdk-field {
+  margin: 4px 12px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.mcl-search .cmdk-input {
+  /* 16px or iOS zooms the page when the field takes focus. */
+  font-size: 16px;
+}
+.mcl-search .cmdk-results {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+/* ─── The bottom tab bar ──────────────────────────────────────────────── */
+
+.mcl-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--bg-chrome);
+  /* Above the home indicator in the installed PWA (viewport-fit=cover). */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.mcl-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 0 6px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-faint);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mcl-tab[aria-current="page"] {
+  color: var(--fg);
+}
+.mcl-tab-icon {
+  position: relative;
+  display: inline-flex;
+}
+.mcl-tab-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.mcl-tab-badge {
+  position: absolute;
+  top: -4px;
+  left: 15px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--danger, #e01e5a);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-chrome);
 }

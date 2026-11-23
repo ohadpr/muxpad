@@ -247,6 +247,13 @@ export const api = {
 
   listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
 
+  /** Each chat's last message, for the phone's Activity list — its own request,
+   *  never on the polled tab row (see server chat/last-message). */
+  tabPreviews: (ids: readonly string[]) =>
+    req<{ previews: Record<string, { text: string; by: 'user' | 'assistant' } | null> }>(
+      `/api/tabs/previews?ids=${ids.map(encodeURIComponent).join(',')}`,
+    ),
+
   /**
    * Full-text search over archived session transcripts — the search box's
    * "In messages" tier.

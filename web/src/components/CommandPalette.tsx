@@ -132,6 +132,7 @@ export function ChatSearch({
   inputRef,
   autoFocus,
   hint,
+  cursor: cursorShown = true,
   onDone,
   onEscape,
 }: {
@@ -139,6 +140,12 @@ export function ChatSearch({
   autoFocus: boolean;
   /** The `esc` key cap — meaningful in a dialog, noise in a tab. */
   hint: boolean;
+  /**
+   * Paint the keyboard cursor. A dialog driven by arrows needs it; a list
+   * under a thumb does not — there the first row lit up reads as "you are
+   * here". Enter still opens the cursor's row either way.
+   */
+  cursor?: boolean;
   /** A result was opened. */
   onDone: () => void;
   onEscape: () => void;
@@ -346,7 +353,7 @@ export function ChatSearch({
             key={m.tab.tabId}
             match={m}
             id={`${listId}-r${i}`}
-            selected={i === safeCursor}
+            selected={cursorShown && i === safeCursor}
             onHover={() => setCursor(i)}
             onPick={() => openRow(i)}
           />
@@ -365,7 +372,7 @@ export function ChatSearch({
               key={`${row.output.kind}:${row.output.slug}`}
               match={row}
               id={`${listId}-r${i}`}
-              selected={i === safeCursor}
+              selected={cursorShown && i === safeCursor}
               onHover={() => setCursor(i)}
               onPick={() => openRow(i)}
               onCopy={() => copyOutput(row.output)}
@@ -389,7 +396,7 @@ export function ChatSearch({
               key={`${row.hit.sid}:${row.hit.ts}`}
               row={row}
               id={`${listId}-r${i}`}
-              selected={i === safeCursor}
+              selected={cursorShown && i === safeCursor}
               onHover={() => setCursor(i)}
               onPick={() => openRow(i)}
             />
