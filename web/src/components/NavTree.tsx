@@ -7,9 +7,9 @@ import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import {
   RAIL_VIEWS,
   type RailView,
-  isUnreadChat,
-  railActivityRows,
+  activityChats,
   railUnreadRows,
+  unreadByWorkspace,
 } from '../lib/chat-sections';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
@@ -344,98 +344,139 @@ function SidebarTree({
   onNavigate,
 }: Omit<NavTreeProps, 'variant'>) {
   const variant = 'sidebar' as const;
-  // ONE WORKSPACE. The left strip (components/WorkspaceRail) answers "which
-  // workspace"; this rail answers "which chat", for the current one only.
-  // `activeWorkspaceSlug` is already the CURRENT one (AppLayout resolves it
-  // with currentWorkspaceSlug, so a destination route keeps the one you came
-  // from). The mobile sheet still lists every workspace — see SheetRail.
+  const navigate = useNavigate();
+  // EVERY visible workspace, as sections — the rail is the map. (Hidden
+  // workspaces are plumbing; nothing routes there by default.) A one-workspace
+  // rail beside a strip of workspace icons was tried in d9012ed7 and reversed:
+  // "icon rail for workspaces is waste. keep workspaces in the list."
   const { workspaces: allWorkspaces } = useWorkspaces();
-  const workspace = visibleWorkspaces(allWorkspaces).find((w) => w.slug === activeWorkspaceSlug);
+  const workspaces = visibleWorkspaces(allWorkspaces);
+  const expansion = useNavExpansion();
+  // Single edit slot hoisted here so only one rename can be in flight
+  // across the whole tree.
   const [editing, setEditing] = useState<Editing>(null);
+  const [creatingWs, setCreatingWs] = useState(false);
   const view = useRailView();
   const corpus = useChatCorpus();
-  // The id of the chat you are on, when it is in THIS workspace — the Unread
-  // view keeps that row while you read it (railUnreadRows).
+  // The chat you are on — the Unread list keeps that row while you read it.
   const activeTabId =
     corpus.find((t) => t.workspaceSlug === activeWorkspaceSlug && t.tabSlug === activeTabSlug)
       ?.tabId ?? null;
-  const unreadHere = workspace
-    ? corpus.filter((t) => t.workspaceId === workspace.id && isUnreadChat(t)).length
-    : 0;
+  // Per-workspace unread counts: the Unread segment's total, and the badge a
+  // COLLAPSED section carries for the chats it is hiding.
+  const unreadByWs = unreadByWorkspace(corpus);
+  const unreadTotal = [...unreadByWs.values()].reduce((a, b) => a + b, 0);
+
+  // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
+  // refresh; on failure refresh anyway to snap back to the server's truth.
+  const wsDnd = useListReorder(
+    workspaces.map((w) => w.id),
+    (ids) => {
+      applyWorkspaceOrder(ids); // move immediately; refresh below reconciles
+      void (async () => {
+        try {
+          await api.reorderWorkspaces(ids);
+        } catch (err) {
+          console.error('reorder workspaces failed', err);
+        }
+        await refreshWorkspaces();
+      })();
+    },
+  );
+
+  const createWorkspace = async () => {
+    if (creatingWs) return;
+    setCreatingWs(true);
+    try {
+      onNavigate?.();
+      await createWorkspaceAndGo(navigate);
+    } catch (err) {
+      console.error('createWorkspace failed', err);
+    } finally {
+      setCreatingWs(false);
+    }
+  };
 
   return (
-    <nav
-      className="navtree"
-      data-variant={variant}
-      aria-label={workspace ? `${workspace.name} chats` : 'Chats'}
-    >
-      {workspace && <RailViewSwitch view={view} unread={unreadHere} />}
+    <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
+      {/* Home | Unread | Activity. Home is the tree below; Unread and Activity
+          are LISTS across every workspace (each row names its workspace). */}
+      <RailViewSwitch view={view} unread={unreadTotal} />
       <div className="navtree-scroll">
-        {/* No workspace yet (a cold load, or none at all): only the
-            destinations below, which are still somewhere to go. */}
-        {workspace && (
+        {view === 'home' && (
           <>
-            {/* The workspace's own header — its name, "+" for a new chat here, and
-            close — in every view, without the disclosure: with one workspace
-            on the rail there is nothing to collapse it INTO. The rows under it
-            are the view's. */}
-            <WorkspaceNode
-              key={workspace.id}
-              workspace={workspace}
-              isActive={true}
-              expanded={true}
-              single={true}
-              showList={view === 'home'}
-              activeWorkspaceSlug={activeWorkspaceSlug}
-              activeTabSlug={activeTabSlug}
-              variant={variant}
-              editing={editing}
-              setEditing={setEditing}
-              onNavigate={onNavigate}
-            />
-            {/* UNREAD and ACTIVITY are LISTS — the phone's rows, name over last
-            message — not the tree with rows taken out. Unread keeps the rail's
-            own order (railUnreadRows); Activity is recency by definition, and
-            is a separate view for exactly that reason. */}
-            {view === 'unread' && (
-              <div className="rail-view-list">
-                <PreviewList
-                  rows={railUnreadRows(corpus, workspace.id, activeTabId)}
-                  active={true}
-                  explainAbsent={true}
-                  activeTabId={activeTabId}
-                  empty={
-                    <div className="mcl-empty">
-                      <p className="mcl-empty-title">You’re all caught up</p>
-                      <p className="mcl-empty-sub">Nothing unread in {workspace.name}.</p>
-                    </div>
-                  }
-                />
-              </div>
-            )}
-            {view === 'activity' && (
-              <div className="rail-view-list">
-                <PreviewList
-                  rows={railActivityRows(corpus, workspace.id)}
-                  active={true}
-                  explainAbsent={true}
-                  activeTabId={activeTabId}
-                  empty={
-                    <div className="mcl-empty">
-                      <p className="mcl-empty-title">Nothing recent</p>
-                      <p className="mcl-empty-sub">
-                        Chats you open in {workspace.name} show up here.
-                      </p>
-                    </div>
-                  }
-                />
-              </div>
-            )}
+            {/* NO CREATE CONTROL HERE, and none in the list either. It is on
+                each WORKSPACE HEADER — see WorkspaceNode — the row the action
+                is about. */}
+            {workspaces.map((w) => (
+              <WorkspaceNode
+                key={w.id}
+                workspace={w}
+                isActive={w.slug === activeWorkspaceSlug}
+                expanded={isExpanded(expansion, w.slug, activeWorkspaceSlug)}
+                activeWorkspaceSlug={activeWorkspaceSlug}
+                activeTabSlug={activeTabSlug}
+                variant={variant}
+                editing={editing}
+                setEditing={setEditing}
+                onNavigate={onNavigate}
+                rowDnd={wsDnd(w.id)}
+                unreadCount={unreadByWs.get(w.id) ?? 0}
+              />
+            ))}
+            {/* The one create action that is still a ROW, and it has to be: a
+                new WORKSPACE belongs to no workspace, so there is no header to
+                hang it on. */}
+            <button
+              type="button"
+              className="navtree-add navtree-new-workspace"
+              onClick={() => void createWorkspace()}
+              disabled={creatingWs}
+            >
+              {creatingWs ? 'Creating…' : '+ New workspace'}
+            </button>
           </>
         )}
+        {/* UNREAD and ACTIVITY are LISTS — the phone's rows, name over last
+            message — not the tree with rows taken out. Both GLOBAL: every
+            visible workspace. Unread keeps the rail's own order
+            (railUnreadRows: workspace order, then each workspace's stored
+            order); Activity is recency by definition, and is a separate view
+            for exactly that reason. */}
+        {view === 'unread' && (
+          <div className="rail-view-list">
+            <PreviewList
+              rows={railUnreadRows(corpus, activeTabId)}
+              active={true}
+              explainAbsent={true}
+              activeTabId={activeTabId}
+              empty={
+                <div className="mcl-empty">
+                  <p className="mcl-empty-title">You’re all caught up</p>
+                  <p className="mcl-empty-sub">Nothing unread in any workspace.</p>
+                </div>
+              }
+            />
+          </div>
+        )}
+        {view === 'activity' && (
+          <div className="rail-view-list">
+            <PreviewList
+              rows={activityChats(corpus)}
+              active={true}
+              explainAbsent={true}
+              activeTabId={activeTabId}
+              empty={
+                <div className="mcl-empty">
+                  <p className="mcl-empty-title">Nothing recent</p>
+                  <p className="mcl-empty-sub">Chats you open show up here.</p>
+                </div>
+              }
+            />
+          </div>
+        )}
         {/* Destinations that belong to no workspace stay below, past the
-            hairline. "+ New workspace" moved to the foot of the left strip,
-            beside the workspaces it adds to. */}
+            hairline, in every view. */}
         <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
       </div>
     </nav>
@@ -478,10 +519,8 @@ function RailViewSwitch({ view, unread }: { view: RailView; unread: number }) {
   );
 }
 
-/**
- * Make a workspace (and its first chat) and go there. Moved out of the rail
- * when "+ New workspace" moved to the left strip (WorkspaceRail).
- */
+/** Make a workspace (and its first chat) and go there — the rail's
+ *  "+ New workspace" row. */
 export async function createWorkspaceAndGo(
   navigate: ReturnType<typeof useNavigate>,
 ): Promise<void> {
@@ -1042,13 +1081,11 @@ interface WorkspaceNodeProps {
   onNavigate?: (() => void) | undefined;
   rowDnd?: DragItemProps | undefined;
   /**
-   * The desktop rail's ONE workspace: no disclosure (there is nothing to
-   * collapse it into) and a click on the name does not toggle it.
+   * The desktop rail: how many of this workspace's chats are unread
+   * (chat-sections `unreadByWorkspace`). Shown on a COLLAPSED header, where
+   * those chats are otherwise out of sight.
    */
-  single?: boolean | undefined;
-  /** Render the chat list under the header — false while the rail shows its
-   *  Unread or Activity view instead. */
-  showList?: boolean | undefined;
+  unreadCount?: number | undefined;
 }
 
 function WorkspaceNode({
@@ -1062,8 +1099,7 @@ function WorkspaceNode({
   setEditing,
   onNavigate,
   rowDnd,
-  single = false,
-  showList = true,
+  unreadCount = 0,
 }: WorkspaceNodeProps) {
   const navigate = useNavigate();
   const isEditing = editing?.kind === 'workspace' && editing.id === workspace.id;
@@ -1186,7 +1222,6 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
-        data-single={single ? 'true' : undefined}
         // No `data-state`, for the same reason the chat rows below dropped it
         // (see RowMark): it is what painted the left bar and the row tint, and
         // both are gone from the desktop rail. A workspace header that washed
@@ -1201,18 +1236,16 @@ function WorkspaceNode({
         // the reorder handlers spread above (hence the explicit chaining —
         // these props would otherwise just replace them).
       >
-        {!single && (
-          <button
-            type="button"
-            className="navtree-disclosure"
-            onClick={() => toggleExpanded(workspace.slug, activeWorkspaceSlug)}
-            aria-expanded={expanded}
-            aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
-            data-expanded={expanded ? 'true' : undefined}
-          >
-            <SvgChevronRight />
-          </button>
-        )}
+        <button
+          type="button"
+          className="navtree-disclosure"
+          onClick={() => toggleExpanded(workspace.slug, activeWorkspaceSlug)}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
+          data-expanded={expanded ? 'true' : undefined}
+        >
+          <SvgChevronRight />
+        </button>
         {isEditing ? (
           <RenameInput
             initial={workspace.name}
@@ -1264,7 +1297,7 @@ function WorkspaceNode({
               // new-browser-tab affordance is preserved via the modified
               // clicks handled above.)
               e.preventDefault();
-              if (!single) toggleExpanded(workspace.slug, activeWorkspaceSlug);
+              toggleExpanded(workspace.slug, activeWorkspaceSlug);
             }}
           >
             <span className="navtree-name-text">{workspace.name}</span>
@@ -1275,7 +1308,24 @@ function WorkspaceNode({
             tracks wide, so a chip or a button left rendered resolves into an
             IMPLICIT column and takes the width the input needs (measured: a
             22px rename box). */}
-        {!isEditing && !expanded && workspace.tab_count > 0 && (
+        {!isEditing && !expanded && unreadCount > 0 ? (
+          // ── A COLLAPSED SECTION SAYS WHAT UNREAD IT IS HIDING ────────────
+          // The header's own mark is the workspace's status ROLLUP, and the
+          // rollup ranks `working` (and `blocked`) above `ready` — so a
+          // workspace with one agent running and three chats waiting to be
+          // read showed a spinner and nothing about the three. The count is
+          // the honest signal, and it takes the tab count's place rather than
+          // sitting beside it: one number per header, the one worth reading.
+          <span
+            className="navtree-ws-count rail-ws-unread"
+            role="img"
+            aria-label={`${unreadCount} unread`}
+            title={`${unreadCount} unread`}
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        ) : null}
+        {!isEditing && !expanded && unreadCount === 0 && workspace.tab_count > 0 && (
           // Collapsed rows surface what they're hiding — a quiet tab
           // count, file-navigator style.
           <span className="navtree-ws-count" aria-hidden="true">
@@ -1388,7 +1438,7 @@ function WorkspaceNode({
           ]}
         />
       )}
-      {expanded && showList && (
+      {expanded && (
         <TabList
           workspace={workspace}
           isActiveWorkspace={isActive}

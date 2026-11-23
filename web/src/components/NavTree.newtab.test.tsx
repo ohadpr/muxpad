@@ -158,13 +158,15 @@ afterEach(() => {
   root = null;
 });
 
-describe('the rail — one “+”, on the current workspace’s header', () => {
-  it('puts it on the one workspace the rail shows, and none anywhere else', () => {
+describe('the rail — one “+” per workspace, on its header', () => {
+  it('puts one on EVERY workspace, open or shut, and none anywhere else', () => {
     const box = mount('sidebar');
-    // ONE workspace on the desktop rail: the current one. The others are
-    // icons in the left strip (WorkspaceRail); you switch, then create.
-    expect(box.querySelectorAll('.navtree-ws-row').length).toBe(1);
-    expect(box.querySelectorAll('.navtree-ws-add').length).toBe(1);
+    expect(box.querySelectorAll('.navtree-ws-row').length).toBe(3);
+    // One per workspace — including the two that are collapsed. The old
+    // arrangements lived inside the tab LIST, which only an expanded workspace
+    // renders, so two of three workspaces had no way to create in them at all
+    // without first opening them.
+    expect(box.querySelectorAll('.navtree-ws-add').length).toBe(3);
     // And nothing left over from the arrangements this replaces.
     expect(box.querySelectorAll('.navtree-new-tab').length).toBe(0);
     expect(box.querySelectorAll('.navtree-add-ws').length).toBe(0);
@@ -181,11 +183,13 @@ describe('the rail — one “+”, on the current workspace’s header', () => 
     expect(box.querySelectorAll('.navtree-wspick-name').length).toBe(0);
   });
 
-  it('lists no other workspace — those are the left strip’s, and their “+” is a switch away', () => {
+  it('creates in a workspace you are NOT in, from its own row', async () => {
     const box = mount('sidebar');
-    const text = box.textContent ?? '';
-    expect(text).toContain('Personal');
-    expect(text).not.toContain('Acmebot');
+    const rows = [...box.querySelectorAll('.navtree-ws-row')];
+    const bots = rows.find((r) => (r.textContent ?? '').includes('Acmebot'));
+    await click(bots?.querySelector('.navtree-ws-add'));
+    expect(CREATED).toEqual([{ workspaceId: 'w-bots', body: { ...HOUSE_CHAT_CREATE } }]);
+    expect(WENT).toEqual([{ wsSlug: 'bots', tabSlug: 'new-chat' }]);
   });
 
   it('does not navigate or toggle when the “+” is clicked', async () => {
@@ -209,7 +213,8 @@ describe('the flat “Recent” view is gone, and so is the sheet’s picker', (
       (b.textContent ?? '').trim(),
     );
     expect(views).toEqual(['Home', 'Unread', 'Activity']);
-    expect(box.querySelectorAll('.navtree-ws-row').length).toBe(1);
+    // …over EVERY workspace, as sections: the one-workspace rail is gone.
+    expect(box.querySelectorAll('.navtree-ws-row').length).toBe(3);
   });
 
   it('shows EVERY workspace on the sheet, with no picker to go through', () => {

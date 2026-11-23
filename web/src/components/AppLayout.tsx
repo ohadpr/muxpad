@@ -20,7 +20,6 @@ import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
-import { WorkspaceRail } from './WorkspaceRail';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
 
@@ -96,10 +95,9 @@ export function AppLayout() {
    */
   // The workspace you were last IN — not the last one first visited, which is
   // what `[...visitedWsSlugs].at(-1)` was: a Set keeps first-insertion order,
-  // so going back to an earlier workspace never moved it to the end. It only
-  // fed the rail's "which group is open" before; now it decides which
-  // workspace the whole desktop rail shows on a destination route, so it has
-  // to be the right one.
+  // so going back to an earlier workspace never moved it to the end. It feeds
+  // the rail's "which group is open, which row is marked" on a destination
+  // route, which should be the workspace you were actually just in.
   const [lastSeenWs, setLastSeenWs] = useState<string | null>(null);
   const currentWs = currentWorkspaceSlug(wsSlug, lastSeenWs, visibleWorkspaces(workspaces));
   const lastWsSlug = currentWs ?? '';
@@ -193,9 +191,6 @@ export function AppLayout() {
       )}
       {rendersAppBody({ wsSlug, shellRoute, sidebarMode, chatList, onChatList }) ? (
         <div className="app-body">
-          {/* THE LEFT STRIP: workspaces. The rail beside it: that workspace's
-              chats. Two strips, one question each — see WorkspaceRail. */}
-          {sidebarMode && <WorkspaceRail currentSlug={currentWs} />}
           {sidebarMode && (
             <aside
               className="sidenav"

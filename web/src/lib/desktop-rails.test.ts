@@ -1,17 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityChats,
   currentWorkspaceSlug,
-  railActivityRows,
   railUnreadRows,
   unreadByWorkspace,
-  workspaceMark,
 } from './chat-sections';
 import type { SearchableTab } from './nav-search';
 
 /**
- * The desktop's two strips: a column of workspace icons, and the current
- * workspace's chat rail with Home | Unread | Activity. The pure rules — which
- * rows each view shows, which icon is current, where the badge comes from.
+ * The desktop rail: every workspace as a section, Home | Unread | Activity at
+ * its top. Home is the tree; Unread and Activity are GLOBAL lists.
  */
 
 const chat = (id: string, ws: string, extra: Partial<SearchableTab> = {}): SearchableTab => ({
@@ -26,106 +24,89 @@ const chat = (id: string, ws: string, extra: Partial<SearchableTab> = {}): Searc
   ...extra,
 });
 
-// One workspace's rows IN THE SERVER'S STORED ORDER (pinned first, then manual
-// positions — deliberately neither alphabetical nor by recency), plus another
-// workspace's rows interleaved, as the cross-workspace corpus carries them.
+// The corpus as it arrives: workspaces in YOUR order (p, then t, then r), and
+// each workspace's rows in the server's stored order — pinned first, then
+// manual positions, deliberately neither alphabetical nor by recency.
 const corpus: SearchableTab[] = [
   chat('pin-b', 'p', { pinned: true, unread: true, lastUserAt: 10 }),
   chat('pin-a', 'p', { pinned: true, lastUserAt: 50 }),
   chat('zeta', 'p', { unread: true, lastUserAt: 900 }),
-  chat('other-1', 't', { unread: true, lastUserAt: 999 }),
   chat('alpha', 'p', { lastUserAt: 700 }),
   chat('mid', 'p', { unread: true, lastUserAt: 20 }),
   chat('worker', 'p', { unread: true, spawnedBy: 'zeta', lastUserAt: 5000 }),
   chat('old', 'p', { done: true, unread: true, lastUserAt: 1 }),
-  chat('other-2', 't', { unread: true }),
-  chat('other-3', 'r'),
+  chat('t-2', 't', { unread: true, lastUserAt: 999 }),
+  chat('t-1', 't', { lastUserAt: 800 }),
+  chat('t-3', 't', { unread: true, lastUserAt: 30 }),
+  chat('r-1', 'r', { lastUserAt: 600 }),
 ];
 
-describe('the Unread view — a list of this workspace’s unread chats', () => {
-  it('holds only this workspace’s unread conversations, IN THE RAIL’S ORDER — never re-sorted', () => {
-    expect(railUnreadRows(corpus, 'p', null).map((t) => t.tabId)).toEqual([
+describe('Unread — a GLOBAL list, in the rail’s own order', () => {
+  it('holds every workspace’s unread conversations, read top to bottom as the tree reads', () => {
+    expect(railUnreadRows(corpus, null).map((t) => t.tabId)).toEqual([
       'pin-b',
       'zeta',
       'mid',
       'old',
+      't-2',
+      't-3',
     ]);
   });
 
-  it('is a subsequence of the rail — no row changes places', () => {
+  it('is a subsequence of the tree — no row changes places', () => {
     const ids = corpus.map((t) => t.tabId);
-    const pos = railUnreadRows(corpus, 'p', 'alpha').map((t) => ids.indexOf(t.tabId));
+    const pos = railUnreadRows(corpus, 'alpha').map((t) => ids.indexOf(t.tabId));
     expect([...pos].sort((a, b) => a - b)).toEqual(pos);
   });
 
-  it('keeps an unread chat that has decayed into "older chats" — unread is unread', () => {
-    expect(railUnreadRows(corpus, 'p', null).map((t) => t.tabId)).toContain('old');
-  });
-
-  it('leaves sub-chats out — their news is their parent’s unread already', () => {
-    expect(railUnreadRows(corpus, 'p', null).map((t) => t.tabId)).not.toContain('worker');
+  it('leaves sub-chats out, keeps a decayed unread chat', () => {
+    const ids = railUnreadRows(corpus, null).map((t) => t.tabId);
+    expect(ids).not.toContain('worker');
+    expect(ids).toContain('old');
   });
 
   it('keeps the chat you are ON while you read it, and drops it once you leave', () => {
-    const read = corpus.map((t) => (t.tabId === 'mid' ? { ...t, unread: false } : t));
-    expect(railUnreadRows(read, 'p', 'mid').map((t) => t.tabId)).toContain('mid');
-    expect(railUnreadRows(read, 'p', 'zeta').map((t) => t.tabId)).not.toContain('mid');
+    const read = corpus.map((t) => (t.tabId === 't-3' ? { ...t, unread: false } : t));
+    expect(railUnreadRows(read, 't-3').map((t) => t.tabId)).toContain('t-3');
+    expect(railUnreadRows(read, 'zeta').map((t) => t.tabId)).not.toContain('t-3');
   });
 
-  it('is empty when the workspace is read — the other workspaces speak through their icons', () => {
-    expect(railUnreadRows(corpus, 'r', null)).toEqual([]);
+  it('is empty when everything is read', () => {
+    expect(railUnreadRows([chat('a', 'p'), chat('b', 't')], null)).toEqual([]);
   });
 });
 
-describe('the Activity view', () => {
-  it('is this workspace’s recents by when you touched them — no workers, nothing done', () => {
-    expect(railActivityRows(corpus, 'p').map((t) => t.tabId)).toEqual([
+describe('Activity — a GLOBAL list, by when you touched it', () => {
+  it('spans every workspace, no workers, nothing done', () => {
+    expect(activityChats(corpus).map((t) => t.tabId)).toEqual([
+      't-2',
       'zeta',
+      't-1',
       'alpha',
+      'r-1',
       'pin-a',
+      't-3',
       'mid',
       'pin-b',
     ]);
   });
 });
 
-describe('which workspace icon is current', () => {
-  const visible = [{ slug: 'p' }, { slug: 't' }, { slug: 'r' }];
-
-  it('the URL’s workspace', () => {
-    expect(currentWorkspaceSlug('t', 'p', visible)).toBe('t');
-  });
-
-  it('on a page that names none (Artifacts, Apps, /activity), the one you came from', () => {
-    expect(currentWorkspaceSlug(null, 'r', visible)).toBe('r');
-  });
-
-  it('on a cold open to such a page, the first workspace', () => {
-    expect(currentWorkspaceSlug(null, null, visible)).toBe('p');
-  });
-
-  it('never a workspace the strip does not show (the hidden apps container)', () => {
-    expect(currentWorkspaceSlug('apps-container', 'gone', visible)).toBe('p');
-  });
-});
-
-describe('where the unread badge on a workspace icon comes from', () => {
-  it('counts each workspace’s unread conversations from the cross-workspace corpus', () => {
+describe('the unread count a collapsed workspace header carries', () => {
+  it('counts each workspace’s unread conversations — not workers — and none means none', () => {
     const badge = unreadByWorkspace(corpus);
-    expect(badge.get('p')).toBe(4); // pin-b, zeta, mid, old — not the worker
+    expect(badge.get('p')).toBe(4); // pin-b, zeta, mid, old
     expect(badge.get('t')).toBe(2);
-    expect(badge.has('r')).toBe(false); // nothing unread: no badge at all
+    expect(badge.has('r')).toBe(false);
   });
 });
 
-describe('workspaceMark — workspaces have no icon of their own', () => {
-  it('is stable and legible at icon size', () => {
-    expect(workspaceMark('Personal')).toBe('P');
-    expect(workspaceMark('Trayo')).toBe('T');
-    expect(workspaceMark('Side projects')).toBe('SP');
-    expect(workspaceMark('  research ')).toBe('R');
-    expect(workspaceMark('🏡 Home')).toBe('🏡');
-    expect(workspaceMark('')).toBe('?');
-    expect(workspaceMark('Side projects')).toBe(workspaceMark('Side projects'));
+describe('which workspace you are "in" on a page that names none', () => {
+  const visible = [{ slug: 'p' }, { slug: 't' }, { slug: 'r' }];
+  it('the URL’s, else the one you were last in, else the first; never a hidden one', () => {
+    expect(currentWorkspaceSlug('t', 'p', visible)).toBe('t');
+    expect(currentWorkspaceSlug(null, 'r', visible)).toBe('r');
+    expect(currentWorkspaceSlug(null, null, visible)).toBe('p');
+    expect(currentWorkspaceSlug('apps-container', 'gone', visible)).toBe('p');
   });
 });
