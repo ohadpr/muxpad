@@ -2302,6 +2302,19 @@ select:focus {
      the chrome tab bar would slide under them. env() returns 0 on
      non-notched devices. */
   height: 100svh;
+  /* BORDER-BOX, and it is load-bearing. The padding below reserves the status
+     bar, and with the default content-box it ADDED to `height`, so the layout
+     was one status bar taller than the screen and the bottom tab bar fell off
+     the end of it — reported from a phone, in both the list and a chat.
+
+     It did not show up before because the old `black-translucent` status bar
+     ran the page under the status bar and the overflow went under it. Removing
+     that meta (see index.html) is what exposed this. */
+  box-sizing: border-box;
+  /* Kept rather than deleted: an install added BEFORE the meta was dropped
+     keeps the translucent bar until it is re-added, and on those the page
+     still runs underneath and still needs the room. env() is 0 wherever it is
+     not needed, and with border-box a 0 costs nothing. */
   padding-top: env(safe-area-inset-top);
   overflow: hidden;
 }
