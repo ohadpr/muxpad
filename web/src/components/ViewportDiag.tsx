@@ -11,7 +11,11 @@
  */
 export function ViewportDiag() {
   if (typeof window === 'undefined') return null;
-  if (!new URLSearchParams(window.location.search).has('diag')) return null;
+  // UNCONDITIONAL, TEMPORARILY. It was behind `?diag=1`, which an installed
+  // PWA cannot reach: it launches at start_url and has no address bar. So
+  // launching the app IS the test now — if this strip is not on screen, the
+  // app is running code older than this build, and that is the answer.
+  // Remove the component (and this file) once the numbers are read.
   const probe = document.createElement('div');
   probe.style.cssText =
     'position:fixed;top:0;left:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);visibility:hidden';
@@ -46,6 +50,7 @@ export function ViewportDiag() {
         zIndex: 9999,
         background: '#000',
         color: '#0f0',
+        opacity: 0.95,
         font: '11px ui-monospace, monospace',
         padding: '6px 8px',
         lineHeight: 1.35,

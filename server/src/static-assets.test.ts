@@ -153,6 +153,20 @@ describe('serving', () => {
     expect(res.headers.get('content-type')).toMatch(/text\/plain/);
   });
 
+  it('stamps the build into the manifest start_url, and never caches it', async () => {
+    // An installed iOS app launches at start_url with no address bar. If that
+    // URL's response is in the webview's store the install is FROZEN on it —
+    // through deleting the icon and re-adding, because deleting an icon does
+    // not clear the origin's data. A phone spent an hour launching a shell
+    // from before the status-bar meta was removed for exactly this reason.
+    const res = await get('/manifest.webmanifest');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const m = JSON.parse(await res.text()) as { start_url: string; name: string };
+    expect(m.start_url).toMatch(/^\/\?b=.+/);
+    // Everything else is still the file's.
+    expect(m.name).toBe('muxpad');
+  });
+
   it('serves the no-store shell for SPA routes too', async () => {
     // Same shell, same reason: a deep link is how the installed app launches.
     const res = await get('/w/dev/t/muxpad');

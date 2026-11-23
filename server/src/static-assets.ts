@@ -4,6 +4,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { buildIdFromHtml } from '@muxpad/shared';
 import type { Context, Hono } from 'hono';
 import { COOKIE_NAME, apiCredential } from './api-auth.js';
+import { currentBuildId } from './runner-build.js';
 
 /**
  * Serving the built web bundle.
@@ -197,6 +198,35 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
       return c.text('not found', 404);
     }
   };
+  /**
+   * THE MANIFEST, WITH A START URL THAT HAS NEVER BEEN FETCHED.
+   *
+   * An installed iOS app launches at `start_url` and has no address bar, so if
+   * the response for that URL is in the webview's store, the install is frozen
+   * on it — through deleting the icon and adding it again, because deleting an
+   * icon does not clear the origin's data. Measured the hard way: a phone kept
+   * launching a shell from before the iOS status-bar meta was removed, so every
+   * re-add read the OLD meta and kept the Liquid Glass blur, while the same URL
+   * in a Safari tab served the new shell.
+   *
+   * Stamping the build into `start_url` makes each deploy's launch URL a cache
+   * key nothing has ever stored, so a new install cannot inherit an old one.
+   * The query is ignored by the router — `/` is `/` — and it costs one
+   * generated file at add-to-home-screen time.
+   *
+   * `no-store` for the same reason as the shell: a cached manifest would hand
+   * out a cached start URL, which is the whole problem one level up.
+   */
+  app.get('/manifest.webmanifest', (c) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Content-Type', 'application/manifest+json');
+    try {
+      const raw = JSON.parse(readFileSync(join(webRoot, 'manifest.webmanifest'), 'utf-8'));
+      return c.body(JSON.stringify({ ...raw, start_url: `/?b=${currentBuildId()}` }));
+    } catch {
+      return c.text('not found', 404);
+    }
+  });
   app.get('/', serveIndexHtml);
   // Direct /index.html requests must not slip through to serveStatic either —
   // that would hand the shell back without the no-cache header, the exact trap
