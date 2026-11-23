@@ -476,8 +476,9 @@
   --nt-chip: 24px;
   --nt-gutter: 10px;
   --nt-air: 14px;
-  /* What a swiped row slides over — see SwipeRow.css. */
-  --swipe-surface: var(--bg-chrome);
+  /* What a swiped row slides over — see SwipeRow.css. The rail's ground: the
+     phone's list IS the rail (MobileNav.css). */
+  --swipe-surface: var(--rail-surface);
   font-size: 0.9375rem;
 }
 
@@ -602,7 +603,9 @@
    the top of the PADDING box, so any padding above it is a band the rows scroll
    through in front of the header meant to be covering them. */
 .navtree[data-variant="sheet"] {
-  --nt-surface: var(--bg-chrome);
+  /* The sticky group header's opaque ground: the rail's, which is what the
+     list is drawn on now (MobileNav.css). */
+  --nt-surface: var(--rail-surface);
 }
 
 /* The sheet needs no card rule of its own any more: the sticky band is the
@@ -3649,6 +3652,23 @@ body.sidenav-resizing iframe {
 
    `background-color`, never the shorthand — see StateChip.css. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
+  /* BACK TO THE RAIL'S INK. The base active rule re-points every token at the
+     PANE, because on the desktop the selected row is the pane's own surface
+     reaching into the rail. Here it is not: the sheet's selection is a wash
+     over the rail, so pane ink on it was dark ink on a deep ground — the same
+     substitution trap, in reverse. */
+  --bg-elev: var(--rail-elev);
+  --bg-hover: var(--rail-hover);
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
   background-color: var(--nt-sel);
   color: var(--fg);
 }

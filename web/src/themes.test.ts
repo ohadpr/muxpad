@@ -225,7 +225,13 @@ describe('no theme replaces the selected row’s fill', () => {
     .map((m) => ({ sel: (m[1] ?? '').trim().replace(/\s+/g, ' '), body: m[2] ?? '' }))
     .filter(
       (r) =>
-        r.sel.includes('[data-theme=') && /\.navtree-tab-row\[data-active="true"\]\s*$/.test(r.sel),
+        r.sel.includes('[data-theme=') &&
+        /\.navtree-tab-row\[data-active="true"\]\s*$/.test(r.sel) &&
+        // The PHONE's selected row is not the pane's surface: there is no pane
+        // beside the full-screen list and no funnel, so its fill is a plain
+        // selection and a theme may tune it (wokintosh inverts it). The join
+        // this guards exists on the desktop rail only.
+        !r.sel.includes('[data-variant="sheet"]'),
     );
 
   it('finds the rules at all, so this cannot pass vacuously', () => {
@@ -403,6 +409,10 @@ describe('every theme’s tree reads, rail and phone', () => {
     '',
   );
   const SHEET = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+  const MOBILE = readFileSync(join(HERE, 'components', 'MobileNav.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
   type RGBA = [number, number, number, number];
   type Ctx = Record<string, string>;
 
@@ -499,31 +509,36 @@ describe('every theme’s tree reads, rail and phone', () => {
     return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
   };
 
+  const lit = (c: RGBA) =>
+    `#${c
+      .slice(0, 3)
+      .map((n) => Math.round(n).toString(16).padStart(2, '0'))
+      .join('')}${Math.round(c[3] * 255)
+      .toString(16)
+      .padStart(2, '0')}`;
+
   /** The two surfaces, as the browser builds them. */
   const surfaces = (theme: string) => {
     const pane: Ctx = { ...ROOT, ...tokens(block(theme)) };
     // The rail island: its rebinds resolve against the PANE's values (that is
     // where a custom property is substituted), then the tree's own tokens
     // resolve lazily against the island.
-    const island = rulesFor(NAV, '.navtree[data-variant="sidebar"]').reduce(
-      (a, r) => Object.assign(a, r),
-      {} as Ctx,
-    );
-    const rail: Ctx = { ...pane };
-    for (const [k, v] of Object.entries(island)) {
-      if (!k.startsWith('--')) continue;
-      const c = resolve(v, pane);
-      rail[k] = `#${c
-        .slice(0, 3)
-        .map((n) => Math.round(n).toString(16).padStart(2, '0'))
-        .join('')}${Math.round(c[3] * 255)
-        .toString(16)
-        .padStart(2, '0')}`;
-    }
+    const islandOf = (css: string, sel: string): Ctx => {
+      const out: Ctx = { ...pane };
+      for (const r of rulesFor(css, sel))
+        for (const [k, v] of Object.entries(r))
+          if (k.startsWith('--')) out[k] = lit(resolve(v, pane));
+      return out;
+    };
+    const rail = islandOf(NAV, '.navtree[data-variant="sidebar"]');
+    // The phone's list is the rail in another container (MobileNav.css): the
+    // island is `.mobile-chat-list`, and the ground is whatever the sheet's
+    // sticky surface resolves to INSIDE it.
+    const phone = islandOf(MOBILE, '.mobile-chat-list');
     const sheetSurface = decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface') ?? 'var(--bg)';
     return [
       { name: 'rail', ctx: { ...rail, ...NAVROOT }, ground: resolve('var(--rail-surface)', pane) },
-      { name: 'phone', ctx: { ...pane, ...NAVROOT }, ground: resolve(sheetSurface, pane) },
+      { name: 'phone', ctx: { ...phone, ...NAVROOT }, ground: resolve(sheetSurface, phone) },
     ] as const;
   };
 
@@ -534,6 +549,10 @@ describe('every theme’s tree reads, rail and phone', () => {
     base: string;
     phone?: string;
     fill?: string;
+    /** A rule whose custom properties re-point tokens for this role, and
+     *  whose background-color is laid over the ground. */
+    scope?: string;
+    only?: 'rail' | 'phone';
     bar: number;
   }[] = [
     { role: 'section header', base: '.navtree-ws-row .navtree-name-text', bar: 4.5 },
@@ -561,6 +580,13 @@ describe('every theme’s tree reads, rail and phone', () => {
     { role: 'mark: ready', base: '.navtree-mark[data-state="ready"]', bar: 3 },
     { role: 'mark: blocked', base: '.navtree-mark[data-state="blocked"]', bar: 3 },
     { role: 'mark: dead', base: '.navtree-mark[data-state="dead"]', bar: 3 },
+    {
+      role: 'chat name (selected)',
+      base: '.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] .navtree-name-text',
+      scope: '.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"]',
+      only: 'phone',
+      bar: 4.5,
+    },
   ];
 
   /** A theme may restate a role's ink (memphis and wokintosh set the section
@@ -578,12 +604,15 @@ describe('every theme’s tree reads, rail and phone', () => {
 
   const cases = THEMES.flatMap((t) =>
     ROLES.flatMap((r) =>
-      surfaces(t.value).map((s) => [`${t.value} · ${s.name} · ${r.role}`, t.value, r, s] as const),
+      surfaces(t.value)
+        .filter((s) => !r.only || r.only === s.name)
+        .map((s) => [`${t.value} · ${s.name} · ${r.role}`, t.value, r, s] as const),
     ),
   );
 
   it('covers every theme, both surfaces, every role', () => {
-    expect(cases.length).toBe(THEMES.length * ROLES.length * 2);
+    const both = ROLES.filter((r) => !r.only).length;
+    expect(cases.length).toBe(THEMES.length * (both * 2 + ROLES.length - both));
   });
 
   it.each(cases)('%s', (_n, theme, r, s) => {
@@ -592,10 +621,23 @@ describe('every theme’s tree reads, rail and phone', () => {
       (s.name === 'phone' && r.phone ? decl(NAV, r.phone, 'color') : undefined) ??
       decl(NAV, r.base, 'color');
     expect(ink, `${r.base} declares no colour`).toBeTruthy();
+    let ctx: Ctx = s.ctx;
+    let ground: RGBA = s.ground;
+    if (r.scope) {
+      const scoped = rulesFor(NAV, r.scope).reduce((a, x) => Object.assign(a, x), {} as Ctx);
+      ctx = { ...s.ctx };
+      for (const [k, v] of Object.entries(scoped))
+        if (k.startsWith('--')) ctx[k] = lit(resolve(v, s.ctx));
+      // A theme may repaint the selection (wokintosh inverts it); its rule wins.
+      const wash =
+        decl(SHEET, `[data-theme="${theme}"] ${r.scope}`, 'background-color') ??
+        scoped['background-color'];
+      if (wash) ground = over(resolve(wash, ctx), ground);
+    }
     const fillExpr = r.fill ? decl(NAV, r.base, r.fill) : undefined;
-    const ground = fillExpr ? over(resolve(fillExpr, s.ctx), s.ground) : s.ground;
+    if (fillExpr) ground = over(resolve(fillExpr, ctx), ground);
     const opacity = Number(decl(NAV, r.base, 'opacity') ?? 1);
-    const fg = resolve(ink as string, s.ctx);
+    const fg = resolve(ink as string, ctx);
     const seen = over([fg[0], fg[1], fg[2], fg[3] * opacity], ground);
     const h = (c: RGBA) =>
       `#${c
@@ -605,6 +647,31 @@ describe('every theme’s tree reads, rail and phone', () => {
     expect(ratio(seen, ground), `${ink} → ${h(seen)} on ${h(ground)}`).toBeGreaterThanOrEqual(
       r.bar,
     );
+  });
+
+  it('the phone’s list is the rail: same island as .sidenav, on the rail’s ground', () => {
+    // "The chat list view in mobile doesn't use the green background in
+    // wokintosh." It was a second island that did not exist — the list sat on
+    // --bg-chrome in the pane's ink. These pin it to the rail's, rebind for
+    // rebind, so a token added to one island cannot be missed in the other.
+    const rebinds = (css: string, sel: string) =>
+      Object.fromEntries(
+        Object.entries(rulesFor(css, sel).reduce((a, r) => Object.assign(a, r), {} as Ctx)).filter(
+          ([k]) => k.startsWith('--'),
+        ),
+      );
+    const sidenav = rebinds(NAV, '.sidenav');
+    expect(Object.keys(sidenav).length).toBeGreaterThanOrEqual(10);
+    expect(rebinds(MOBILE, '.mobile-chat-list')).toEqual(sidenav);
+    expect(decl(MOBILE, '.mobile-chat-list', 'background')).toBe('var(--rail-surface)');
+    expect(decl(MOBILE, '.mcl-tabs', 'background')).toBe('var(--rail-surface)');
+    expect(decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface')).toBe('var(--rail-surface)');
+    // And the selected row turns back to the rail: the base active rule hands
+    // every token to the PANE (on the desktop the row IS the pane), which on
+    // the sheet's rail-coloured wash is the same mistake in reverse.
+    expect(
+      rebinds(NAV, '.navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"]'),
+    ).toEqual(sidenav);
   });
 
   it('read and unread are told apart by WEIGHT, not by fading the read row', () => {

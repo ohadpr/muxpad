@@ -10,7 +10,31 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-chrome);
+  /* ─── THE PHONE'S LIST IS THE RAIL ─────────────────────────────────────
+     Same NavTree, different container — so the same SURFACE and the same INK.
+     It was painted --bg-chrome under the pane's ink, which on a theme whose
+     rail has an identity of its own (wokintosh's teal desktop, riso's
+     ultramarine, memphis's black) threw that identity away on exactly the
+     surface where the list is the whole screen: "the chat list view in mobile
+     doesn't use the green background in wokintosh".
+     These are .sidenav's rebinds, verbatim, for the same reason they exist
+     there: everything in here — the header, the tree, the tab bar — reads
+     --fg/--fg-dim/--border directly. Kept identical to .sidenav by
+     themes.test.ts, so the two islands cannot drift. */
+  --fg: var(--rail-ink);
+  --bg-elev: var(--rail-elev);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  background: var(--rail-surface);
+  color: var(--fg);
 }
 .mobile-chat-list[hidden] {
   display: none;
@@ -277,7 +301,8 @@
   flex: 0 0 auto;
   display: flex;
   border-top: 1px solid var(--border);
-  background: var(--bg-chrome);
+  /* The rail's own ground: the bar is part of the list, not a pane under it. */
+  background: var(--rail-surface);
   /* Above the home indicator in the installed PWA (viewport-fit=cover). */
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -321,5 +346,5 @@
   font-weight: 700;
   line-height: 17px;
   text-align: center;
-  box-shadow: 0 0 0 2px var(--bg-chrome);
+  box-shadow: 0 0 0 2px var(--rail-surface);
 }

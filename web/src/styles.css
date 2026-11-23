@@ -1868,8 +1868,10 @@
    window-title treatment lives on the brand row:
    grey, pinstriped edge to edge, a black rule under it, and the wordmark set
    on a clear patch. It is a pane-ink island inside the rail's, so the search
-   button and the wordmark go back to black on grey. */
-[data-theme="wokintosh"] .sidenav-brand {
+   button and the wordmark go back to black on grey. The phone's list header
+   (.mcl-head) is the same row on the same rail, so it wears the same bar. */
+[data-theme="wokintosh"] .sidenav-brand,
+[data-theme="wokintosh"] .mcl-head {
   --fg: var(--pane-ink);
   --fg-dim: var(--pane-ink-dim);
   --bg-elev: var(--pane-elev);
@@ -1887,11 +1889,13 @@
   background-repeat: no-repeat;
   border-bottom: 1.5px solid var(--fg);
 }
-[data-theme="wokintosh"] .sidenav-brand .brand-text {
+[data-theme="wokintosh"] .sidenav-brand .brand-text,
+[data-theme="wokintosh"] .mcl-head .brand-text {
   background: var(--bg-chrome);
   padding: 0 8px;
 }
-[data-theme="wokintosh"] .sidenav-brand .brand-mark {
+[data-theme="wokintosh"] .sidenav-brand .brand-mark,
+[data-theme="wokintosh"] .mcl-head .brand-mark {
   /* TWO OFFSET SHADOWS, NOT ONE SPREAD. A spread grows on every side: the mark
      sits 9px above the row's bottom edge and the spread was 10px, so the patch
      reached 1px past it and painted over the 1px rule — a white notch in the
@@ -1908,8 +1912,25 @@
 }
 /* The search button sits where a window's close box did, on its own clear
    patch of the bar. */
-[data-theme="wokintosh"] .sidenav-brand .navtree-search {
+[data-theme="wokintosh"] .sidenav-brand .navtree-search,
+[data-theme="wokintosh"] .mcl-head .icon-btn,
+[data-theme="wokintosh"] .mcl-head .mcl-head-icon {
   background: var(--bg-chrome);
+}
+/* On the phone the title is a flex:1 span, so a patch on it would cover the
+   whole bar. It shrinks to its word instead and pushes the buttons right, and
+   the buttons' patches reach across the 10px gaps between them with the same
+   offset copies the mark uses — so the stripes run from the title to the
+   buttons and nowhere else. */
+[data-theme="wokintosh"] .mcl-head .mcl-head-title {
+  flex: 0 1 auto;
+  margin-right: auto;
+  padding: 0 8px;
+  background: var(--bg-chrome);
+}
+[data-theme="wokintosh"] .mcl-head .icon-btn,
+[data-theme="wokintosh"] .mcl-head .mcl-head-icon {
+  box-shadow: -7px 0 0 0 var(--bg-chrome), 7px 0 0 0 var(--bg-chrome);
 }
 
 /* ── HOVER MUST NOT ERASE THE PINSTRIPES ──────────────────────────────────
@@ -1934,6 +1955,16 @@
      for a grey one and looked just as wrong. The link has no resting
      background either; this simply keeps it that way. */
   background: transparent;
+}
+
+/* THE SELECTED ROW ON THE PHONE IS AN INVERTED ICON LABEL. On the desktop the
+   selected row is the pane's paper reaching into the rail; on the phone there
+   is no pane beside the list, and the shared selection — a 20% wash of the
+   rail's accent — lifted the teal under white ink to 4.39:1. System 7 marked a
+   selected icon on the desktop by inverting its label, so this one goes the
+   other way: a darker teal under the same white, 10.54:1. */
+[data-theme="wokintosh"] .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
+  background-color: #004747;
 }
 
 /* THE MENU-BAR WORDMARK. Geneva bold in ink, beside the six-stripe rainbow
