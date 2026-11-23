@@ -231,10 +231,10 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  --d: color-mix(in srgb, var(--wm-ink) 35%, transparent);
-  background: radial-gradient(circle at 17% 50%, var(--d) 0 1.6px, transparent 2px),
-    radial-gradient(circle at 50% 50%, var(--d) 0 1.6px, transparent 2px),
-    radial-gradient(circle at 83% 50%, var(--d) 0 1.6px, transparent 2px);
+  --d: color-mix(in srgb, var(--wm-ink) 45%, transparent);
+  background: radial-gradient(circle at 15% 50%, var(--d) 0 1.8px, transparent 2.2px),
+    radial-gradient(circle at 50% 50%, var(--d) 0 1.8px, transparent 2.2px),
+    radial-gradient(circle at 85% 50%, var(--d) 0 1.8px, transparent 2.2px);
 }
 [data-theme="github-light"]
   :is(
@@ -242,12 +242,12 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  background: radial-gradient(circle at 17% 50%, var(--wm-ink) 0 2px, transparent 2.4px);
+  background: radial-gradient(circle at 15% 50%, var(--wm-ink) 0 2.2px, transparent 2.6px);
   animation: wm-walk 1.2s steps(3, jump-none) infinite;
 }
 @keyframes wm-walk {
   to {
-    transform: translateX(66%);
+    transform: translateX(70%);
   }
 }
 
