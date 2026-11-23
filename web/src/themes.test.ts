@@ -640,6 +640,24 @@ describe('every theme’s tree reads, rail and phone', () => {
       only: 'phone',
       bar: 3,
     },
+    // A chat's top bar on the phone wears the list's chrome (see the island
+    // test below), so its title and back arrow are measured on that ground.
+    {
+      role: 'chat header title',
+      base: '.mobile-chat-title',
+      css: 'mobile',
+      scope: '.ws-tabbar:has(.mobile-chat-head)',
+      only: 'phone',
+      bar: 4.5,
+    },
+    {
+      role: 'chat header back',
+      base: '.mobile-chat-back',
+      css: 'mobile',
+      scope: '.ws-tabbar:has(.mobile-chat-head)',
+      only: 'phone',
+      bar: 3,
+    },
     { role: 'activity: preview', base: '.mcl-row-preview', css: 'mobile', only: 'phone', bar: 4.5 },
     { role: 'activity: time', base: '.mcl-row-meta', css: 'mobile', only: 'phone', bar: 4.5 },
   ];
@@ -730,6 +748,12 @@ describe('every theme’s tree reads, rail and phone', () => {
     const sidenav = rebinds(NAV, '.sidenav');
     expect(Object.keys(sidenav).length).toBeGreaterThanOrEqual(10);
     expect(rebinds(MOBILE, '.mobile-chat-list')).toEqual(sidenav);
+    // A chat's top bar is the same chrome: "the two views feel like they use
+    // completely separate palettes".
+    expect(rebinds(MOBILE, '.ws-tabbar:has(.mobile-chat-head)')).toEqual(sidenav);
+    expect(decl(MOBILE, '.ws-tabbar:has(.mobile-chat-head)', 'background')).toBe(
+      'var(--rail-surface)',
+    );
     expect(decl(MOBILE, '.mobile-chat-list', 'background')).toBe('var(--rail-surface)');
     // The tab bar is the rail's RAISED surface — same family, lifted off the
     // list it sits over ("it blends with the list too much").

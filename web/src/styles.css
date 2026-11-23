@@ -1864,6 +1864,53 @@
   border-bottom: 1.5px solid var(--fg);
 }
 
+/* …AND IN A CHAT THE MENU BAR IS THE SAME TITLE BAR AS THE LIST'S. Everywhere
+   else the chat's top bar joins the rail (MobileNav.css). Here that would be
+   teal, and a System 7 window's title bar is grey: the teal is the DESKTOP,
+   and the list's own header is already a grey, pinstriped, pane-ink island
+   sitting on it. The two views were already sharing a colour — #e0e0e0 on
+   both, the only theme that measured that way — and what separated them was
+   that one was a title bar and the other a plain strip. So the chat gets the
+   same title bar: pinstripes edge to edge, the name and the controls on clear
+   patches, a black rule under it, pane ink and pane status marks on grey. */
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+  color: var(--pane-ink);
+  background-color: var(--bg-chrome);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    #00000094 2px 3px,
+    transparent 3px 4px
+  );
+  background-size: calc(100% - 16px) 19px;
+  background-position: 8px center;
+  background-repeat: no-repeat;
+  border-bottom: 1.5px solid var(--pane-ink);
+}
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .mobile-chat-title {
+  flex: 0 1 auto;
+  margin-right: auto;
+  padding: 0 8px;
+  background: var(--bg-chrome);
+}
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .mobile-chat-back,
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .icon-btn {
+  background: var(--bg-chrome);
+  box-shadow: -7px 0 0 0 var(--bg-chrome), 7px 0 0 0 var(--bg-chrome);
+}
+
 /* THE TITLE BAR IS THE RAIL'S HEAD. The desktop has no tab strip, so the
    window-title treatment lives on the brand row:
    grey, pinstriped edge to edge, a black rule under it, and the wordmark set

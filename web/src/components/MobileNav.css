@@ -73,9 +73,13 @@
   align-items: center;
   gap: 6px;
   padding-inline-end: 8px;
-  font-family: var(--chrome-font);
-  font-size: var(--chrome-size);
-  font-weight: 600;
+  /* The chat's name in the list's face and at the list's scale: --ui-font,
+     17px bold, as it was a moment ago as a row in the list. 13px of the
+     chrome face (a monospace on most themes) made the two bars read as two
+     products as much as the colours did. */
+  font-family: var(--ui-font);
+  font-size: 1.0625rem;
+  font-weight: 700;
   color: var(--fg);
 }
 .mobile-chat-status {
@@ -88,6 +92,36 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* ─── ONE CHROME ACROSS THE LIST AND THE CHAT ─────────────────────────
+   "The bar at the top of the chat should have some similarities to the full
+   screen chat list — the two views feel like they use completely separate
+   palettes." Measured before: the list's header is the rail (its surface,
+   its ink); the chat's top bar was --bg-tabbar in the pane's ink — near-black
+   against a mid-dark rail on the dark themes, and PALE against a deep rail on
+   alucard, github-light, acme, riso and memphis, which is the whole split he
+   saw. So the chat's bar joins the rail: the same island as the list
+   (.sidenav's rebinds, kept equal by themes.test.ts) on the same surface, and
+   moving between the two views changes the content under one band of chrome,
+   the way Slack's does. The pane below is untouched.
+   Scoped by .mobile-chat-head, which only renders in the phone layout — the
+   same bar on the desktop's '/' picker is not this one. */
+.ws-tabbar:has(.mobile-chat-head) {
+  --fg: var(--rail-ink);
+  --bg-elev: var(--rail-elev);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  background: var(--rail-surface);
+  color: var(--fg);
 }
 
 /* ─── The list's header: muxpad, new chat, settings — ONE row ───────── */
@@ -355,6 +389,26 @@
      one. */
   --mcl-inset: env(safe-area-inset-bottom, 0px);
   padding-bottom: max(0px, calc(var(--mcl-inset) - 20px));
+}
+/* ─── …AND WHEN THE INSET IS A LIE ────────────────────────────────────────
+   The formula above is right and it assumed `env(safe-area-inset-bottom)`
+   tells the truth. It stopped doing so when `viewport-fit=cover` was removed
+   from the viewport meta (see index.html — it was half of the iOS 26 Liquid
+   Glass fix): without `cover` the insets report 0, and measured on his phone
+   the web view is 812 tall inside an 874 screen — 62px taken at the TOP and
+   nothing at the bottom. So the bar sits flush against an edge the home
+   indicator still crosses, and the pill lands on the labels: "bottom bar still
+   too clipped on mobile".
+
+   A floor, in standalone only. 14px is what the formula above produces at the
+   34px inset it was tuned against, so the bar looks the same on a phone that
+   reports its inset and on one that does not. A browser tab keeps 0 — there
+   the page is not under anything. A phone with no home indicator spends 14px
+   of the bar's own ground, which is the cheap side of the trade. */
+@media (display-mode: standalone) {
+  .mcl-tabs {
+    padding-bottom: max(14px, calc(var(--mcl-inset) - 20px));
+  }
 }
 /* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
    labels, a row's time, a fallback preview, the empty state) were --fg-faint,
