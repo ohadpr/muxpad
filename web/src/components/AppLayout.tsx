@@ -18,7 +18,6 @@ import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
-import { ViewportDiag } from './ViewportDiag';
 import { WorkspaceShell } from './WorkspaceLayout';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
@@ -142,7 +141,6 @@ export function AppLayout() {
           picker and on mobile too, which is exactly where the rail's own
           search field is not on screen to be focused. */}
       <CommandPalette />
-      <ViewportDiag />
       {showTopBar && (
         <header className="ws-tabbar">
           {chatList && !onRoot ? (
