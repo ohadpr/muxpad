@@ -1841,7 +1841,19 @@
   padding: 0 8px;
 }
 [data-theme="wokintosh"] .sidenav-brand .brand-mark {
-  box-shadow: 0 0 0 10px var(--bg-chrome);
+  /* TWO OFFSET SHADOWS, NOT ONE SPREAD. A spread grows on every side: the mark
+     sits 9px above the row's bottom edge and the spread was 10px, so the patch
+     reached 1px past it and painted over the 1px rule — a white notch in the
+     underline directly beneath the icon, which is how it was reported.
+     Measured in the live page: markBottom 27, rowBottom 36, spread 10.
+
+     Offsets with no blur and no spread paint two copies of the mark's own box,
+     shifted left and right. The patch is therefore exactly as TALL as the icon
+     whatever the row height becomes, and the rule underneath cannot be
+     reached. A background would be simpler and is wrong here: the rainbow IS
+     this element's background, so painting one erases the mark (tried it —
+     the icon vanished and left an empty box). */
+  box-shadow: -10px 0 0 0 var(--bg-chrome), 10px 0 0 0 var(--bg-chrome);
 }
 /* The search button sits where a window's close box did, on its own clear
    patch of the bar. */
