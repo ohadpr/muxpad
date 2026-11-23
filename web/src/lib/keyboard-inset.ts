@@ -9,8 +9,8 @@
  * not shrink when the keyboard opens — only `visualViewport` does — so the
  * composer stays on the layout bottom, under the keyboard, and the scroller's
  * `clientHeight` never changes so the last turns are not reserved above it
- * either. `MobileInputBar` and the nav sheet already special-case exactly this
- * geometry (`sheet-viewport.ts`); chat did not.
+ * either. `MobileInputBar` (and the old drop-down nav sheet) special-cased exactly
+ * this geometry; chat did not.
  *
  * `MobileInputBar`'s standalone shortcut — "in an installed PWA, skip the JS,
  * iOS anchors `bottom: 0` to the keyboard on its own" — does NOT transfer here.

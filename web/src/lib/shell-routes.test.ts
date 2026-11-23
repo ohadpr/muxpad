@@ -49,6 +49,6 @@ describe('keepsShell', () => {
     const src = readFileSync(join(__dirname, '../components/AppLayout.tsx'), 'utf8');
     expect(src).toContain('keepsShell(pathname)');
     // …and the shell branch has to consider it, not just compute it.
-    expect(src).toMatch(/wsSlug \|\| \(shellRoute && sidebarMode\)/);
+    expect(src).toMatch(/rendersAppBody\(\{ wsSlug, shellRoute, sidebarMode/);
   });
 });

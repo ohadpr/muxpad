@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
+import { ChatListFallback } from './pages/ChatListFallback';
 import { DocView } from './pages/DocView';
 import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
@@ -17,11 +18,23 @@ const appLayoutRoute = createRoute({
   component: AppLayout,
 });
 
-// Root: just redirects (to first workspace, or auto-creates one).
+// Root: just redirects. On a phone to the chat list (/chats); on desktop to
+// the first workspace, or auto-creates one. See lib/mobile-nav.
 const rootRedirectRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/',
   component: RootRedirect,
+});
+
+// /chats — the phone's root: every workspace and its chats, full screen.
+// AppLayout renders the list ITSELF, beside the kept-alive workspace hosts and
+// never through this route's Outlet, so the list survives a trip into a chat.
+// The component only ever renders where the list is not a destination (desktop,
+// an embed), and sends you to `/`.
+const chatListRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/chats',
+  component: ChatListFallback,
 });
 
 // /w/$wsSlug — workspace layout. Loads workspace, redirects to first tab
@@ -128,6 +141,7 @@ const hostedAppRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     rootRedirectRoute,
+    chatListRoute,
     artifactsRoute,
     appsRoute,
     hostedRedirectRoute,

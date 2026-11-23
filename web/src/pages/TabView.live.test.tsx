@@ -90,7 +90,7 @@ it('a slug the cache already holds skips the list refetch', async () => {
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     expect(mock.freshTabs).not.toHaveBeenCalled();
     expect(mock.getTab).toHaveBeenCalledWith('t');
     expect(host.textContent).toContain('vim');
@@ -110,7 +110,7 @@ it('a just-created tab renders from the primed detail before the GET answers', a
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     expect(host.textContent).toContain('vim');
     expect(mock.getTab).toHaveBeenCalledWith('t');
   } finally {
@@ -128,7 +128,7 @@ it('a cached slug whose tab is gone (404) gets the not-found recovery', async ()
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     expect(host.textContent).toContain('tab not found');
   } finally {
     await act(async () => root.unmount());
@@ -143,7 +143,7 @@ it('unmounting a background tab does not bulk-acknowledge unseen replies', async
   mock.markTabSeen.mockClear();
   mock.markPaneSeen.mockClear();
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={false} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={false} />));
   } finally {
     await act(async () => root.unmount());
   }
@@ -157,7 +157,7 @@ it('a resync cannot restore decorations cleared by a newer pane.updated', async 
   const root = createRoot(host);
   mock.getTab.mockResolvedValue(mock.tab);
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     expect(host.textContent).toContain('vim');
     let finish!: (tab: typeof mock.tab) => void;
     mock.getTab.mockImplementationOnce(
@@ -192,7 +192,7 @@ it.each(['resync', 'reload'] as const)(
     const original = { ...mock.tab };
     mock.getTab.mockResolvedValue(original);
     try {
-      await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+      await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
       let finish!: (tab: typeof mock.tab) => void;
       mock.getTab.mockImplementationOnce(
         () =>
@@ -207,7 +207,9 @@ it.each(['resync', 'reload'] as const)(
       } else {
         // A slug change re-runs the same load effect as loadNonce.
         mock.tab.slug = 'renamed';
-        await act(async () => root.render(<TabView tabSlug="renamed" isActive={true} />));
+        await act(async () =>
+          root.render(<TabView wsSlug="work" tabSlug="renamed" isActive={true} />),
+        );
       }
       const added = { ...original.panes[0], id: 'q', title: 'NEW PANE' };
       const current = { ...mock.tab, layout: 'q', panes: [...original.panes, added] };
@@ -239,7 +241,7 @@ it.each(['visible', 'hidden'] as const)(
     mock.markTabSeen.mockClear();
     mock.markPaneSeen.mockClear();
     try {
-      await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+      await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
       await act(async () => vi.advanceTimersByTime(301));
       expect(mock.markTabSeen).not.toHaveBeenCalled();
       if (visibility === 'visible') expect(mock.markPaneSeen).toHaveBeenCalledWith('p');
@@ -265,7 +267,7 @@ it('paints no pane strip, no `+` and no split control on a terminal tab', async 
   const root = createRoot(host);
   mock.getTab.mockResolvedValue(mock.tab);
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     // The terminal itself is on screen…
     expect(host.textContent).toContain('vim');
     // …and nothing around it adds, splits or names a second thing.
@@ -292,7 +294,7 @@ it('an EMPTY tab offers a chat, and asks the SERVER to place it', async () => {
   mock.createPane.mockReset();
   mock.createPane.mockResolvedValue({ id: 'n', tab_id: 't', kind: 'shell', title: 'fresh chat' });
   try {
-    await act(async () => root.render(<TabView tabSlug="chat" isActive={true} />));
+    await act(async () => root.render(<TabView wsSlug="work" tabSlug="chat" isActive={true} />));
     expect(host.textContent).toContain('Nothing is open here.');
     const start = [...host.querySelectorAll('button')].find(
       (b) => b.textContent === 'Start a chat',

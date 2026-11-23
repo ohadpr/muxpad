@@ -2,6 +2,9 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
+import { isEmbedded } from '../lib/embed';
+import { isMobileLayout } from '../lib/mobile-layout';
+import { CHAT_LIST_PATH, rootLanding } from '../lib/mobile-nav';
 import { useDocumentTitle } from '../use-document-title';
 import { refreshWorkspaces, visibleWorkspaces } from '../workspaces';
 
@@ -12,8 +15,14 @@ let bootstrapInFlight: Promise<void> | null = null;
 
 /**
  * The root route `/` doesn't render its own page — it just figures out
- * where the user belongs and redirects there. The user is always either
- * inside a workspace or transiently passing through this redirect.
+ * where the user belongs and redirects there.
+ *
+ *   - On a PHONE, the chat list (`/chats`) — the root of the mobile layout.
+ *     Diving into a chat would put the list one gesture behind you on a cold
+ *     open, which is backwards: the list is where you start. With zero
+ *     workspaces the bootstrap below still runs first, then lands there.
+ *
+ * On desktop:
  *
  *   - If there's at least one workspace, go to the first one (its
  *     WorkspaceLayout will then redirect to that workspace's first tab).
@@ -43,6 +52,13 @@ export function RootRedirect() {
       // the default landing spot — with only it present, bootstrap a real one.
       const workspaces = visibleWorkspaces(await refreshWorkspaces());
       if (cancelled) return;
+      // Read at fire time, not captured at mount: it is the layout the user is
+      // looking at when the answer arrives that decides where they land.
+      const toList = rootLanding({ isMobile: isMobileLayout(), embedded: isEmbedded() });
+      if (toList === 'chat-list' && workspaces.length > 0) {
+        void navigate({ to: CHAT_LIST_PATH, search, replace: true });
+        return;
+      }
       if (workspaces.length > 0) {
         const first = workspaces[0]!;
         void navigate({
@@ -67,6 +83,10 @@ export function RootRedirect() {
         const t = await api.createTab(w.id, { ...HOUSE_CHAT_CREATE });
         await refreshWorkspaces();
         if (cancelled) return;
+        if (rootLanding({ isMobile: isMobileLayout(), embedded: isEmbedded() }) === 'chat-list') {
+          void navigate({ to: CHAT_LIST_PATH, search, replace: true });
+          return;
+        }
         void navigate({
           to: '/w/$wsSlug/t/$tabSlug',
           params: { wsSlug: w.slug, tabSlug: t.slug },

@@ -1,0 +1,73 @@
+/* ──────────────────────────────────────────────────────────────────────
+   MobileNav — the phone's two levels (see lib/mobile-nav).
+
+   The list fills the column the chat would; the chat's header is the top
+   bar itself, so the second level costs no row the old breadcrumb did not.
+   ────────────────────────────────────────────────────────────────────── */
+
+.mobile-chat-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-chrome);
+}
+.mobile-chat-list[hidden] {
+  display: none;
+}
+.mobile-chat-list > .navtree {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── The chat's header, in the top bar ─────────────────────────────── */
+
+.mobile-chat-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.mobile-chat-back {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* A full-height, thumb-wide target: this is the button pressed most. */
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.mobile-chat-back:active {
+  background: var(--bg-hover);
+}
+.mobile-chat-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline-end: 8px;
+  font-family: var(--chrome-font);
+  font-size: var(--chrome-size);
+  font-weight: 600;
+  color: var(--fg);
+}
+.mobile-chat-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+.mobile-chat-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

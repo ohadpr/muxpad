@@ -253,7 +253,7 @@ describe('the software keyboard inset', () => {
   // `.chat-composer-wrap` is `position: absolute; bottom: 0` of a pane sized in
   // LAYOUT viewport units, and iOS does not shrink the layout viewport when the
   // keyboard opens — only `visualViewport` does. So the composer sits under the
-  // keyboard. Geometry from sheet-viewport.test.ts's measured iPhone 14 case:
+  // keyboard. Geometry from a measured iPhone 14:
   // an 844px layout viewport with a 336px keyboard leaves vv.height 508.
   it('is the band of the pane the keyboard covers', () => {
     expect(chatKeyboardInset({ paneBottom: 844, vvOffsetTop: 0, vvHeight: 508 })).toBe(336);

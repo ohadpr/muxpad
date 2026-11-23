@@ -33,7 +33,7 @@ import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
  *
  * ─── VISIBLE ONLY ────────────────────────────────────────────────────────────
  * The route returns every workspace including HIDDEN ones (the apps container),
- * and those are excluded here for the reason MobileNavSwitcher already excludes
+ * and those are excluded here for the reason the nav surfaces already exclude
  * them: the apps container holds long-lived server panes whose pty output makes
  * them read as `working` forever. In a flat global list they would sit at the
  * top of every render, permanently, which is the churn feed in its purest form.
