@@ -290,11 +290,12 @@
 /* ── demoscene · the tape-loading border ─────────────────────────────────
    The C64 said "LOADING" by flickering bands of colour across the border
    while the tape ran, every scener's first progress bar. A framed block of
-   the working ink with bands of the theme's phosphor magenta flickering
-   across it (opacity only, 0.9s a cycle, slow enough to read as a loader and
-   not a flash). The bands lie over a SOLID block, never over a gap: amber
-   bands with gaps between them, standing still, were a boxed "≡", which is a
-   menu button. */
+   two-colour bands, the working ink and the theme's own phosphor, that
+   swap places on every beat (opacity only, 0.9s a cycle, slow enough to read
+   as a loader and not a flash).
+   EVERY frame is two colours, never one colour with gaps and never solid: a
+   band set with gaps standing still is a boxed "≡" (a menu), and a solid
+   block in a frame is "■", the Stop button. */
 [data-theme="demoscene"]
   :is(
     .navtree-mark[data-state="working"],
@@ -304,7 +305,8 @@
   border: 1.5px solid var(--wm-ink);
   border-radius: 2px;
   padding: 1.5px;
-  background: var(--wm-ink) content-box;
+  background: repeating-linear-gradient(to bottom, var(--wm-ink) 0 2px, var(--pane-accent) 2px 4px)
+    content-box;
 }
 [data-theme="demoscene"]
   :is(
@@ -313,11 +315,7 @@
     .navtree-status[data-status="working"]
   )::after {
   margin: 3px;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0 2px,
-    color-mix(in srgb, var(--accent) 90%, transparent) 2px 4px
-  );
+  background: repeating-linear-gradient(to bottom, var(--pane-accent) 0 2px, var(--wm-ink) 2px 4px);
   animation: wm-flip 0.9s step-end infinite;
 }
 @keyframes wm-flip {
@@ -464,8 +462,9 @@
 
 /* Reduced motion: the moving layer stops at its rest frame, and every rest
    frame above is a complete glyph: the striped bar, the comet, the wheel, the
-   arc on its dotted track, the ringed ping, the banded block, the dashed
-   circle round its point, the two inks, the zigzag on its track. Nothing gets
+   arc on its dotted track, the ringed ping, the dashed
+   circle round its point, the two inks, the zigzag on its track; demoscene's
+   two-colour bands. Nothing gets
    fainter. (StateChip's spinner still hands over to the
    WORKING word there, as it always has.) */
 @media (prefers-reduced-motion: reduce) {
