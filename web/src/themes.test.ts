@@ -413,6 +413,15 @@ describe('every theme’s tree reads, rail and phone', () => {
     /\/\*[\s\S]*?\*\//g,
     '',
   );
+  // The desktop's destination rail (Home · Unread · Activity · Artifacts ·
+  // Apps) sits on the rail's surface lifted by its own ink — its labels are
+  // held to the same bar on THAT ground.
+  const DEST = readFileSync(join(HERE, 'components', 'DestinationRail.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const sheetOf = (css: 'mobile' | 'dest' | undefined) =>
+    css === 'mobile' ? MOBILE : css === 'dest' ? DEST : NAV;
   type RGBA = [number, number, number, number];
   type Ctx = Record<string, string>;
 
@@ -573,7 +582,7 @@ describe('every theme’s tree reads, rail and phone', () => {
     scope?: string;
     only?: 'rail' | 'phone';
     /** Which stylesheet declares it — NavTree.css unless said. */
-    css?: 'mobile';
+    css?: 'mobile' | 'dest';
     bar: number;
   }[] = [
     { role: 'section header', base: '.navtree-ws-row .navtree-name-text', bar: 4.5 },
@@ -668,6 +677,22 @@ describe('every theme’s tree reads, rail and phone', () => {
     },
     { role: 'activity: preview', base: '.mcl-row-preview', css: 'mobile', only: 'phone', bar: 4.5 },
     { role: 'activity: time', base: '.mcl-row-meta', css: 'mobile', only: 'phone', bar: 4.5 },
+    {
+      role: 'destination label',
+      base: '.dest-rail-item',
+      css: 'dest',
+      scope: '.dest-rail',
+      only: 'rail',
+      bar: 4.5,
+    },
+    {
+      role: 'destination label (current)',
+      base: '.dest-rail-item[data-current="true"]',
+      css: 'dest',
+      scope: '.dest-rail',
+      only: 'rail',
+      bar: 4.5,
+    },
   ];
 
   /** A theme may restate a role's ink (memphis and wokintosh set the section
@@ -697,7 +722,7 @@ describe('every theme’s tree reads, rail and phone', () => {
   });
 
   it.each(cases)('%s', (_n, theme, r, s) => {
-    const src = r.css === 'mobile' ? MOBILE : NAV;
+    const src = sheetOf(r.css);
     const ink =
       themed(theme, r.role, r.base) ??
       (s.name === 'phone' && r.phone ? decl(NAV, r.phone, 'color') : undefined) ??
@@ -707,7 +732,7 @@ describe('every theme’s tree reads, rail and phone', () => {
     let ground: RGBA = s.ground;
     if (r.scope) {
       const scoped = [
-        ...rulesFor(r.css === 'mobile' ? MOBILE : NAV, r.scope),
+        ...rulesFor(sheetOf(r.css), r.scope),
         ...rulesFor(SHEET, `[data-theme="${theme}"] ${r.scope}`),
       ].reduce((a, x) => Object.assign(a, x), {} as Ctx);
       ctx = { ...s.ctx };

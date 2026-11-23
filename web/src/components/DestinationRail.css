@@ -14,8 +14,28 @@
   gap: 2px;
   padding: 10px 4px;
   overflow-y: auto;
-  background: var(--rail-surface, var(--bg-chrome));
-  border-right: 1px solid var(--rail-border, var(--border));
+  /* ─── ITS OWN COLUMN, IN THE SAME FAMILY ────────────────────────────────
+     "icon rail should use a bg color which is a semi contrasted variant of
+     the chat list." Derived, not picked per theme: the rail's own INK mixed
+     into the rail's own surface — the phone's tab bar recipe (MobileNav.css
+     .mcl-tabs), which solved the same problem. Toward the ink is the
+     direction rule, by construction: lighter on a deep rail, darker on a
+     light one, with no theme list to maintain.
+     7%, ONE STEP UNDER the tab bar's 8%. The tab bar found 6% too faint at
+     arm's length and 10% too much for tokyo-night's resting label; here 8%
+     failed WOKINTOSH instead — its resting label (#d4eeec) measured 4.38:1
+     on the lifted teal, and the bar is 4.5. Lifting toward the ink lifts
+     toward the labels, so the most it can lift is set by the dimmest label
+     on the most saturated rail: 7% clears every theme (sweep in
+     themes.test.ts, which holds both labels on THIS ground). This column also
+     has the chat list's own ground right beside it to read against, which a
+     bar over a list did not.
+     Declared as --bg-elev so the badge's ring reads this ground. */
+  --bg-elev: color-mix(in srgb, var(--rail-ink) 7%, var(--rail-surface));
+  background: var(--bg-elev);
+  /* No hairline on its edge: the tonal step IS the edge, and a line on top
+     of it drew a second divider into the corner where the header, this rail
+     and the chat list meet. */
 }
 .dest-rail-item {
   display: flex;
@@ -26,16 +46,16 @@
   border: 0;
   border-radius: 10px;
   background: transparent;
-  color: var(--rail-ink-dim, var(--fg-dim));
+  color: var(--rail-ink-dim);
   font: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .dest-rail-item:hover {
-  color: var(--rail-ink, var(--fg));
+  color: var(--rail-ink);
 }
 .dest-rail-item:focus-visible {
-  outline: 2px solid var(--rail-accent, var(--accent));
+  outline: 2px solid var(--rail-accent);
   outline-offset: -2px;
 }
 /* The icon sits on a pill; the CURRENT one's pill is filled, the way the
@@ -51,13 +71,13 @@
   transition: background 120ms ease;
 }
 .dest-rail-item:hover .dest-rail-icon {
-  background: var(--rail-hover, color-mix(in srgb, var(--rail-ink, var(--fg)) 10%, transparent));
+  background: var(--rail-hover);
 }
 .dest-rail-item[data-current="true"] {
-  color: var(--rail-ink, var(--fg));
+  color: var(--rail-ink);
 }
 .dest-rail-item[data-current="true"] .dest-rail-icon {
-  background: color-mix(in srgb, var(--rail-ink, var(--fg)) 16%, transparent);
+  background: color-mix(in srgb, var(--rail-ink) 16%, transparent);
 }
 .dest-rail-label {
   font-size: 0.6875rem;
@@ -86,7 +106,7 @@
   line-height: 17px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 0 0 2px var(--rail-surface, var(--bg-chrome));
+  box-shadow: 0 0 0 2px var(--bg-elev);
 }
 
 /* ─── The left side's frame: one header over both strips ──────────────────
