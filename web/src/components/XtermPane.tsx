@@ -77,9 +77,10 @@ export interface XtermPaneProps {
   paneActive?: boolean | undefined;
 }
 
-/** The sixteen ANSI colours, which a theme MAY set. Left out, xterm's own
- *  defaults apply — tuned for a black terminal, so on a light ground its
- *  yellow and white are the first things to vanish. */
+/** The sixteen ANSI colours. A dark theme may leave them out and get xterm's
+ *  own defaults, which are tuned for a black terminal. A LIGHT theme must set
+ *  all sixteen (themes.test.ts holds each to 4.5:1): on a light ground those
+ *  defaults put yellow at ~2:1 and white at ~1.1:1. */
 type AnsiColours = Pick<
   ITheme,
   | 'black'
@@ -126,21 +127,59 @@ const XTERM_THEMES: Record<
     cursor: '#9fe3ff',
     selectionBackground: '#1a4a7a',
   },
+  // The two drums and the riso inks a shop actually stocks — fluorescent pink,
+  // medium blue, green, teal — taken down to the stock's 4.5:1 step. Yellow
+  // is the one riso ink no screen can read, so it prints as ochre.
   riso: {
     background: '#f7f4ec',
     foreground: '#17161c',
     cursor: '#e0005f',
     selectionBackground: '#ffe1ef',
+    black: '#17161c',
+    red: '#c4002f',
+    green: '#1f6b45',
+    yellow: '#8a6400',
+    blue: '#1333c4',
+    magenta: '#c2005a',
+    cyan: '#006d85',
+    white: '#5a5664',
+    brightBlack: '#46434f',
+    brightRed: '#a30027',
+    brightGreen: '#185a3a',
+    brightYellow: '#735300',
+    brightBlue: '#0f2a9e',
+    brightMagenta: '#c90058',
+    brightCyan: '#005a6e',
+    brightWhite: '#17161c',
   },
+  // The four primaries the confetti is drawn in (magenta, violet, cyan, mint)
+  // and the yellow as ochre, each darkened until it reads as text on the
+  // warm white rather than as a sticker on it.
   memphis: {
     background: '#fbf8f1',
     foreground: '#121016',
     cursor: '#d6006e',
     selectionBackground: '#ffe8f3',
+    black: '#121016',
+    red: '#c4001b',
+    green: '#10724f',
+    yellow: '#8a6400',
+    blue: '#5a2fe0',
+    magenta: '#ad005a',
+    cyan: '#00738a',
+    white: '#5c5866',
+    brightBlack: '#45414d',
+    brightRed: '#cf1427',
+    brightGreen: '#0b5e41',
+    brightYellow: '#735300',
+    brightBlue: '#4a20c4',
+    brightMagenta: '#c40067',
+    brightCyan: '#005f72',
+    brightWhite: '#121016',
   },
   // The window's paper, Monaco in black, and System 7's one selection colour.
-  // The only theme with its own ANSI set: every colour clears 4.5:1 on the
-  // washed paper (#f0ede4), where xterm's defaults put yellow at ~2:1.
+  // Every ANSI colour clears 4.5:1 on the washed paper (#f0ede4), where
+  // xterm's defaults put yellow at ~2:1.
   wokintosh: {
     background: '#f8f5e2',
     foreground: '#000000',
@@ -177,23 +216,78 @@ const XTERM_THEMES: Record<
   },
   // Dracula's cursor/selection hues brought to the light surface, so a
   // sunrise flip changes the paper and not the personality.
+  // Alucard's own ANSI set (Dracula's light spec), with red and yellow taken
+  // one step darker: the spec's #cb3a2a and #846e15 measured 4.28 and 4.24.
   alucard: {
     background: '#f5f4fb',
     foreground: '#232135',
     cursor: '#6641d6',
     selectionBackground: '#ddd4f7',
+    black: '#232135',
+    red: '#b8331f',
+    green: '#14710a',
+    yellow: '#765f0f',
+    blue: '#644ac9',
+    magenta: '#a3144d',
+    cyan: '#036a96',
+    white: '#4e496b',
+    brightBlack: '#635d85',
+    brightRed: '#9e2a1a',
+    brightGreen: '#0f5c07',
+    brightYellow: '#655210',
+    brightBlue: '#5236b5',
+    brightMagenta: '#8a0f40',
+    brightCyan: '#025a80',
+    brightWhite: '#232135',
   },
+  // Primer's light terminal palette, which already clears 4.5:1 for the
+  // normal eight; the bright blue, magenta and cyan were 3–4:1 and are moved
+  // to Primer's next scale step down.
   'github-light': {
     background: '#ffffff',
     foreground: '#1f2328',
     cursor: '#0969da',
     selectionBackground: '#cae8ff',
+    black: '#24292f',
+    red: '#cf222e',
+    green: '#116329',
+    yellow: '#4d2d00',
+    blue: '#0969da',
+    magenta: '#8250df',
+    cyan: '#1b7c83',
+    white: '#59636e',
+    brightBlack: '#57606a',
+    brightRed: '#a40e26',
+    brightGreen: '#1a7f37',
+    brightYellow: '#633c01',
+    brightBlue: '#0550ae',
+    brightMagenta: '#6639ba',
+    brightCyan: '#136b72',
+    brightWhite: '#1f2328',
   },
+  // The violet brand at the centre and warm neighbours around it; the
+  // brand's own #6f55ff is 4.15:1 on cream, so bright blue sits a step deeper.
   acme: {
     background: '#fdf6ea',
     foreground: '#0d0d12',
     cursor: '#6f55ff',
     selectionBackground: '#e3daff',
+    black: '#0d0d12',
+    red: '#c42e4d',
+    green: '#217a4b',
+    yellow: '#8a5d00',
+    blue: '#4f35e6',
+    magenta: '#9b2fb0',
+    cyan: '#0b6f7a',
+    white: '#4a4654',
+    brightBlack: '#5e596b',
+    brightRed: '#b02644',
+    brightGreen: '#1a6640',
+    brightYellow: '#735000',
+    brightBlue: '#5a3ff0',
+    brightMagenta: '#84269a',
+    brightCyan: '#085d66',
+    brightWhite: '#0d0d12',
   },
   'acme-dark': {
     background: '#221547',

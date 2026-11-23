@@ -310,3 +310,63 @@ describe('every theme separates the rail from the pane', () => {
     expect(ratio(rail as string, pane as string)).toBeGreaterThanOrEqual(1.25);
   });
 });
+
+/**
+ * A LIGHT TERMINAL NEEDS ITS OWN SIXTEEN COLOURS.
+ *
+ * xterm.js ships ANSI defaults tuned for a black terminal. Five light themes
+ * shipped without their own and rendered those defaults on paper: yellow at
+ * ~2:1 and white at ~1.1:1, so a test runner's "2 files changed" or a dimmed
+ * hint was effectively invisible. Each light theme now carries a full set
+ * drawn from its own palette; this holds every slot to text contrast against
+ * the terminal's ground, so a new light theme cannot ship the defaults again.
+ * Dark themes are exempt: the defaults were made for them.
+ */
+describe('every light terminal sets a legible ANSI palette', () => {
+  const ANSI = [
+    'black',
+    'red',
+    'green',
+    'yellow',
+    'blue',
+    'magenta',
+    'cyan',
+    'white',
+    'brightBlack',
+    'brightRed',
+    'brightGreen',
+    'brightYellow',
+    'brightBlue',
+    'brightMagenta',
+    'brightCyan',
+    'brightWhite',
+  ];
+  const lum = (hex: string) =>
+    [1, 3, 5]
+      .map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((s) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4))
+      .reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+  const ratio = (a: string, b: string) => {
+    const [la, lb] = [lum(a), lum(b)];
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  };
+  const light = THEMES.map((t) => t.value).flatMap((name) => {
+    const palette = XTERM.match(new RegExp(`'?${name}'?:\\s*\\{([^}]*)\\}`))?.[1] ?? '';
+    const bg = palette.match(/background:\s*'(#[0-9a-f]{6})'/i)?.[1];
+    return bg && lum(bg) > 0.5 ? [[name, palette, bg] as const] : [];
+  });
+
+  it('finds the light themes at all, so this cannot pass vacuously', () => {
+    expect(light.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(light)('%s', (_name, palette, bg) => {
+    const weak = ANSI.flatMap((k) => {
+      const c = palette.match(new RegExp(`\\b${k}:\\s*'(#[0-9a-f]{6})'`, 'i'))?.[1];
+      if (!c) return [`${k}: missing`];
+      const r = ratio(c, bg);
+      return r < 4.5 ? [`${k} ${c} ${r.toFixed(2)}:1`] : [];
+    });
+    expect(weak, 'these ANSI colours fall back to dark defaults or fail 4.5:1').toEqual([]);
+  });
+});
