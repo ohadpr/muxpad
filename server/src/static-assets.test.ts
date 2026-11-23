@@ -31,7 +31,13 @@ beforeAll(() => {
   // human-authored name that a deploy CAN change in place.
   writeFileSync(join(root, 'assets', 'logo-unhashed.svg'), '<svg/>');
   writeFileSync(join(root, 'sw.js'), 'self.addEventListener("push", () => {});');
-  writeFileSync(join(root, 'manifest.webmanifest'), '{"name":"muxpad"}');
+  // Shaped like the real one: the route strips `theme_color` and keeps
+  // `background_color`, so the fixture has to carry both for that to mean
+  // anything.
+  writeFileSync(
+    join(root, 'manifest.webmanifest'),
+    '{"name":"muxpad","theme_color":"#1e1e2e","background_color":"#1e1e2e"}',
+  );
   writeFileSync(join(root, 'favicon.svg'), '<svg/>');
   app = new Hono();
   mountStaticWeb(app, root);
@@ -161,13 +167,24 @@ describe('serving', () => {
     // from before the status-bar meta was removed for exactly this reason.
     const res = await get('/manifest.webmanifest');
     expect(res.headers.get('cache-control')).toBe('no-store');
-    const m = JSON.parse(await res.text()) as { start_url: string; name: string };
+    const m = JSON.parse(await res.text()) as Record<string, unknown> & {
+      start_url: string;
+      name: string;
+    };
     expect(m.start_url).toMatch(/^\/\?b=.+/);
     // Stamped from the SHELL's validator, so a web-only deploy moves it. The
     // server's build id does not: it measures server/dist and shared/dist, and
     // every fix that failed to reach his phone was web-only.
     // Everything else is still the file's.
     expect(m.name).toBe('muxpad');
+    // …EXCEPT `theme_color`, which is stripped. For an installed app iOS
+    // prefers the manifest's colour over the page's meta, and the manifest's
+    // is frozen at install time — so with eleven switchable themes it can only
+    // ever be right for one. Dropping it makes the runtime meta authoritative.
+    // Measured: the meta read #e0e0e0 and the status bar was drawn near-black.
+    expect(m).not.toHaveProperty('theme_color');
+    // The splash colour stays: it paints before a page exists to have a theme.
+    expect(m).toHaveProperty('background_color');
   });
 
   it('serves the no-store shell for SPA routes too', async () => {

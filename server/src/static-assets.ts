@@ -228,7 +228,24 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
       // could inherit the cached response again. The shell's ETag changes
       // whenever the shell does, which is exactly the question being asked.
       const stamp = validators(join(webRoot, 'index.html'))?.etag.replace(/\W/g, '') ?? 'x';
-      return c.body(JSON.stringify({ ...raw, start_url: `/?b=${stamp}` }));
+      // NO `theme_color` IN THE MANIFEST, and that is the point of stripping
+      // it here rather than editing the file. For an INSTALLED app iOS prefers
+      // the manifest's colour over the page's `<meta name="theme-color">`, and
+      // the manifest's is necessarily a constant chosen at install time —
+      // `#1e1e2e`, from when muxpad had one dark palette. Measured on his
+      // phone: the page meta read `#e0e0e0` (the chrome grey of the theme in
+      // force) and the status bar was drawn near-black anyway.
+      //
+      // Dropping it makes the META authoritative, and the meta is kept in step
+      // with the theme at runtime (web/src/lib/status-bar-tint.ts). There are
+      // eleven themes and the user switches between them; a colour frozen at
+      // install time cannot be right for more than one of them.
+      //
+      // `background_color` stays: it paints the SPLASH, which is shown before
+      // any page exists to have a theme, so a constant is the only thing it
+      // could be.
+      const { theme_color: _dropped, ...rest } = raw as Record<string, unknown>;
+      return c.body(JSON.stringify({ ...rest, start_url: `/?b=${stamp}` }));
     } catch {
       return c.text('not found', 404);
     }
