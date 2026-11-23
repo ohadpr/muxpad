@@ -280,10 +280,26 @@ export function parseSpawnDelivery(
  * `isHumanMessage` was `parseCronMarker(text) === null` and every new injected
  * message type after cron would have silently read as human.
  */
+/**
+ * Every muxpad-authored block that can arrive as a "message", by its LEADING
+ * tag — the two below have no parser of their own and are matched here rather
+ * than being left out of the one predicate that is supposed to know them all.
+ *
+ *   <muxpad-cron-result>  a schedule's result, delivered to the chat it was
+ *                         addressed to (cron/result-delivery.ts)
+ *   <muxpad-rebase>       the briefing handed to a rebased session
+ *                         (chat/rebase.ts)
+ *
+ * Leading only, like every other parser here: text that merely MENTIONS a tag
+ * mid-message is prose about muxpad, not a message from it.
+ */
+const BARE_MACHINE_TAGS = /^\s*<muxpad-(?:cron-result|rebase)\b/;
+
 export function isMachineMessage(text: string): boolean {
   return (
     parseCronMarker(text) !== null ||
     parseSpawnDelivery(text) !== null ||
-    parseTaskMarker(text) !== null
+    parseTaskMarker(text) !== null ||
+    BARE_MACHINE_TAGS.test(text)
   );
 }

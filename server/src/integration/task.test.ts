@@ -30,10 +30,10 @@ const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 /** Wait for a CONDITION, never for a duration — cron.test.ts's header has the
  *  measurement that made this the house rule, and the drain this file watches
  *  is the very path that was mistimed there (322ms against a 250ms sleep). */
-async function until(what: string, cond: () => boolean, timeoutMs = 10_000) {
+async function until(what: string, cond: () => boolean | Promise<boolean>, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (cond()) return;
+    if (await cond()) return;
     if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
     await settle();
   }
@@ -289,6 +289,68 @@ describe('durable tasks e2e (isolated instance, fake runner)', { timeout: 30_000
     runner.endTurn();
     await until('the first continuation', () => runner.sends().length === 1);
     expect((await read(tabId)).open?.continuations).toBe(1);
+  });
+
+  /**
+   * ── A MACHINE-STARTED TURN THAT SAYS NOTHING DOES NOT BOLD THE CHAT ─────
+   *
+   * The rule existed for cron fires only (`cronSaidNothing`, ws.ts). Its reach
+   * was the bug: `Build reading app for 4-year-old` went bold overnight
+   * because two of its retired sub-chats reported in, and a report was
+   * classified as the owner typing. The owner's principle, verbatim: "sub
+   * chats should be a technical detail of main chats… the whole idea is that
+   * they do not bother me."
+   *
+   * A task continuation is the cheapest machine message to produce here, and
+   * it exercises the same gate a sub-chat report does — one predicate,
+   * `isMachineMessage`, decides for both.
+   */
+  /** The bold, read where the server WRITES it: `panes.setUnread`. The tab's
+   *  own flag is a different fact (a manual mark), and asserting on it would
+   *  pass whether or not the gate works — the field is simply absent. */
+  const unread = async (tabId: string) => {
+    const detail = await api<{ panes: Array<{ unread?: boolean }> }>(`/api/tabs/${tabId}`);
+    return detail.panes.some((p) => p.unread === true);
+  };
+
+  it('a continuation that produces nothing leaves the chat unbolded', async () => {
+    const { tabId, paneId } = await agentTab();
+    const runner = await connectRunner(paneId, 'sid-task-quiet');
+    await declare(tabId);
+    runner.startTurn();
+    await settle();
+    runner.endTurn();
+    await until('the continuation', () => runner.sends().length === 1);
+    // CLEAR THE BOLD THE SETUP TURN EARNED. That first turn ends like any
+    // other and marks the chat — correctly; it is the CONTINUATION's turn
+    // that must not. Without this the assertion would be measuring the wrong
+    // turn, which is how the first version of this test failed.
+    await api(`/api/tabs/${tabId}/seen`, { method: 'POST' });
+    expect(await unread(tabId)).toBe(false);
+    // The machine turn runs and ends with nothing to say.
+    runner.startTurn();
+    await settle();
+    runner.endTurn();
+    await settle(300);
+    expect(await unread(tabId)).toBe(false);
+  });
+
+  it('…but a FAILURE still bolds it, whatever started the turn', async () => {
+    // The same exception the cron gate makes, for the same reason: nobody is
+    // watching, so an error is the news it most needs to be able to deliver.
+    const { tabId, paneId } = await agentTab();
+    const runner = await connectRunner(paneId, 'sid-task-failbold');
+    await declare(tabId);
+    runner.startTurn();
+    await settle();
+    runner.endTurn();
+    await until('the continuation', () => runner.sends().length === 1);
+    await api(`/api/tabs/${tabId}/seen`, { method: 'POST' });
+    runner.startTurn();
+    await settle();
+    runner.endTurn(false);
+    await until('the failure to bold the chat', async () => await unread(tabId), 5_000);
+    expect(await unread(tabId)).toBe(true);
   });
 
   it('a second declared task supersedes the first, keeping one open', async () => {

@@ -932,11 +932,28 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
-    /** The message that started the turn in flight was a CRON FIRE. See the
-     *  push gate's note: a fire's prose is machinery, and this is the half of
-     *  that rule the SERVER can enforce without waiting for a runner to
-     *  respawn. */
-    turnFromCron: boolean;
+    /**
+     * The message that started the turn in flight was MACHINERY, not a person.
+     *
+     * It was `turnFromCron` and read only `parseCronMarker`, which is the
+     * narrow version of a mistake `shared/src/spawn-delivery.ts` predicted in
+     * writing: "every new injected message type after cron would have silently
+     * read as human". By the time it was audited there were four — a cron
+     * fire, a sub-chat's REPORT, a cron RESULT, a rebase briefing — plus the
+     * durable-task continuation added two days before. All but the first were
+     * treated as the user typing.
+     *
+     * The cost was not theoretical. `Build reading app for 4-year-old` went
+     * bold overnight because two of its retired children reported in; their
+     * parent was obliged to answer a message nobody had sent, and the owner
+     * was pulled into a sub-chat that is supposed to be its parent's business:
+     * "the whole idea is that they do not bother me".
+     *
+     * One predicate now, `isMachineMessage`, read off the message itself so it
+     * survives the durable queue and a restart — there is no in-memory flag to
+     * lose. See the push gate and the unread gate below for what it buys.
+     */
+    turnFromMachine: boolean;
     /**
      * When this pane's last EXPLICIT `notify` push actually went out (held and
      * dropped calls don't count — they spent none of the user's attention).
@@ -1760,7 +1777,7 @@ export function attachWsServer(deps: {
       conn.pendingSendText = next.text;
       conn.lastSendWasQueued = true;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
-      conn.turnFromCron = parseCronMarker(next.text) !== null;
+      conn.turnFromMachine = isMachineMessage(next.text);
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
@@ -1848,7 +1865,7 @@ export function attachWsServer(deps: {
         conn.pendingSendText = t;
         conn.lastSendWasQueued = false;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
-        conn.turnFromCron = parseCronMarker(t) !== null;
+        conn.turnFromMachine = isMachineMessage(t);
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
         deps.cache.setAgentBusy(paneId, true);
@@ -2199,7 +2216,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
-          turnFromCron: false,
+          turnFromMachine: false,
           lastExplicitNotifyAt: 0,
           pendingSendText: null,
           lastSendWasQueued: false,
@@ -2473,7 +2490,7 @@ export function attachWsServer(deps: {
             // A turn nobody sent carries no marker, which is exactly the
             // question `parseCronMarker` answers, so the stamp decides it: a
             // stamped cron turn is from a cron, anything else is not.
-            conn.turnFromCron = startedBy ? parseCronMarker(startedBy) !== null : false;
+            conn.turnFromMachine = startedBy ? isMachineMessage(startedBy) : false;
             bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {
@@ -2662,7 +2679,7 @@ export function attachWsServer(deps: {
               // gate was unconditional and took the error notification with
               // it, which is the one thing a scheduled job most needs to be
               // able to send — nobody is watching it.
-              (!conn.turnFromCron || frame.ok === false) &&
+              (!conn.turnFromMachine || frame.ok === false) &&
               !chatClients.has(paneId) &&
               Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
             ) {
@@ -2757,9 +2774,18 @@ export function attachWsServer(deps: {
             // said — the same exception the push gate makes, and for the same
             // reason: nobody is watching a scheduled job, so its errors are
             // the news it most needs to be able to deliver.
-            const cronSaidNothing =
-              conn.turnFromCron && frame.silent !== false && frame.ok !== false;
-            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true && !cronSaidNothing) {
+            // …AND THE SAME IS TRUE OF EVERY OTHER MACHINE-STARTED TURN.
+            // This was `cronSaidNothing` and the rule was right; its reach was
+            // not. A sub-chat's report arriving is WORK ARRIVING, not a person
+            // asking — the parent owes the child a review and owes the user
+            // nothing until it has something to say. The owner's principle,
+            // verbatim: "sub chats should be a technical detail of main
+            // chats… the whole idea is that they do not bother me and I
+            // interface with the main chats that utilize the sub chats as a
+            // way to get shit done and not to bug me."
+            const machineSaidNothing =
+              conn.turnFromMachine && frame.silent !== false && frame.ok !== false;
+            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true && !machineSaidNothing) {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }
