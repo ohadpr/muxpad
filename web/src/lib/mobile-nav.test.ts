@@ -94,7 +94,9 @@ describe('the list renders beside the kept-alive workspace hosts', () => {
   it('spends ONE row on chrome on the list: no brand bar above the list’s own', () => {
     const src = read('../components/AppLayout.tsx');
     expect(src).toContain('const showTopBar = chrome.topBar && !onChatList;');
-    expect(read('../components/MobileNav.tsx')).toContain('barEnd={<SettingsMenu />}');
+    const nav = read('../components/MobileNav.tsx');
+    expect(nav).toContain('<ListHeader />');
+    expect(nav).toContain('hideBar={true}');
   });
 
   it('has replaced the drop-down switcher entirely', () => {

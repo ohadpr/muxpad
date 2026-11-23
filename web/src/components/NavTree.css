@@ -3285,6 +3285,11 @@ body.sidenav-resizing iframe {
   padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
   color: var(--fg);
 }
+/* The phone's list leaves this bar out (NavTree `hideBar`): its header and
+   its Search tab carry what the bar did. */
+.navtree-bar[hidden] {
+  display: none;
+}
 .navtree-bar-ws {
   /* Takes the slack, so the two glyphs sit against the trailing edge. */
   flex: 1;

@@ -72,23 +72,52 @@
   text-overflow: ellipsis;
 }
 
-/* The list's bar is the app's top bar here: the title takes the slack, so
-   search and settings sit together against the trailing edge. */
-.mobile-chat-list .navtree-bar-wsname {
-  flex: 1;
-}
-.mobile-chat-list .navtree-bar .settings-wrap {
-  flex: 0 0 auto;
-  height: auto;
+/* ─── The list's header: muxpad, new chat, settings — ONE row ───────── */
+
+.mcl-head {
+  flex: 0 0 52px;
+  display: flex;
   align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding-inline: 14px 12px;
+  color: var(--fg);
 }
-/* The gear wears the bar's own icon shape, beside the search glyph — not the
-   chrome bar's full-height, hairline-divided cell it wears elsewhere. */
-.mobile-chat-list .navtree-bar .icon-btn {
+.mcl-head > .brand {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.mcl-head-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.mcl-head-icon,
+.mcl-head .icon-btn {
+  flex: 0 0 auto;
   inline-size: 40px;
   block-size: 40px;
-  margin-inline: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline: -4px;
+  padding: 0;
+  background: transparent;
   border: 0;
   border-radius: 8px;
   color: var(--fg-dim);
+  cursor: pointer;
+}
+.mcl-head-icon:active,
+.mcl-head .icon-btn:active {
+  background: var(--bg-hover);
+}
+.mcl-head .settings-wrap {
+  flex: 0 0 auto;
+  height: auto;
+  align-items: center;
 }

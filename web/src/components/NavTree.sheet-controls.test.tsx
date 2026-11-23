@@ -221,7 +221,7 @@ describe('the phone’s list is every workspace and its chats, in one bar of chr
     expect(expanded).toEqual(['true', 'false', 'false']);
   });
 
-  it('puts the app’s own controls in the list’s bar, so there is one row of chrome', () => {
+  it('leaves its own bar out when the host carries the chrome (the phone list’s header)', () => {
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -231,13 +231,13 @@ describe('the phone’s list is every workspace and its chats, in one bar of chr
           activeWorkspaceSlug="personal"
           activeTabSlug="p1"
           variant="sheet"
-          barEnd={<button type="button" data-gear="" />}
+          hideBar={true}
         />,
       );
     });
-    const bar = host.querySelector('.navtree-bar');
-    expect(bar?.querySelector('[aria-label="Search chats"]')).not.toBeNull();
-    expect(bar?.querySelector('[data-gear]')).not.toBeNull();
+    expect(host.querySelector<HTMLElement>('.navtree-bar')?.hidden).toBe(true);
+    // …and the workspaces are all still there under it.
+    expect(host.querySelectorAll('.navtree-ws-row')).toHaveLength(3);
   });
 });
 

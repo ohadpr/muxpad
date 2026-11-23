@@ -1,10 +1,12 @@
 import type { PaneStatus, Workspace } from '@muxpad/shared';
 import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
 import { useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
-import { NavTree } from './NavTree';
+import { useWorkspaces, visibleWorkspaces } from '../workspaces';
+import { Brand } from './Brand';
+import { NavContextMenu, NavTree, createHouseTab } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
 import { StatusMark } from './StatusMark';
 import './MobileNav.css';
@@ -63,18 +65,102 @@ export function MobileChatList({
       }}
     >
       {visible && <ListTitle />}
-      {/* ONE ROW OF CHROME. The tree's own bar — "Chats", search — is the
-          top bar here: AppLayout renders no brand bar on the list, and the
-          settings that bar carried ride this one instead. The header area the
-          list will grow (the way Slack puts things above its conversation
-          list) belongs to this same region, not to a strip above it. */}
+      <ListHeader />
       <NavTree
         variant="sheet"
         activeWorkspaceSlug={activeWorkspaceSlug}
         activeTabSlug={activeTabSlug}
-        barEnd={<SettingsMenu />}
+        hideBar={true}
       />
     </div>
+  );
+}
+
+/**
+ * THE LIST'S HEADER — ONE ROW, the way Slack heads its mobile list with the
+ * workspace's mark and name and puts compose beside it. It says muxpad, and
+ * carries the two things that belong to the app rather than to a chat: a new
+ * chat, and settings. AppLayout renders no bar above it on the list, so this
+ * IS the top bar — one row of chrome, as before.
+ *
+ * Search is not here: it is a tab of its own in the bar at the bottom.
+ */
+function ListHeader() {
+  return (
+    <header className="mcl-head">
+      <Brand asLink={false} responsive={false} markOnly={true} />
+      <span className="mcl-head-title">muxpad</span>
+      <NewChatButton />
+      <SettingsMenu />
+    </header>
+  );
+}
+
+/**
+ * "+" — a new chat. It ASKS where when there is a choice: the list shows every
+ * workspace, so a single button that silently picked one would be the guess
+ * this navigator was redesigned to stop making (see SheetRail). With one
+ * workspace there is nothing to ask.
+ */
+function NewChatButton() {
+  const navigate = useNavigate();
+  const { workspaces: all } = useWorkspaces();
+  const workspaces = visibleWorkspaces(all);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const create = async (w: Workspace) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await createHouseTab(w, navigate);
+    } catch (err) {
+      console.error('createTab failed', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="mcl-head-icon"
+        aria-label="New chat"
+        title="New chat"
+        disabled={busy || workspaces.length === 0}
+        onClick={(e) => {
+          const only = workspaces.length === 1 ? workspaces[0] : undefined;
+          if (only) {
+            void create(only);
+            return;
+          }
+          const r = e.currentTarget.getBoundingClientRect();
+          setMenuAt({ x: r.right, y: r.bottom + 4 });
+        }}
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            d="M10 4v12M4 10h12"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            fill="none"
+          />
+        </svg>
+      </button>
+      {menuAt && (
+        <NavContextMenu
+          x={menuAt.x}
+          y={menuAt.y}
+          touch={true}
+          alignEnd={true}
+          onDismiss={() => setMenuAt(null)}
+          items={workspaces.map((w) => ({
+            label: `New chat in ${w.name}`,
+            onSelect: () => void create(w),
+          }))}
+        />
+      )}
+    </>
   );
 }
 

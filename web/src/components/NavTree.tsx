@@ -256,11 +256,12 @@ interface NavTreeProps {
   /** Called right before any row navigation — the sheet uses it to dismiss. */
   onNavigate?: () => void;
   /**
-   * The sheet only: controls at the trailing end of its bar. On a phone that
-   * bar IS the app's top bar on the list (see MobileChatList), so the app's
-   * own controls — settings — ride it instead of a second strip above.
+   * The sheet only: leave out its own bar ("Chats", search). On the phone's
+   * list that bar's jobs moved — the title to the list's muxpad header, search
+   * to its own tab — and two strips of chrome above one list is the thing the
+   * header exists to avoid (see MobileChatList).
    */
-  barEnd?: React.ReactNode;
+  hideBar?: boolean;
 }
 
 /**
@@ -293,7 +294,7 @@ export function NavTree({
   activeTabSlug,
   variant,
   onNavigate,
-  barEnd,
+  hideBar,
 }: NavTreeProps) {
   if (variant === 'sheet') {
     return (
@@ -301,7 +302,7 @@ export function NavTree({
         activeWorkspaceSlug={activeWorkspaceSlug}
         activeTabSlug={activeTabSlug}
         {...(onNavigate ? { onNavigate } : {})}
-        barEnd={barEnd}
+        hideBar={hideBar === true}
       />
     );
   }
@@ -578,7 +579,7 @@ export function RailSearchButton() {
 /** Make a new Chat in `workspace` and go there. Shared by the sheet's bar
  *  "+" and the desktop rail's "+ New tab" so the two cannot disagree about
  *  what a new chat is. */
-async function createHouseTab(
+export async function createHouseTab(
   workspace: Workspace,
   navigate: ReturnType<typeof useNavigate>,
   onNavigate?: (() => void) | undefined,
@@ -655,7 +656,7 @@ function SheetRail({
   activeWorkspaceSlug,
   activeTabSlug,
   onNavigate,
-  barEnd,
+  hideBar,
 }: Omit<NavTreeProps, 'variant'>) {
   const navigate = useNavigate();
   const { workspaces: allWorkspaces } = useWorkspaces();
@@ -704,7 +705,7 @@ function SheetRail({
   return (
     <nav className="navtree" data-variant="sheet" aria-label="Chats">
       {/* THE bar. One row, and it is the only chrome above the list. */}
-      <div className="navtree-bar">
+      <div className="navtree-bar" hidden={hideBar}>
         {/* A LABEL, not a control. The bar used to open a workspace PICKER,
               because the sheet showed one workspace at a time and getting to
               another meant choosing it first. The list below now holds every
@@ -729,7 +730,6 @@ function SheetRail({
         >
           <SvgSearchGlyph />
         </button>
-        {barEnd}
         {/* NO "+" HERE EITHER. It created in "the workspace the bar names",
               and the bar no longer names one — every workspace is on screen,
               and each header carries its own, exactly as on the rail. A single
@@ -2846,7 +2846,7 @@ function Overlay({ children }: { children: React.ReactNode }) {
 /** One row in a NavContextMenu. With `submenu`, the row opens a flyout of
  *  child rows on hover instead of acting on click. With `confirm`, the row
  *  ARMS on first click and acts on the second — see NavContextMenu. */
-interface MenuItem {
+export interface MenuItem {
   label: string;
   onSelect?: () => void;
   danger?: boolean;
@@ -2866,7 +2866,7 @@ interface MenuItem {
  * outside-click / right-click-elsewhere dismissal; Escape also closes. Kept
  * inside NavTree since it's the only consumer and shares its chrome tokens.
  */
-function NavContextMenu({
+export function NavContextMenu({
   x,
   y,
   items,

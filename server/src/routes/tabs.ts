@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
+import { lastMessagesForTabs } from '../chat/last-message.js';
 import type { EventBus } from '../events.js';
 import type { PaneOps } from '../node-link/PaneRouter.js';
 import { hasProjectContext } from '../project-root.js';
@@ -37,6 +38,9 @@ import { retireChat } from '../tab-retire.js';
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
  * parent workspace. List queries are scoped via `?workspaceId=…`.
  */
+/** How many previews one request may ask for — a screenful, with room. */
+const MAX_PREVIEW_IDS = 60;
+
 export function tabsRoutes(deps: {
   db: Database.Database;
   ptyd: PaneOps;
@@ -297,6 +301,22 @@ export function tabsRoutes(deps: {
    * and a report is up to 800 characters × every round × every child. The same
    * reasoning that kept the full transcript off the row.
    */
+  /**
+   * The LAST MESSAGE of each chat asked for — the phone's Activity list's
+   * second line. NOT on the tab row, for the reason `/:id/spawn-rounds` below
+   * is not: the row rides every five-second sidebar poll, and this is read by
+   * one surface for the twenty-odd rows it shows. See chat/last-message.
+   * Capped, so a malformed caller cannot turn one request into a disk sweep.
+   */
+  app.get('/previews', (c) => {
+    const ids = (c.req.query('ids') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, MAX_PREVIEW_IDS);
+    return c.json({ previews: lastMessagesForTabs(deps.db, ids) });
+  });
+
   app.get('/:id/spawn-rounds', (c) => {
     const id = c.req.param('id');
     const byChild = new SpawnRoundStore(deps.db).listByParent(id);

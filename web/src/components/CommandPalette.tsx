@@ -40,35 +40,7 @@ function isTerminalTarget(target: EventTarget | null): boolean {
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const listId = useId();
-
-  // WHERE WE ARE, read from the path rather than the router: this dialog is
-  // mounted once above every route and has no matched route of its own to ask.
-  // Read during render on purpose — it has to be right on the FIRST paint
-  // after opening, and an effect would show the chat you are standing on for
-  // one frame and then drop it out from under the cursor.
-  const here = tabSlugFromPath(window.location.pathname);
-  const {
-    tabMatches,
-    showingRecents,
-    outputRows,
-    tabNames,
-    messageRows,
-    searching,
-    active,
-    rowCount,
-    loadCorpus,
-  } = useSessionSearch(query, { exclude: here });
-  const navigate = useNavigate();
-  const openResult = useSearchResultOpener();
-
-  // Clamp rather than reset: the list shrinks under the cursor whenever a
-  // keystroke narrows it, and an out-of-range cursor makes Enter a no-op.
-  const safeCursor = rowCount === 0 ? 0 : Math.min(cursor, rowCount - 1);
 
   // ⌘K from anywhere, including while typing: a modified chord never reaches
   // the text as input, and "take me elsewhere" is a thing you ask for
@@ -118,25 +90,107 @@ export function CommandPalette() {
     return () => window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
   }, []);
 
-  // Opening is the moment to pay for the corpus, and the moment to forget the
-  // last question: a palette that reopens showing yesterday's results is a
-  // palette you have to clear before you can use, every time.
+  if (!open) return null;
+
+  return (
+    // The backdrop dismisses on a press OUTSIDE the dialog. It carries no role
+    // and is not a tab stop: Escape on the focused field is the keyboard way
+    // out, and a reader meeting a clickable div here would only be offered a
+    // second, worse one.
+    <div className="cmdk-backdrop" onPointerDown={() => setOpen(false)}>
+      {/* A real <dialog>, open and non-modal. `showModal()` is what we do NOT
+          want: it moves the element to the top layer with its own ::backdrop
+          and takes over Escape, which would fight the field's own handler and
+          leave the query un-cleared on close. */}
+      <dialog
+        open={true}
+        className="cmdk-dialog"
+        aria-label="Find a chat"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <ChatSearch
+          inputRef={inputRef}
+          autoFocus={true}
+          hint={true}
+          onDone={() => setOpen(false)}
+          onEscape={() => setOpen(false)}
+        />
+      </dialog>
+    </div>
+  );
+}
+
+/**
+ * THE SEARCH ITSELF — the field and its results — without the dialog.
+ *
+ * Two hosts: the ⌘K dialog above, and the Search tab of the phone's chat list
+ * (MobileNav), which is this same component kept mounted under a tab rather
+ * than a second search. One engine (lib/use-session-search), one set of rows
+ * (NavSearch), one keyboard model.
+ */
+export function ChatSearch({
+  inputRef,
+  autoFocus,
+  hint,
+  onDone,
+  onEscape,
+}: {
+  inputRef: React.RefObject<HTMLInputElement>;
+  autoFocus: boolean;
+  /** The `esc` key cap — meaningful in a dialog, noise in a tab. */
+  hint: boolean;
+  /** A result was opened. */
+  onDone: () => void;
+  onEscape: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [cursor, setCursor] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+
+  // WHERE WE ARE, read from the path rather than the router: this dialog is
+  // mounted once above every route and has no matched route of its own to ask.
+  // Read during render on purpose — it has to be right on the FIRST paint
+  // after opening, and an effect would show the chat you are standing on for
+  // one frame and then drop it out from under the cursor.
+  const here = tabSlugFromPath(window.location.pathname);
+  const {
+    tabMatches,
+    showingRecents,
+    outputRows,
+    tabNames,
+    messageRows,
+    searching,
+    active,
+    rowCount,
+    loadCorpus,
+  } = useSessionSearch(query, { exclude: here });
+  const navigate = useNavigate();
+  const openResult = useSearchResultOpener();
+
+  // Clamp rather than reset: the list shrinks under the cursor whenever a
+  // keystroke narrows it, and an out-of-range cursor makes Enter a no-op.
+  const safeCursor = rowCount === 0 ? 0 : Math.min(cursor, rowCount - 1);
+
+  // Mounting is the moment to pay for the corpus. The dialog mounts this on
+  // every open, which is also what forgets the last question: a palette that
+  // reopens showing yesterday's results is one you have to clear first.
   useEffect(() => {
-    if (!open) return;
-    setQuery('');
-    setCursor(0);
     loadCorpus();
+    if (!autoFocus) return;
     // After paint, or the field is not in the document yet to take focus.
     const id = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(id);
-  }, [open, loadCorpus]);
+  }, [loadCorpus, autoFocus, inputRef]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed to the cursor MOVING, not to the row list identity — re-running on every keystroke would fight the natural scroll position.
   useEffect(() => {
-    listRef.current?.querySelector('[data-cursor="true"]')?.scrollIntoView({ block: 'nearest' });
+    listRef.current
+      ?.querySelector<HTMLElement>('[data-cursor="true"]')
+      // `?.()`: this now runs on MOUNT too (the dialog mounts it per open),
+      // where a DOM without layout — jsdom — has no scrollIntoView.
+      ?.scrollIntoView?.({ block: 'nearest' });
   }, [safeCursor]);
-
-  if (!open) return null;
 
   /**
    * GOING TO A THING YOU MADE, and the two kinds go to different places.
@@ -180,19 +234,19 @@ export function CommandPalette() {
     const tabRow = tabMatches[i];
     if (tabRow) {
       openResult(tabRow.tab);
-      setOpen(false);
+      onDone();
       return;
     }
     const outputRow = outputRows[i - tabMatches.length];
     if (outputRow) {
       openOutput(outputRow.output);
-      setOpen(false);
+      onDone();
       return;
     }
     const msgRow = messageRows[i - tabMatches.length - outputRows.length];
     if (!msgRow) return;
     openResult(msgRow.tab, { paneId: msgRow.paneId, hit: msgRow.hit, query });
-    setOpen(false);
+    onDone();
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -202,7 +256,7 @@ export function CommandPalette() {
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       e.preventDefault();
-      setOpen(false);
+      onEscape();
       return;
     }
     if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) {
@@ -222,141 +276,126 @@ export function CommandPalette() {
   };
 
   return (
-    // The backdrop dismisses on a press OUTSIDE the dialog. It carries no role
-    // and is not a tab stop: Escape on the focused field is the keyboard way
-    // out, and a reader meeting a clickable div here would only be offered a
-    // second, worse one.
-    <div className="cmdk-backdrop" onPointerDown={() => setOpen(false)}>
-      {/* A real <dialog>, open and non-modal. `showModal()` is what we do NOT
-          want: it moves the element to the top layer with its own ::backdrop
-          and takes over Escape, which would fight the field's own handler and
-          leave the query un-cleared on close. */}
-      <dialog
-        open={true}
-        className="cmdk-dialog"
-        aria-label="Find a chat"
-        onPointerDown={(e) => e.stopPropagation()}
+    <>
+      <div className="cmdk-field">
+        <svg className="cmdk-field-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        <input
+          ref={inputRef}
+          className="cmdk-input"
+          value={query}
+          placeholder="Find a chat by name, or search what was said…"
+          aria-label="Find a chat"
+          role="combobox"
+          // EXPANDED whenever there is a list to move through, which now
+          // includes the recents shown before anything is typed. Gated on
+          // `active` this said "collapsed" over eight live rows.
+          aria-expanded={rowCount > 0}
+          aria-autocomplete="list"
+          // `aria-controls` is required of the role and stated
+          // unconditionally, but the ACTIVE DESCENDANT is not — pointing it at a row id that is not in the document is
+          // a reader announcing nothing at all.
+          aria-controls={listId}
+          {...(rowCount > 0 ? { 'aria-activedescendant': `${listId}-r${safeCursor}` } : {})}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setCursor(0);
+          }}
+          onKeyDown={onKeyDown}
+        />
+        {hint && <kbd className="cmdk-hint">esc</kbd>}
+      </div>
+
+      <div
+        className="cmdk-results"
+        id={listId}
+        ref={listRef}
+        // biome-ignore lint/a11y/useSemanticElements: a <select> cannot host two labelled tiers, a highlighted substring, or a snippet.
+        role="listbox"
+        tabIndex={-1}
+        aria-label="Search results"
       >
-        <div className="cmdk-field">
-          <svg className="cmdk-field-icon" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-          <input
-            ref={inputRef}
-            className="cmdk-input"
-            value={query}
-            placeholder="Find a chat by name, or search what was said…"
-            aria-label="Find a chat"
-            role="combobox"
-            // EXPANDED whenever there is a list to move through, which now
-            // includes the recents shown before anything is typed. Gated on
-            // `active` this said "collapsed" over eight live rows.
-            aria-expanded={rowCount > 0}
-            aria-autocomplete="list"
-            // `aria-controls` is required of the role and stated
-            // unconditionally, but the ACTIVE DESCENDANT is not — pointing it at a row id that is not in the document is
-            // a reader announcing nothing at all.
-            aria-controls={listId}
-            {...(rowCount > 0 ? { 'aria-activedescendant': `${listId}-r${safeCursor}` } : {})}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setCursor(0);
-            }}
-            onKeyDown={onKeyDown}
+        {/* The placeholder is for an empty query with NOTHING to show — a
+            fresh profile with no chats yet. With recents below it, it was a
+            paragraph telling you to type over a list you could already
+            arrow through. */}
+        {!active && !showingRecents && (
+          <p className="cmdk-empty">
+            Type to find a chat by name, or three characters to search inside messages.
+          </p>
+        )}
+        {showingRecents && (
+          <div className="cmdk-divider">
+            <span>Recent</span>
+          </div>
+        )}
+        {active && rowCount === 0 && (
+          <p className="cmdk-empty">{searching ? 'Searching messages…' : 'No matches.'}</p>
+        )}
+
+        {/* The result rows live in NavSearch.tsx, where the rail's old
+            inline search drew them too. */}
+        {tabMatches.map((m, i) => (
+          <TabResult
+            key={m.tab.tabId}
+            match={m}
+            id={`${listId}-r${i}`}
+            selected={i === safeCursor}
+            onHover={() => setCursor(i)}
+            onPick={() => openRow(i)}
           />
-          <kbd className="cmdk-hint">esc</kbd>
-        </div>
+        ))}
 
-        <div
-          className="cmdk-results"
-          id={listId}
-          ref={listRef}
-          // biome-ignore lint/a11y/useSemanticElements: a <select> cannot host two labelled tiers, a highlighted substring, or a snippet.
-          role="listbox"
-          tabIndex={-1}
-          aria-label="Search results"
-        >
-          {/* The placeholder is for an empty query with NOTHING to show — a
-              fresh profile with no chats yet. With recents below it, it was a
-              paragraph telling you to type over a list you could already
-              arrow through. */}
-          {!active && !showingRecents && (
-            <p className="cmdk-empty">
-              Type to find a chat by name, or three characters to search inside messages.
-            </p>
-          )}
-          {showingRecents && (
-            <div className="cmdk-divider">
-              <span>Recent</span>
-            </div>
-          )}
-          {active && rowCount === 0 && (
-            <p className="cmdk-empty">{searching ? 'Searching messages…' : 'No matches.'}</p>
-          )}
+        {outputRows.length > 0 && (
+          <div className="cmdk-divider">
+            <span>Artifacts &amp; apps</span>
+          </div>
+        )}
 
-          {/* The result rows live in NavSearch.tsx, where the rail's old
-              inline search drew them too. */}
-          {tabMatches.map((m, i) => (
-            <TabResult
-              key={m.tab.tabId}
-              match={m}
+        {outputRows.map((row, k) => {
+          const i = tabMatches.length + k;
+          return (
+            <OutputResult
+              key={`${row.output.kind}:${row.output.slug}`}
+              match={row}
+              id={`${listId}-r${i}`}
+              selected={i === safeCursor}
+              onHover={() => setCursor(i)}
+              onPick={() => openRow(i)}
+              onCopy={() => copyOutput(row.output)}
+              {...(originName(row.output.originTab)
+                ? { origin: originName(row.output.originTab) }
+                : {})}
+            />
+          );
+        })}
+
+        {messageRows.length > 0 && (
+          <div className="cmdk-divider">
+            <span>In messages</span>
+          </div>
+        )}
+
+        {messageRows.map((row, k) => {
+          const i = tabMatches.length + outputRows.length + k;
+          return (
+            <MessageResult
+              key={`${row.hit.sid}:${row.hit.ts}`}
+              row={row}
               id={`${listId}-r${i}`}
               selected={i === safeCursor}
               onHover={() => setCursor(i)}
               onPick={() => openRow(i)}
             />
-          ))}
-
-          {outputRows.length > 0 && (
-            <div className="cmdk-divider">
-              <span>Artifacts &amp; apps</span>
-            </div>
-          )}
-
-          {outputRows.map((row, k) => {
-            const i = tabMatches.length + k;
-            return (
-              <OutputResult
-                key={`${row.output.kind}:${row.output.slug}`}
-                match={row}
-                id={`${listId}-r${i}`}
-                selected={i === safeCursor}
-                onHover={() => setCursor(i)}
-                onPick={() => openRow(i)}
-                onCopy={() => copyOutput(row.output)}
-                {...(originName(row.output.originTab)
-                  ? { origin: originName(row.output.originTab) }
-                  : {})}
-              />
-            );
-          })}
-
-          {messageRows.length > 0 && (
-            <div className="cmdk-divider">
-              <span>In messages</span>
-            </div>
-          )}
-
-          {messageRows.map((row, k) => {
-            const i = tabMatches.length + outputRows.length + k;
-            return (
-              <MessageResult
-                key={`${row.hit.sid}:${row.hit.ts}`}
-                row={row}
-                id={`${listId}-r${i}`}
-                selected={i === safeCursor}
-                onHover={() => setCursor(i)}
-                onPick={() => openRow(i)}
-              />
-            );
-          })}
-        </div>
-      </dialog>
-    </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
