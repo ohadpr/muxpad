@@ -84,6 +84,15 @@ describe('what must NEVER wear the mark', () => {
   });
 });
 
+/** The refusal, narrowed. `RebaseVerdict` is a union and `.cost` only exists
+ *  on the unsafe arm — reading it unnarrowed type-checks nowhere, which is how
+ *  this file got committed red. */
+const refusal = (f: RebaseFacts): string => {
+  const v = rebaseSafety(f);
+  if (v.safe) throw new Error('expected a refusal, got safe');
+  return v.cost;
+};
+
 const idle = (over: Partial<RebaseFacts> = {}): RebaseFacts => ({
   turnActive: false,
   backgroundLive: 0,
@@ -113,12 +122,12 @@ describe('what a rebase would cost right now', () => {
       safe: false,
       cost: 'a turn is running',
     });
-    expect(rebaseSafety(idle({ blocked: true })).cost).toContain('your answer');
-    expect(rebaseSafety(idle({ queued: 3 })).cost).toBe('3 queued messages would be dropped');
+    expect(refusal(idle({ blocked: true }))).toContain('your answer');
+    expect(refusal(idle({ queued: 3 }))).toBe('3 queued messages would be dropped');
   });
 
   it('refuses while the chat says it has unfinished work', () => {
-    expect(rebaseSafety(idle({ openTask: true })).cost).toContain('open task');
+    expect(refusal(idle({ openTask: true }))).toContain('open task');
   });
 
   it('reports the LOUDEST cost first, so the button says the scariest true thing', () => {
