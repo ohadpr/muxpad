@@ -1,56 +1,9 @@
 /* ──────────────────────────────────────────────────────────────────────
-   The desktop chat rail's view switcher (Home | Unread | Activity) and the
-   list rows its Unread / Activity views show. The rows are the phone's
+   The list rows the desktop chat list's Unread / Activity views show (chosen
+   from the destination rail, DestinationRail). The rows are the phone's
    (ChatPreviewList → MobileNav.css), re-scaled here for a 280px rail under
    the rail's own root, so the phone is untouched.
    ────────────────────────────────────────────────────────────────────── */
-
-.rail-views {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 2px;
-  margin: 8px 10px 4px;
-  padding: 2px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-.rail-view {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rail-view:hover {
-  color: var(--fg);
-}
-.rail-view[aria-selected="true"] {
-  background: var(--nt-surface, var(--bg));
-  color: var(--fg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-}
-.rail-view-count {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--danger, #e01e5a);
-  color: #fff;
-  font-size: 0.625rem;
-  font-weight: 700;
-  line-height: 16px;
-  font-variant-numeric: tabular-nums;
-}
 
 .rail-view-list .mcl-scroll {
   overflow: visible;

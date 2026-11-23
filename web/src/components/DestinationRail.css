@@ -1,0 +1,90 @@
+/* ──────────────────────────────────────────────────────────────────────
+   DestinationRail — the desktop's far-left strip: Home, Unread, Activity,
+   Artifacts, Apps. Icon over word, so it is sized for a legible 11px label
+   ("Artifacts" is the longest), not crammed into an icon-only 48px.
+   Every colour is the rail's own ink (--rail-ink*), so it follows all the
+   themes the way the chat list beside it does.
+   ────────────────────────────────────────────────────────────────────── */
+
+.dest-rail {
+  flex: 0 0 68px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 10px 4px;
+  overflow-y: auto;
+  background: var(--rail-surface, var(--bg-chrome));
+  border-right: 1px solid var(--rail-border, var(--border));
+}
+.dest-rail-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 0 7px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--rail-ink-dim, var(--fg-dim));
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dest-rail-item:hover {
+  color: var(--rail-ink, var(--fg));
+}
+.dest-rail-item:focus-visible {
+  outline: 2px solid var(--rail-accent, var(--accent));
+  outline-offset: -2px;
+}
+/* The icon sits on a pill; the CURRENT one's pill is filled, the way the
+   chat list marks the row you are on — and the word goes to full ink. */
+.dest-rail-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 30px;
+  border-radius: 9px;
+  transition: background 120ms ease;
+}
+.dest-rail-item:hover .dest-rail-icon {
+  background: var(--rail-hover, color-mix(in srgb, var(--rail-ink, var(--fg)) 10%, transparent));
+}
+.dest-rail-item[data-current="true"] {
+  color: var(--rail-ink, var(--fg));
+}
+.dest-rail-item[data-current="true"] .dest-rail-icon {
+  background: color-mix(in srgb, var(--rail-ink, var(--fg)) 16%, transparent);
+}
+.dest-rail-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.dest-rail-item[data-current="true"] .dest-rail-label {
+  font-weight: 700;
+}
+/* Unread's count, on the icon's corner like Slack's. Ringed in the rail's own
+   surface so it reads as sitting ON the icon. */
+.dest-rail-badge {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--danger, #e01e5a);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--rail-surface, var(--bg-chrome));
+}

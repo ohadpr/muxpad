@@ -1,0 +1,68 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import {
+  DESTINATIONS,
+  DESTINATION_LABEL,
+  currentDestination,
+  destinationAction,
+} from './desktop-destinations';
+
+describe('the destination rail', () => {
+  it('holds the five, in his order, each with its word', () => {
+    expect(DESTINATIONS.map((d) => DESTINATION_LABEL[d])).toEqual([
+      'Home',
+      'Unread',
+      'Activity',
+      'Artifacts',
+      'Apps',
+    ]);
+  });
+});
+
+describe('which entry is current', () => {
+  it('on a chat, the list’s view', () => {
+    expect(currentDestination('/w/personal/t/main', 'home')).toBe('home');
+    expect(currentDestination('/w/personal/t/main', 'unread')).toBe('unread');
+    expect(currentDestination('/w/personal/t/main', 'activity')).toBe('activity');
+  });
+
+  it('on a page, the page — whatever the list beside it shows', () => {
+    expect(currentDestination('/artifacts', 'unread')).toBe('artifacts');
+    expect(currentDestination('/apps/', 'home')).toBe('apps');
+    expect(currentDestination('/hosted/a/notes', 'home')).toBe('apps');
+    expect(currentDestination('/activity', 'home')).toBe('activity');
+  });
+});
+
+describe('what a click does', () => {
+  it('a page entry goes to its route', () => {
+    expect(destinationAction('artifacts', '/w/p/t/x')).toEqual({ to: '/artifacts' });
+    expect(destinationAction('apps', '/artifacts')).toEqual({ to: '/apps' });
+  });
+
+  it('a view entry on a chat switches the list and moves you nowhere', () => {
+    expect(destinationAction('unread', '/w/p/t/x')).toEqual({ view: 'unread' });
+  });
+
+  it('a view entry on a page switches the list AND takes you back to your work', () => {
+    expect(destinationAction('activity', '/apps')).toEqual({
+      view: 'activity',
+      to: 'back-to-work',
+    });
+    expect(destinationAction('home', '/artifacts')).toEqual({ view: 'home', to: 'back-to-work' });
+  });
+});
+
+describe('the chat list beside it', () => {
+  const nav = readFileSync(join(__dirname, '../components/NavTree.tsx'), 'utf8');
+  it('has no switcher of its own, and no Artifacts/Apps foot on the desktop', () => {
+    expect(nav).not.toContain('<RailViewSwitch');
+    expect(nav.match(/<HostedFoot/g) ?? []).toHaveLength(1); // the phone's sheet only
+  });
+
+  it('is mounted beside the rail in AppLayout, on the desktop only', () => {
+    const layout = readFileSync(join(__dirname, '../components/AppLayout.tsx'), 'utf8');
+    expect(layout).toContain('{sidebarMode && <DestinationRail lastWsSlug={lastWsSlug} />}');
+  });
+});

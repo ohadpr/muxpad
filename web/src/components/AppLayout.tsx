@@ -12,6 +12,7 @@ import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { CommandPalette } from './CommandPalette';
+import { DestinationRail } from './DestinationRail';
 import { MobileChatHeader, MobileChatList, useBackToList } from './MobileNav';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
@@ -191,6 +192,9 @@ export function AppLayout() {
       )}
       {rendersAppBody({ wsSlug, shellRoute, sidebarMode, chatList, onChatList }) ? (
         <div className="app-body">
+          {/* THE DESTINATION RAIL: Home, Unread, Activity, Artifacts, Apps.
+              The chat list beside it holds every workspace as sections. */}
+          {sidebarMode && <DestinationRail lastWsSlug={lastWsSlug} />}
           {sidebarMode && (
             <aside
               className="sidenav"

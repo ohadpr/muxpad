@@ -4,13 +4,7 @@ import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
-import {
-  RAIL_VIEWS,
-  type RailView,
-  activityChats,
-  railUnreadRows,
-  unreadByWorkspace,
-} from '../lib/chat-sections';
+import { activityChats, railUnreadRows, unreadByWorkspace } from '../lib/chat-sections';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
@@ -19,7 +13,7 @@ import { isExpanded, toggleExpanded, useNavExpansion } from '../lib/nav-expansio
 import { tabRowAffordances } from '../lib/nav-row-affordances';
 import { nextCronLabel, railCronLabel } from '../lib/next-cron-label';
 import { noticeFromError } from '../lib/notice-store';
-import { setRailView, useRailView } from '../lib/rail-view';
+import { useRailView } from '../lib/rail-view';
 import { activeAge } from '../lib/short-age';
 import { useChatCorpus } from '../lib/use-all-chats';
 import { PreviewList } from './ChatPreviewList';
@@ -362,10 +356,9 @@ function SidebarTree({
   const activeTabId =
     corpus.find((t) => t.workspaceSlug === activeWorkspaceSlug && t.tabSlug === activeTabSlug)
       ?.tabId ?? null;
-  // Per-workspace unread counts: the Unread segment's total, and the badge a
-  // COLLAPSED section carries for the chats it is hiding.
+  // Per-workspace unread counts: the badge a COLLAPSED section carries for
+  // the chats it is hiding. (The total is the destination rail's.)
   const unreadByWs = unreadByWorkspace(corpus);
-  const unreadTotal = [...unreadByWs.values()].reduce((a, b) => a + b, 0);
 
   // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
   // refresh; on failure refresh anyway to snap back to the server's truth.
@@ -399,9 +392,10 @@ function SidebarTree({
 
   return (
     <nav className="navtree" data-variant={variant} aria-label="Workspaces and tabs">
-      {/* Home | Unread | Activity. Home is the tree below; Unread and Activity
-          are LISTS across every workspace (each row names its workspace). */}
-      <RailViewSwitch view={view} unread={unreadTotal} />
+      {/* NO SWITCHER HERE. Which view this list shows — Home (the tree),
+          Unread or Activity (lists across every workspace, each row naming
+          its own) — is chosen from the destination rail to its left
+          (components/DestinationRail), with Artifacts and Apps. */}
       <div className="navtree-scroll">
         {view === 'home' && (
           <>
@@ -475,47 +469,10 @@ function SidebarTree({
             />
           </div>
         )}
-        {/* Destinations that belong to no workspace stay below, past the
-            hairline, in every view. */}
-        <HostedFoot {...(onNavigate ? { onNavigate } : {})} />
+        {/* No Artifacts / Apps foot on the desktop: they are entries of the
+            destination rail now. The phone's sheet keeps its own. */}
       </div>
     </nav>
-  );
-}
-
-const RAIL_VIEW_LABEL: Record<RailView, string> = {
-  home: 'Home',
-  unread: 'Unread',
-  activity: 'Activity',
-};
-
-/**
- * Home | Unread | Activity — three views of the current workspace's chats, the
- * control the phone has at the bottom of its list, here at the top of the
- * rail. Unread carries this workspace's count; the other workspaces' counts
- * are on their icons in the left strip.
- */
-function RailViewSwitch({ view, unread }: { view: RailView; unread: number }) {
-  return (
-    <div className="rail-views" role="tablist" aria-label="Chat views">
-      {RAIL_VIEWS.map((v) => (
-        <button
-          key={v}
-          type="button"
-          role="tab"
-          aria-selected={v === view}
-          className="rail-view"
-          onClick={() => setRailView(v)}
-        >
-          {RAIL_VIEW_LABEL[v]}
-          {v === 'unread' && unread > 0 && (
-            <span className="rail-view-count" aria-label={`${unread} unread`}>
-              {unread > 99 ? '99+' : unread}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
   );
 }
 

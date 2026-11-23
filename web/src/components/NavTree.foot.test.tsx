@@ -63,7 +63,11 @@ const foot = (variant: 'sidebar' | 'sheet') => {
   }));
 };
 
-it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps first on the %s', (variant) => {
+it('puts no foot on the desktop list — Artifacts and Apps are entries of the destination rail', () => {
+  expect(foot('sidebar')).toEqual([]);
+});
+
+it.each(['sheet'] as const)('lists Artifacts then Apps first on the %s', (variant) => {
   // ARTIFACTS FIRST: it is the half reached by the question that gets asked
   // (the same portal was asked for three times in five days), and the half
   // whose contents expire — a reason to meet the list rather than recall it.
@@ -89,10 +93,11 @@ it('no longer offers a single "Hosted" entry', () => {
   }
 });
 
-it('is mounted twice and no more — the rail and the sheet, not the picker', () => {
-  // One component, two mounts. A THIRD would be the workspace picker getting
-  // it back, which is where it was hiding on mobile.
+it('is mounted once — the sheet — and not in the picker', () => {
+  // The desktop rail's mount went when Artifacts and Apps moved into the
+  // destination rail (components/DestinationRail). A second here would be the
+  // workspace picker getting it back, which is where it was hiding on mobile.
   const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
-  expect(src.match(/<HostedFoot/g) ?? []).toHaveLength(2);
+  expect(src.match(/<HostedFoot/g) ?? []).toHaveLength(1);
   expect(src).not.toContain('to="/hosted"');
 });

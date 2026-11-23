@@ -206,14 +206,11 @@ describe('the rail — one “+” per workspace, on its header', () => {
 });
 
 describe('the flat “Recent” view is gone, and so is the sheet’s picker', () => {
-  it('renders no flat-recents switch — the rail’s one switch is Home | Unread | Activity', () => {
+  it('renders no switch at all over the list — the destination rail chooses its view', () => {
     const box = mount('sidebar');
     expect(box.querySelectorAll('.navtree-viewswitch').length).toBe(0);
-    const views = [...box.querySelectorAll('.rail-views .rail-view')].map((b) =>
-      (b.textContent ?? '').trim(),
-    );
-    expect(views).toEqual(['Home', 'Unread', 'Activity']);
-    // …over EVERY workspace, as sections: the one-workspace rail is gone.
+    expect(box.querySelectorAll('.rail-views').length).toBe(0);
+    // …and every workspace is a section of it.
     expect(box.querySelectorAll('.navtree-ws-row').length).toBe(3);
   });
 
