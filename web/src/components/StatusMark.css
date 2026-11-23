@@ -186,11 +186,14 @@
   animation: navtree-state-spin 0.9s linear infinite;
 }
 
-/* ── dracula & alucard · the spoked activity indicator ──────────────────
-   The eight-spoke wheel macOS and iOS have said "busy" with for twenty years,
-   stepping a spoke at a time. The twist: the trailing spokes fade into the
-   theme's own violet rather than to nothing, so the wheel is amber at its
-   head and Dracula behind it. */
+/* ── dracula & alucard · the segmented activity wheel ───────────────────
+   The activity wheel macOS and iOS have used for "busy" for twenty years,
+   stepping round with a bright head and a fading tail. The twist: the tail
+   fades into the theme's violet rather than to nothing.
+   Drawn as SIX thick segments of a ring, not the eight thin spokes it first
+   had: at 1:1, eight 1–2px wedges on a 14px wheel were a blur that shimmered
+   rather than turned. Six 3px segments with real gaps are still a wheel when
+   you squint, and a step of 60° is a visible step. */
 :is([data-theme="dracula"], [data-theme="alucard"])
   :is(
     .navtree-mark[data-state="working"],
@@ -199,32 +202,31 @@
   )::after {
   border-radius: 50%;
   background: conic-gradient(
-    color-mix(in srgb, var(--wm-ink) 20%, var(--accent)) 0 18deg,
-    transparent 0 45deg,
-    color-mix(in srgb, var(--wm-ink) 30%, var(--accent)) 45deg 63deg,
-    transparent 0 90deg,
-    color-mix(in srgb, var(--wm-ink) 42%, var(--accent)) 90deg 108deg,
-    transparent 0 135deg,
-    color-mix(in srgb, var(--wm-ink) 54%, var(--accent)) 135deg 153deg,
+    color-mix(in srgb, var(--wm-ink) 22%, var(--accent)) 0deg 42deg,
+    transparent 0 60deg,
+    color-mix(in srgb, var(--wm-ink) 34%, var(--accent)) 60deg 102deg,
+    transparent 0 120deg,
+    color-mix(in srgb, var(--wm-ink) 48%, var(--accent)) 120deg 162deg,
     transparent 0 180deg,
-    color-mix(in srgb, var(--wm-ink) 66%, var(--accent)) 180deg 198deg,
-    transparent 0 225deg,
-    color-mix(in srgb, var(--wm-ink) 78%, var(--accent)) 225deg 243deg,
-    transparent 0 270deg,
-    color-mix(in srgb, var(--wm-ink) 90%, var(--accent)) 270deg 288deg,
-    transparent 0 315deg,
-    var(--wm-ink) 315deg 333deg,
-    transparent 0
+    color-mix(in srgb, var(--wm-ink) 62%, var(--accent)) 180deg 222deg,
+    transparent 0 240deg,
+    color-mix(in srgb, var(--wm-ink) 80%, var(--accent)) 240deg 282deg,
+    transparent 0 300deg,
+    var(--wm-ink) 300deg 342deg,
+    transparent 0 360deg
   );
-  -webkit-mask: radial-gradient(farthest-side, transparent 36%, #000 40%);
-  mask: radial-gradient(farthest-side, transparent 36%, #000 40%);
-  animation: navtree-state-spin 0.8s steps(8) infinite;
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3.5px),
+    #000 calc(100% - 3px)
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+  animation: navtree-state-spin 0.9s steps(6) infinite;
 }
 
 /* ── github-light · Primer's spinner, from pending to running ────────────
-   Primer's own Spinner (a quarter arc going round a full track), with the
-   track drawn DOTTED, the way GitHub draws a check that is still pending, so
-   the mark reads as a check run that has started. It replaced Primer's
+   Primer's own Spinner: a quarter arc going round a full faint track, in
+   GitHub's pending amber. It replaced Primer's
    animated ellipsis: at rest a row of three dots is the "···" overflow menu
    every workspace row already carries, so a working chat looked like a
    button. */
@@ -235,7 +237,9 @@
     .navtree-status[data-status="working"]
   )::before {
   border-radius: 50%;
-  border: 2px dotted color-mix(in srgb, var(--wm-ink) 55%, transparent);
+  /* Solid, not the dotted "pending" ring it first had: at 1:1 a 2px dotted
+     ring on a 14px circle is a scatter of single pixels, i.e. noise. */
+  border: 2px solid color-mix(in srgb, var(--wm-ink) 30%, transparent);
 }
 [data-theme="github-light"]
   :is(
@@ -345,7 +349,9 @@
     .navtree-status[data-status="working"]
   )::after {
   border-radius: 50%;
-  border: 1.5px dashed var(--wm-ink);
+  /* 2px dashes, so a 14px circle carries about four of them: at 1.5px it
+     carried a dozen single-pixel dashes and read as a dotted smear at 1:1. */
+  border: 2px dashed var(--wm-ink);
   animation: navtree-state-spin 2.4s linear infinite;
 }
 
@@ -461,7 +467,7 @@
 }
 
 /* Reduced motion: the moving layer stops at its rest frame, and every rest
-   frame above is a complete glyph: the striped bar, the comet, the wheel, the
+   frame above is a complete glyph: the striped bar, the comet, the segmented wheel, the
    arc on its dotted track, the ringed ping, the dashed
    circle round its point, the two inks, the zigzag on its track; demoscene's
    two-colour bands. Nothing gets
