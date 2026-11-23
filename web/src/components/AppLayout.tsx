@@ -1,6 +1,7 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useAppTheme } from '../lib/app-theme';
+import { currentWorkspaceSlug } from '../lib/chat-sections';
 import { isEmbedded, shellChrome } from '../lib/embed';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
 import { isChatListPath, rendersAppBody, usesChatList } from '../lib/mobile-nav';
@@ -15,11 +16,11 @@ import { MobileChatHeader, MobileChatList, useBackToList } from './MobileNav';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
-import { RailUnreadChip } from './RailUnread';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
+import { WorkspaceRail } from './WorkspaceRail';
 
 const REPO_URL = 'https://github.com/ohadpr/muxpad';
 
@@ -93,7 +94,18 @@ export function AppLayout() {
    * Last visited, falling back to the first visible workspace for a cold open
    * straight to `/artifacts` (a bookmark, a published link's sibling tab).
    */
-  const lastWsSlug = [...visitedWsSlugs].at(-1) ?? visibleWorkspaces(workspaces)[0]?.slug ?? '';
+  // The workspace you were last IN — not the last one first visited, which is
+  // what `[...visitedWsSlugs].at(-1)` was: a Set keeps first-insertion order,
+  // so going back to an earlier workspace never moved it to the end. It only
+  // fed the rail's "which group is open" before; now it decides which
+  // workspace the whole desktop rail shows on a destination route, so it has
+  // to be the right one.
+  const [lastSeenWs, setLastSeenWs] = useState<string | null>(null);
+  const currentWs = currentWorkspaceSlug(wsSlug, lastSeenWs, visibleWorkspaces(workspaces));
+  const lastWsSlug = currentWs ?? '';
+  useEffect(() => {
+    if (wsSlug) setLastSeenWs(wsSlug);
+  }, [wsSlug]);
   useEffect(() => {
     if (!wsSlug) return;
     setVisitedWsSlugs((prev) => {
@@ -181,6 +193,9 @@ export function AppLayout() {
       )}
       {rendersAppBody({ wsSlug, shellRoute, sidebarMode, chatList, onChatList }) ? (
         <div className="app-body">
+          {/* THE LEFT STRIP: workspaces. The rail beside it: that workspace's
+              chats. Two strips, one question each — see WorkspaceRail. */}
+          {sidebarMode && <WorkspaceRail currentSlug={currentWs} />}
           {sidebarMode && (
             <aside
               className="sidenav"
@@ -193,8 +208,7 @@ export function AppLayout() {
                     keeps the wordmark optically centred. */}
                 <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
-                {/* The right-hand slot is the Unread chip — see RailUnread. */}
-                <RailUnreadChip />
+                <span className="sidenav-brand-spacer" aria-hidden="true" />
               </div>
               <NavTree
                 variant="sidebar"

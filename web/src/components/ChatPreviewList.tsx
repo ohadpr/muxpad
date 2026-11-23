@@ -23,6 +23,7 @@ export function PreviewList({
   active,
   empty,
   explainAbsent = false,
+  activeTabId = null,
 }: {
   rows: SearchableTab[];
   active: boolean;
@@ -33,6 +34,8 @@ export function PreviewList({
    * falls back to the chat's headline like any other row without one.
    */
   explainAbsent?: boolean;
+  /** The chat you are on, marked as the rail marks it (the desktop rail). */
+  activeTabId?: string | null;
 }) {
   const [previews, setPreviews] = useState<Record<string, TabPreview | null>>({});
   const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
@@ -61,6 +64,7 @@ export function PreviewList({
               tab={t}
               preview={previews[t.tabId] ?? null}
               explainAbsent={explainAbsent}
+              active={t.tabId === activeTabId}
             />
           ))}
     </div>
@@ -99,10 +103,12 @@ export function ChatRow({
   tab,
   preview,
   explainAbsent = false,
+  active = false,
 }: {
   tab: SearchableTab;
   preview: TabPreview | null;
   explainAbsent?: boolean;
+  active?: boolean;
 }) {
   const now = Date.now();
   const second = previewLine(preview, tab.headline, explainAbsent);
@@ -113,6 +119,7 @@ export function ChatRow({
       params={{ wsSlug: tab.workspaceSlug, tabSlug: tab.tabSlug }}
       className="mcl-row"
       data-unread={tab.unread ? 'true' : undefined}
+      data-active={active ? 'true' : undefined}
     >
       <span className="mcl-row-emoji" aria-hidden="true">
         {tab.icon || '💬'}

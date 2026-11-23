@@ -96,63 +96,98 @@ function cmpId(a: SearchableTab, b: SearchableTab): number {
   return a.tabId < b.tabId ? -1 : a.tabId > b.tabId ? 1 : 0;
 }
 
-// ─── The desktop rail's Unread FILTER ───────────────────────────────────────
+// ─── The desktop: two strips ────────────────────────────────────────────────
 //
-// On the desktop the rail is the MAP — it is on screen while you work — so
-// Unread is not a tab that replaces it but a filter on it: the same rows, in
-// the same places, fewer of them. HIDING, NEVER REORDERING. The rail's order
-// is manual and stable (shared/tab-order), and a row that moves under the
-// cursor is the bug that file exists to end; every function below returns its
-// input in its input's order, with rows taken out.
+// The rail used to answer two questions at once — WHICH WORKSPACE (collapsible
+// sections) and WHICH CHAT (the rows inside them) — which is why it was long.
+// It is two strips now: a narrow column of workspace icons on the far left,
+// and the chat rail for the CURRENT workspace beside it, with Home | Unread |
+// Activity at its top. These are the rules both strips read, pure.
 
-/** The rail holds wire rows, not corpus rows: the same rule as
- *  {@link isUnreadChat}, in the wire's spelling. */
-export function isUnreadTab(t: {
-  unread?: boolean | undefined;
-  spawned_by?: string | null | undefined;
-}): boolean {
-  return t.unread === true && !t.spawned_by;
+/** The views at the top of the desktop chat rail. */
+export type RailView = 'home' | 'unread' | 'activity';
+export const RAIL_VIEWS: readonly RailView[] = ['home', 'unread', 'activity'];
+
+/**
+ * Which workspace is CURRENT — the one whose icon is marked and whose chats
+ * the rail lists. The URL's, when it names one. On a destination that names
+ * none (Artifacts, Apps, /activity) the one you came FROM: you opened a page,
+ * you did not leave your work. A cold open straight to one falls back to the
+ * first visible workspace. A slug that is not a visible workspace never wins —
+ * the hidden apps container is plumbing, not a place.
+ */
+export function currentWorkspaceSlug(
+  urlSlug: string | null,
+  lastVisitedSlug: string | null,
+  visible: readonly { slug: string }[],
+): string | null {
+  const ok = (s: string | null) => !!s && visible.some((w) => w.slug === s);
+  if (ok(urlSlug)) return urlSlug;
+  if (ok(lastVisitedSlug)) return lastVisitedSlug;
+  return visible[0]?.slug ?? null;
 }
 
 /**
- * Which rows of ONE workspace's list survive the filter, in their order.
+ * The badge on each workspace icon: how many of its CONVERSATIONS have
+ * something unread ({@link isUnreadChat} — no sub-chats). This is what keeps
+ * the split honest: you can no longer see another workspace's chats in the
+ * same scroll, so its icon has to say when one of them wants reading.
+ * Counted from the cross-workspace corpus (lib/all-tabs), because a workspace
+ * you are not in has no list mounted to count from.
+ */
+export function unreadByWorkspace(tabs: readonly SearchableTab[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const t of tabs)
+    if (isUnreadChat(t)) out.set(t.workspaceId, (out.get(t.workspaceId) ?? 0) + 1);
+  return out;
+}
+
+/**
+ * The rail's UNREAD view — a LIST of this workspace's unread chats, each with
+ * its last message, not a filter laid over the tree.
  *
- * The row you are ON stays, unread or not. Opening a chat is reading it, so
- * without this the row would vanish from under the pointer the moment you
- * clicked it — the filter would punish using it. It leaves when you leave it,
- * which is the "reading takes it out" you would expect.
+ * In the RAIL'S OWN ORDER (the corpus carries each workspace's rows in the
+ * server's stored order): switching views hides rows, it never reorders them
+ * (shared/tab-order). The phone's Unread tab sorts by recency; that list is a
+ * screen you visit, this one sits beside your work.
+ *
+ * The chat you are ON stays while you are on it: opening an unread chat reads
+ * it, and a row vanishing from under the click would punish using the list.
+ * It leaves when you leave it.
  */
-export function unreadFilterRows<
-  T extends { id: string; unread?: boolean | undefined; spawned_by?: string | null | undefined },
->(rows: readonly T[], activeTabId: string | null): T[] {
-  return rows.filter((t) => t.id === activeTabId || isUnreadTab(t));
-}
-
-/** How many chats the rail's chip counts — every visible workspace's. */
-export function unreadCount(tabs: readonly SearchableTab[]): number {
-  return tabs.filter(isUnreadChat).length;
-}
-
-/**
- * Is the filter actually filtering? Only with something to show. When the last
- * unread chat is read the filter has nothing left, and an empty rail — or one
- * holding only the chat you are standing on — is worse than the map: so it
- * falls back to everything, and the chip reads as off.
- */
-export function unreadFilterActive(wanted: boolean, count: number): boolean {
-  return wanted && count > 0;
-}
-
-/**
- * Which workspaces the filtered rail shows: those holding an unread chat, plus
- * the one you are in (its row stays — see {@link unreadFilterRows}). Order is
- * the input's — the workspace order you arranged.
- */
-export function unreadFilterWorkspaces<W extends { id: string; slug: string }>(
-  workspaces: readonly W[],
+export function railUnreadRows(
   tabs: readonly SearchableTab[],
-  activeWorkspaceSlug: string | null,
-): W[] {
-  const has = new Set(tabs.filter(isUnreadChat).map((t) => t.workspaceId));
-  return workspaces.filter((w) => has.has(w.id) || w.slug === activeWorkspaceSlug);
+  workspaceId: string,
+  activeTabId: string | null,
+): SearchableTab[] {
+  return tabs.filter(
+    (t) => t.workspaceId === workspaceId && (isUnreadChat(t) || t.tabId === activeTabId),
+  );
+}
+
+/** The rail's ACTIVITY view: {@link activityChats}, for this workspace. */
+export function railActivityRows(
+  tabs: readonly SearchableTab[],
+  workspaceId: string,
+): SearchableTab[] {
+  return activityChats(tabs.filter((t) => t.workspaceId === workspaceId));
+}
+
+/**
+ * A workspace's icon in the left strip. Workspaces have no icon of their own,
+ * so this derives one that is STABLE (the same name always gives the same
+ * mark) and legible at 32px: a name that starts with an emoji wears it; a
+ * name of several words gets two initials ("Side projects" → "SP"); one word
+ * gets its first letter. Nothing is invented per workspace.
+ */
+export function workspaceMark(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return '?';
+  const first = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(trimmed)][0]
+    ?.segment;
+  if (first && /\p{Extended_Pictographic}/u.test(first)) return first;
+  const words = trimmed.split(/[\s_\-/]+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  const initial = (w: string) => (w.match(/[\p{L}\p{N}]/u)?.[0] ?? '').toLocaleUpperCase();
+  if (words.length >= 2) return initial(words[0] ?? '') + initial(words[1] ?? '');
+  return initial(words[0] ?? trimmed) || '?';
 }

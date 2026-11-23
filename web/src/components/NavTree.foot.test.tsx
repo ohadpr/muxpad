@@ -77,13 +77,9 @@ it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps first on the %
   ]);
 });
 
-it('adds Activity on the desktop rail only — the phone has it as a tab of its list', () => {
-  expect(foot('sidebar')).toEqual([
-    { href: '/artifacts', text: 'Artifacts' },
-    { href: '/apps', text: 'Apps' },
-    { href: '/activity', text: 'Activity' },
-  ]);
-  expect(foot('sheet').map((l) => l.href)).not.toContain('/activity');
+it('offers no Activity entry — the desktop rail’s Home | Unread | Activity switcher is the way in', () => {
+  for (const variant of ['sidebar', 'sheet'] as const)
+    expect(foot(variant).map((l) => l.href)).not.toContain('/activity');
 });
 
 it('no longer offers a single "Hosted" entry', () => {

@@ -181,7 +181,9 @@ describe('the rail’s search is a button that opens the palette', () => {
     expect(box.querySelector('button.navtree-search')).toBeNull();
     expect(box.querySelector('input')).toBeNull();
     expect(box.querySelector('.navsearch, [role="combobox"]')).toBeNull();
-    expect(box.querySelectorAll('.navtree-scroll .navtree-ws-row').length).toBe(3);
+    // ONE workspace on the desktop rail now — the current one; the others are
+    // icons in the left strip (WorkspaceRail).
+    expect(box.querySelectorAll('.navtree-scroll .navtree-ws-row').length).toBe(1);
   });
 
   it('opens the palette on click, and says the chord where a pointer finds it', async () => {
@@ -342,22 +344,22 @@ describe('the sheet’s workspace row: “+” and “⋯”, nothing else', () 
    *  gone; the guarantee is not. */
   it('arms the sidebar × instead of opening a dialog', async () => {
     const box = mount('sidebar');
-    const row = rowFor(box, 'Acme');
+    const row = rowFor(box, 'Personal');
     const x = [...row.querySelectorAll('.navtree-tab-controls .navtree-close')].find(
       (b) => !b.classList.contains('navtree-ws-add'),
     ) as HTMLButtonElement;
-    expect(x.getAttribute('aria-label')).toBe('Close workspace Acme');
+    expect(x.getAttribute('aria-label')).toBe('Close workspace Personal');
     await click(x);
     expect(DELETED).toEqual([]);
     expect(x.classList.contains('-armed')).toBe(true);
-    expect(x.getAttribute('aria-label')).toBe('Click again to close Acme and all its tabs');
+    expect(x.getAttribute('aria-label')).toBe('Click again to close Personal and all its tabs');
     await click(x);
-    expect(DELETED).toEqual(['w-acme']);
+    expect(DELETED).toEqual(['w-personal']);
   });
 
   it('disarms the × when the pointer leaves it', async () => {
     const box = mount('sidebar');
-    const row = rowFor(box, 'Acme');
+    const row = rowFor(box, 'Personal');
     const x = [...row.querySelectorAll('.navtree-tab-controls .navtree-close')].find(
       (b) => !b.classList.contains('navtree-ws-add'),
     ) as HTMLButtonElement;
