@@ -94,13 +94,22 @@ describe('if-none-match', () => {
 });
 
 describe('serving', () => {
-  it('serves the HTML shell no-cache, with a validator so reloads cost a 304', async () => {
+  it('serves the HTML shell NO-STORE, so an installed app cannot keep an old one', async () => {
+    // Was `no-cache` — "revalidate before use", which is correct and which the
+    // installed iOS app does not honour: after a shell change it went on
+    // serving the previous one through a delete-and-re-add, while a Safari tab
+    // on the same URL served the new one. The shell is ~2.6KB and names only
+    // hashed assets, so caching it saves nothing and costs a class of bug.
+    //
+    // It matters most at INSTALL time: the shell carries the iOS status-bar
+    // meta, which iOS reads when the app is added to the home screen, so a
+    // stale shell bakes stale window chrome into the install.
     const res = await get('/');
-    expect(res.headers.get('cache-control')).toBe('no-cache');
-    const etag = res.headers.get('etag');
-    expect(etag).toBeTruthy();
-    const again = await get('/', { 'if-none-match': etag as string });
-    expect(again.status).toBe(304);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    // The validator is still sent — it costs nothing and a client that asks
+    // with it still gets a correct answer — but it must NEVER be the reason a
+    // stale shell is reused.
+    expect(res.headers.get('etag')).toBeTruthy();
   });
 
   it('serves the brotli artifact when the client accepts it', async () => {
@@ -144,11 +153,12 @@ describe('serving', () => {
     expect(res.headers.get('content-type')).toMatch(/text\/plain/);
   });
 
-  it('serves the no-cache shell for SPA routes', async () => {
+  it('serves the no-store shell for SPA routes too', async () => {
+    // Same shell, same reason: a deep link is how the installed app launches.
     const res = await get('/w/dev/t/muxpad');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toMatch(/text\/html/);
-    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
   it('keeps /api and /ws 404s machine-readable', async () => {

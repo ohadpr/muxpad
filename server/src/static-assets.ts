@@ -155,7 +155,21 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
   const serveIndexHtml = (c: Context) => {
     const file = join(webRoot, 'index.html');
     const v = validators(file);
-    c.header('Cache-Control', 'no-cache');
+    // ── `no-store`, NOT `no-cache` ──────────────────────────────────────
+    //
+    // `no-cache` means "revalidate before use", which is correct and which the
+    // INSTALLED iOS app does not honour: after the Liquid Glass fix shipped,
+    // a home-screen app — deleted and re-added from a refreshed Safari tab —
+    // went on serving the previous shell for an hour, while the same URL in a
+    // Safari tab served the new one. The shell is ~2.6KB and names only hashed
+    // assets, so there is nothing to save by caching it and a whole class of
+    // "why am I still seeing the old build" to lose.
+    //
+    // It also matters more than usual here: the shell carries the iOS
+    // status-bar meta, which iOS reads when the app is ADDED to the home
+    // screen. A stale shell at that moment bakes a stale window chrome into
+    // the install until it is added again.
+    c.header('Cache-Control', 'no-store');
     // ── THE BROWSER'S CREDENTIAL RIDES THE SHELL ────────────────────────
     //
     // This is the only way the web UI can ever hold one. The alternative —
