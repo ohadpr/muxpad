@@ -1186,6 +1186,7 @@ function WorkspaceNode({
       <div
         className="navtree-ws-row"
         data-active={isActive ? 'true' : undefined}
+        data-single={single ? 'true' : undefined}
         // No `data-state`, for the same reason the chat rows below dropped it
         // (see RowMark): it is what painted the left bar and the row tint, and
         // both are gone from the desktop rail. A workspace header that washed

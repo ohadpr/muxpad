@@ -26,8 +26,8 @@
   padding: 0;
   text-decoration: none;
   cursor: pointer;
-  color: var(--rail-fg, var(--fg));
-  background: color-mix(in srgb, var(--rail-fg, var(--fg)) 12%, transparent);
+  color: var(--rail-ink, var(--fg));
+  background: color-mix(in srgb, var(--rail-ink, var(--fg)) 12%, transparent);
   /* The ring that marks CURRENT is always laid out, so marking one never
      shifts its neighbours. */
   outline: 2px solid transparent;
@@ -35,11 +35,11 @@
   transition: background 120ms ease, outline-color 120ms ease;
 }
 .ws-rail-icon:hover {
-  background: color-mix(in srgb, var(--rail-fg, var(--fg)) 20%, transparent);
+  background: var(--rail-hover, color-mix(in srgb, var(--rail-ink, var(--fg)) 20%, transparent));
 }
 .ws-rail-icon[data-current="true"] {
-  outline-color: var(--rail-fg, var(--fg));
-  background: color-mix(in srgb, var(--rail-fg, var(--fg)) 22%, transparent);
+  outline-color: var(--rail-ink, var(--fg));
+  background: color-mix(in srgb, var(--rail-ink, var(--fg)) 22%, transparent);
 }
 .ws-rail-mark {
   font-size: 0.875rem;
@@ -69,9 +69,9 @@
 }
 .ws-rail-add {
   background: transparent;
-  color: var(--rail-fg-dim, var(--fg-dim));
-  border: 1px dashed color-mix(in srgb, var(--rail-fg, var(--fg)) 30%, transparent);
+  color: var(--rail-ink-dim, var(--fg-dim));
+  border: 1px dashed color-mix(in srgb, var(--rail-ink, var(--fg)) 30%, transparent);
 }
 .ws-rail-add:hover {
-  color: var(--rail-fg, var(--fg));
+  color: var(--rail-ink, var(--fg));
 }

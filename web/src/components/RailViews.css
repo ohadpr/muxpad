@@ -99,3 +99,11 @@
 .rail-view-list .mcl-empty-sub {
   font-size: 0.75rem;
 }
+
+/* The desktop rail's one workspace header has no disclosure, so its first
+   grid track (the caret's) goes — otherwise the NAME lands in the caret's
+   narrow column and truncates to a letter. */
+.navtree .navtree-ws-row[data-single="true"] {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  padding-inline-start: 14px;
+}
