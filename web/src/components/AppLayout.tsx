@@ -107,7 +107,6 @@ export function AppLayout() {
   // brand moves to the sidebar's head, build + settings to its foot.
   // The bar still renders on the workspace picker ('/'), where there is
   // no sidebar to host them.
-  const showTopBar = chrome.topBar;
 
   // ── THE PHONE'S LIST ──────────────────────────────────────────────────
   // Mounted on its first visit and KEPT while you are in a chat, the same
@@ -116,6 +115,9 @@ export function AppLayout() {
   // route bounces to `/`).
   const chatList = usesChatList({ isMobile, embedded });
   const onChatList = chatList && isChatListPath(pathname);
+  // ONE row of chrome on the phone's list: its own bar (title, search,
+  // settings) is the top bar there, so this one does not render at all.
+  const showTopBar = chrome.topBar && !onChatList;
   const [listVisited, setListVisited] = useState(false);
   // The chat you came FROM, so the list marks where you were — the same honest
   // rendering the rail gives a destination route (see lastWsSlug).
@@ -152,10 +154,9 @@ export function AppLayout() {
               onBack={backToList}
             />
           ) : (
-            // The root. No back button: there is nowhere above it to go. NOT a
-            // link on the list — `/` would pass through the redirect, which
-            // renders without the kept-alive hosts.
-            <Brand asLink={!onChatList} responsive={true} markOnly={!!activeWorkspace} />
+            // `/` on its way somewhere. (The list itself, the real root, has no
+            // bar here at all — its own bar is the top bar; see showTopBar.)
+            <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
           )}
           {/* Slot the active terminal's face switch paints into via portal —
               see TabView. Keeps it in the top bar so mobile spends no second

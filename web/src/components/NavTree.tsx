@@ -255,6 +255,12 @@ interface NavTreeProps {
   variant: NavTreeVariant;
   /** Called right before any row navigation — the sheet uses it to dismiss. */
   onNavigate?: () => void;
+  /**
+   * The sheet only: controls at the trailing end of its bar. On a phone that
+   * bar IS the app's top bar on the list (see MobileChatList), so the app's
+   * own controls — settings — ride it instead of a second strip above.
+   */
+  barEnd?: React.ReactNode;
 }
 
 /**
@@ -264,7 +270,7 @@ interface NavTreeProps {
  *     file navigator: collapsible workspace groups, indented tab rows carrying
  *     a headline, a schedule and a state word, hover-revealed pin/close,
  *     double-click rename, drag-to-reorder.
- *   variant="sheet"   — the mobile drop-down panel (SheetRail below). NOT the
+ *   variant="sheet"   — the phone's full-screen list (SheetRail below). NOT the
  *     same tree at thumb height: a flat, one-line-per-chat rail whose only
  *     permanent mark is a dot on the chats that are waiting on you.
  *
@@ -282,13 +288,20 @@ interface NavTreeProps {
  * states collapse to one bit, the headline leaves the list, pinning is order
  * rather than a glyph, and nothing lives in the scroller that is not a chat.
  */
-export function NavTree({ activeWorkspaceSlug, activeTabSlug, variant, onNavigate }: NavTreeProps) {
+export function NavTree({
+  activeWorkspaceSlug,
+  activeTabSlug,
+  variant,
+  onNavigate,
+  barEnd,
+}: NavTreeProps) {
   if (variant === 'sheet') {
     return (
       <SheetRail
         activeWorkspaceSlug={activeWorkspaceSlug}
         activeTabSlug={activeTabSlug}
         {...(onNavigate ? { onNavigate } : {})}
+        barEnd={barEnd}
       />
     );
   }
@@ -642,6 +655,7 @@ function SheetRail({
   activeWorkspaceSlug,
   activeTabSlug,
   onNavigate,
+  barEnd,
 }: Omit<NavTreeProps, 'variant'>) {
   const navigate = useNavigate();
   const { workspaces: allWorkspaces } = useWorkspaces();
@@ -715,6 +729,7 @@ function SheetRail({
         >
           <SvgSearchGlyph />
         </button>
+        {barEnd}
         {/* NO "+" HERE EITHER. It created in "the workspace the bar names",
               and the bar no longer names one — every workspace is on screen,
               and each header carries its own, exactly as on the rail. A single

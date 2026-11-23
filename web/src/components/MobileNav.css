@@ -71,3 +71,24 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* The list's bar is the app's top bar here: the title takes the slack, so
+   search and settings sit together against the trailing edge. */
+.mobile-chat-list .navtree-bar-wsname {
+  flex: 1;
+}
+.mobile-chat-list .navtree-bar .settings-wrap {
+  flex: 0 0 auto;
+  height: auto;
+  align-items: center;
+}
+/* The gear wears the bar's own icon shape, beside the search glyph — not the
+   chrome bar's full-height, hairline-divided cell it wears elsewhere. */
+.mobile-chat-list .navtree-bar .icon-btn {
+  inline-size: 40px;
+  block-size: 40px;
+  margin-inline: -8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--fg-dim);
+}

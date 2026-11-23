@@ -5,6 +5,7 @@ import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
 import { useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { NavTree } from './NavTree';
+import { SettingsMenu } from './SettingsMenu';
 import { StatusMark } from './StatusMark';
 import './MobileNav.css';
 
@@ -62,12 +63,16 @@ export function MobileChatList({
       }}
     >
       {visible && <ListTitle />}
-      {/* Room for the header area the list will grow (the way Slack puts
-          things above its conversation list) goes HERE, above the tree. */}
+      {/* ONE ROW OF CHROME. The tree's own bar — "Chats", search — is the
+          top bar here: AppLayout renders no brand bar on the list, and the
+          settings that bar carried ride this one instead. The header area the
+          list will grow (the way Slack puts things above its conversation
+          list) belongs to this same region, not to a strip above it. */}
       <NavTree
         variant="sheet"
         activeWorkspaceSlug={activeWorkspaceSlug}
         activeTabSlug={activeTabSlug}
+        barEnd={<SettingsMenu />}
       />
     </div>
   );

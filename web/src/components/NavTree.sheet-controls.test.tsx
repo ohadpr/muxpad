@@ -203,6 +203,44 @@ describe('the rail’s search is a button that opens the palette', () => {
   });
 });
 
+describe('the phone’s list is every workspace and its chats, in one bar of chrome', () => {
+  it('renders EVERY workspace, in order — not just the one you are in', () => {
+    const box = mount('sheet');
+    const names = [...box.querySelectorAll('.navtree-ws-row')].map((r) => r.textContent ?? '');
+    expect(names).toHaveLength(3);
+    expect(names[0]).toContain('Personal');
+    expect(names[1]).toContain('Acme');
+    expect(names[2]).toContain('Acmebot');
+  });
+
+  it('opens the active workspace and leaves the others collapsed as group headers', () => {
+    const box = mount('sheet');
+    const expanded = [...box.querySelectorAll('.navtree-ws-row button[aria-expanded]')]
+      .filter((b) => /^(Expand|Collapse) /.test(b.getAttribute('aria-label') ?? ''))
+      .map((b) => b.getAttribute('aria-expanded'));
+    expect(expanded).toEqual(['true', 'false', 'false']);
+  });
+
+  it('puts the app’s own controls in the list’s bar, so there is one row of chrome', () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => {
+      root?.render(
+        <NavTree
+          activeWorkspaceSlug="personal"
+          activeTabSlug="p1"
+          variant="sheet"
+          barEnd={<button type="button" data-gear="" />}
+        />,
+      );
+    });
+    const bar = host.querySelector('.navtree-bar');
+    expect(bar?.querySelector('[aria-label="Search chats"]')).not.toBeNull();
+    expect(bar?.querySelector('[data-gear]')).not.toBeNull();
+  });
+});
+
 describe('the sheet’s magnifier opens the palette instead of a field', () => {
   it('opens the palette and dismisses the sheet, without ever drawing a field', async () => {
     const onNavigate = vi.fn();
