@@ -465,12 +465,18 @@
   --nt-child-name-x: calc(var(--nt-rail-lead) + 8px + var(--nt-rail-emoji) + var(--nt-rail-gap));
   --nt-rail-lead: 14px;
   --nt-rail-trail: 12px;
-  --nt-rail-emoji: 20px;
+  --nt-rail-emoji: 22px;
   --nt-rail-gap: 8px;
-  /* Exactly the touch floor. Not a floor with slack above it — one number, so
-     the list has no rhythm to lose. */
-  --nt-rail-h: 44px;
-  --nt-row-tab: 44px;
+  /* ONE NUMBER, so the list has no rhythm to lose — and it is 48, not the 44px
+     touch floor it was. "On mobile the chat list view the fonts are just a tad
+     too small": the list is a full-screen destination, not the desktop rail in
+     a narrow window, and its names went 15 → 17px. A 17px name in a 44px row
+     reads cramped, so the row follows the type by 4px. The cost, measured at
+     390×844: the list's 740px viewport held 16 rows and now holds 15. One row
+     a screen, against Slack's mobile list as the reference — its names are
+     17pt too. */
+  --nt-rail-h: 48px;
+  --nt-row-tab: 48px;
   --nt-hit: 32px;
   --nt-icon-h: 20px;
   --nt-chip: 24px;
@@ -479,7 +485,7 @@
   /* What a swiped row slides over — see SwipeRow.css. The rail's ground: the
      phone's list IS the rail (MobileNav.css). */
   --swipe-surface: var(--rail-surface);
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
 }
 
 /* ─── Section header — DELETED ────────────────────────────────────────────
@@ -3399,7 +3405,8 @@ body.sidenav-resizing iframe {
      defect); with the band square there is nothing to leak through. */
   border-radius: 0;
   color: var(--fg);
-  font-weight: 400;
+  /* 500: heavy enough to be the page, with 700 still a clear step above it. */
+  font-weight: 500;
 }
 /* ── THE PINNED MARK ON A SHEET ROW ─────────────────────────────────────────
    The same 2px accent bar the desktop row wears, in the same channel, with two
@@ -3486,8 +3493,8 @@ body.sidenav-resizing iframe {
   block-size: var(--nt-rail-emoji);
   display: inline-grid;
   place-items: center;
-  --chatchip-glyph: 17px;
-  --chatchip-glyph-last: 15px;
+  --chatchip-glyph: 19px;
+  --chatchip-glyph-last: 17px;
   position: relative;
   inset-block-start: -1px;
   /* Above the stretched link below, or tapping the emoji navigates instead of
@@ -3583,12 +3590,43 @@ body.sidenav-resizing iframe {
 }
 .navtree[data-variant="sheet"] .navtree-tab-link .navtree-name-text {
   display: block;
+  /* 17px — see --nt-rail-h. */
   /* Alignment is NOT pinned here, unlike the desktop rail's `text-align: left`
      — the box has no slack to align inside, so pinning it would be a no-op
      that hid the real mechanism. */
   text-align: unset;
+  font-size: 1.0625rem;
+  line-height: 1.375rem;
+}
+
+/* ─── THE PHONE'S TYPE SCALE: SIZE AND WEIGHT ARE THE HIERARCHY ─────────────
+   Every role steps up with the names rather than leaving them alone at the
+   desktop's sizes, and the steps BETWEEN roles are what separates them — not
+   fading. A read name is 17/500 and an unread one 17/700; an older chat steps
+   DOWN a size as well as a rung of ink (15/400), so retired rows recede by
+   being smaller, which a list of a thousand chats needs to scan. The section
+   header stays a caps label a size under the names. None of this reaches the
+   desktop rail: the sheet only mounts under MOBILE_BREAKPOINT (AppLayout's
+   useMediaQuery), so `[data-variant="sheet"]` is already the phone. */
+.navtree[data-variant="sheet"] .navtree-ws-row .navtree-name-text {
+  font-size: 0.8125rem;
+  letter-spacing: 0.1em;
+}
+.navtree[data-variant="sheet"]
+  .navtree-done-head
+  ~ .navtree-tab-row:not([data-active="true"])
+  .navtree-name-text {
   font-size: 0.9375rem;
-  line-height: 1.25rem;
+  font-weight: 400;
+}
+.navtree[data-variant="sheet"] .navtree-done-head {
+  font-size: 0.9375rem;
+}
+.navtree[data-variant="sheet"] .navtree-ws-count {
+  font-size: 0.75rem;
+}
+.navtree[data-variant="sheet"] .navtree-foot-link {
+  font-size: 1.0625rem;
 }
 /* THE STRETCHED LINK. The name's box now stops at its text, which would leave
    most of a 390px row untappable — the row IS the target on a thumb surface.

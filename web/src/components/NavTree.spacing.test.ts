@@ -661,23 +661,28 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
   // tokens describe it completely.
   const ROW = () => ruleBody(NAV_CSS, SHEET_ROW);
 
-  it('declares exactly the four numbers, and they are 14 / 20 / 8 / 12', () => {
+  it('declares exactly the four numbers, and they are 14 / 22 / 8 / 12', () => {
     const t = tokensOf(NAV_CSS, '.navtree[data-variant="sheet"]');
     expect({
       lead: resolve(t['--nt-rail-lead'] as string, SHEET),
       emoji: resolve(t['--nt-rail-emoji'] as string, SHEET),
       gap: resolve(t['--nt-rail-gap'] as string, SHEET),
       trail: resolve(t['--nt-rail-trail'] as string, SHEET),
-    }).toEqual({ lead: 14, emoji: 20, gap: 8, trail: 12 });
+      // 22, not 20, since the phone's type went up a step (17px names): the
+      // emoji is the row's other hard edge and scales with it.
+    }).toEqual({ lead: 14, emoji: 22, gap: 8, trail: 12 });
   });
 
-  it('the row is EXACTLY 44px — the touch floor, and not a floor with slack', () => {
+  it('the row is EXACTLY 48px — one number, and not a floor with slack', () => {
     // NavTree.spacing's old sheet arm pinned 44 as a MINIMUM under a 46px
     // nominal row, so one-line and two-line rows had different leading. There
     // is one row shape now, so there is one number: block-size and
     // min-block-size are both it, and it is the floor exactly.
     const h = resolve(SHEET['--nt-rail-h'] as string, SHEET);
-    expect(h).toBe(44);
+    // 48, not the 44px touch floor it was: the names went 15 → 17px ("the
+    // fonts are just a tad too small") and the row follows the type. Still
+    // one number — that is what this test is for.
+    expect(h).toBe(48);
     expect(resolve(decl(ROW(), 'block-size'), SHEET)).toBe(h);
     expect(resolve(decl(ROW(), 'min-block-size'), SHEET)).toBe(h);
     // Nothing may put vertical padding back on it — that is what used to make
@@ -701,7 +706,7 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     // one) and an auto box moves the name's x a pixel or two per row.
     const icon = ruleBody(NAV_CSS, '.navtree[data-variant="sheet"] .navtree-tab-icon');
     expect(decl(icon, 'flex')).toBe('0 0 var(--nt-rail-emoji)');
-    expect(resolve(decl(icon, 'inline-size'), SHEET)).toBe(20);
+    expect(resolve(decl(icon, 'inline-size'), SHEET)).toBe(22);
     // The plate is deleted. It is load-bearing on the rail (emoji ink coverage
     // runs 11%–48%, so a glyph's edge is not a column edge) and it is a mark on
     // EVERY row, which is the one thing this list refuses.
@@ -721,8 +726,9 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     // 17/20 and 15/20 are A2's 20/24 and 18/24 at this surface's scale — and 17px
     // is the size this sheet's emoji has always rendered at, so convergence
     // changes nothing visible on a fresh row and adds the clock to an aged one.
-    expect(decl(icon, '--chatchip-glyph')).toBe('17px');
-    expect(decl(icon, '--chatchip-glyph-last')).toBe('15px');
+    // 19/17 in the 22px box since the type step — the same 2px inset as before.
+    expect(decl(icon, '--chatchip-glyph')).toBe('19px');
+    expect(decl(icon, '--chatchip-glyph-last')).toBe('17px');
     // RESTATED, not inherited, and that is the point: `.chatchip` and
     // `.navtree-tab-icon` are both one class, so which display wins would be
     // decided by the order two stylesheets happen to be bundled in. This rule
@@ -731,11 +737,11 @@ describe('the MOBILE RAIL — a flex line, and its four numbers', () => {
     expect(decl(icon, 'place-items')).toBe('center');
   });
 
-  it('so every name starts at 42px, on every row, in every script', () => {
-    expect(chatNameLeft()).toBe(42);
+  it('so every name starts at 44px, on every row, in every script', () => {
+    expect(chatNameLeft()).toBe(44);
   });
 
-  it('there is no leading disclosure track left to push that 42 anywhere', () => {
+  it('there is no leading disclosure track left to push that 44 anywhere', () => {
     // It used to be charged to every row — chevron-less rows carried an
     // identical-width spacer to keep the column — and it put the emoji, the
     // rail's one hard leading edge, 24px in.
