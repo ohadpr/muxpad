@@ -1,5 +1,5 @@
 import type { PaneStatus, Workspace } from '@muxpad/shared';
-import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
 import {
   type ReactNode,
   useCallback,
@@ -265,6 +265,21 @@ function SectionBar({
           <span className="mcl-tab-label">{SECTION_LABEL[s]}</span>
         </button>
       ))}
+      {/* ─── CARDS, AND WHY IT IS NOT A SECTION ──────────────────────────
+          The four above switch which VIEW this list is showing; the URL does
+          not change and `ChatSection` is their union. Cards is a PAGE at
+          /cards, so putting it in that union would mean every switch over a
+          section having to handle a value that is not one.
+          It is a <Link> for the same reason the desktop rail's page entries
+          are: a real href gives long-press "open in new tab" and the browser's
+          own affordances, with no handler to write. Fifth tab on a 390px
+          phone is ~78px a column, which is what Slack ships. */}
+      <Link className="mcl-tab" to="/cards" activeProps={{ 'aria-current': 'page' }}>
+        <span className="mcl-tab-icon">
+          <NavGlyph name="cards" size={24} weight={2} className="mcl-tab-glyph" />
+        </span>
+        <span className="mcl-tab-label">Cards</span>
+      </Link>
     </nav>
   );
 }
