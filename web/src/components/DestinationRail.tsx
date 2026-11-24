@@ -35,7 +35,8 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
   const go = (dest: Destination) => {
     const act = destinationAction(dest, pathname);
     if (act.view) setRailView(act.view);
-    if (act.to === '/artifacts' || act.to === '/apps') void navigate({ to: act.to });
+    if (act.to === '/cards' || act.to === '/artifacts' || act.to === '/apps')
+      void navigate({ to: act.to });
     else if (act.to === 'back-to-work' && lastWsSlug)
       // The workspace's own redirect lands on its last-visited chat.
       void navigate({ to: '/w/$wsSlug', params: { wsSlug: lastWsSlug } });

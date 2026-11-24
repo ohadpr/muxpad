@@ -3,6 +3,7 @@ import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
 import { ActivityView } from './pages/ActivityView';
+import { CardsView } from './pages/CardsView';
 import { ChatListFallback } from './pages/ChatListFallback';
 import { DocView } from './pages/DocView';
 import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
@@ -107,6 +108,15 @@ const docRoute = createRoute({
 // the URL is in transcripts, in published reports and in muscle memory, and a
 // 404 on it would teach nothing. It lands on Artifacts because that is the
 // half people arrive looking for ("link to the thing I made").
+// /cards — every pinned value on the install, across every chat. The fourth
+// workspace-less destination, built exactly as Artifacts and Apps are
+// (lib/shell-routes). See pages/CardsView for why a card needs a page at all.
+const cardsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/cards',
+  component: CardsView,
+});
+
 const artifactsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/artifacts',
@@ -153,6 +163,7 @@ const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     rootRedirectRoute,
     chatListRoute,
+    cardsRoute,
     artifactsRoute,
     appsRoute,
     activityRoute,

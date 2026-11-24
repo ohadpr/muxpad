@@ -10,18 +10,28 @@ import type { RailView } from './chat-sections';
  *                              workspace a section; Unread and Activity are
  *                              lists that SPAN EVERY WORKSPACE, each row
  *                              naming its own.
- *   artifacts · apps           PAGES (routes) that belong to no workspace,
+ *   cards · artifacts · apps   PAGES (routes) that belong to no workspace,
  *                              rendered beside the kept-alive workspace hosts
  *                              (lib/shell-routes).
- * They share a strip because they are the five things he navigates BY; the
+ * They share a strip because they are the things he navigates BY; the
  * workspaces are sections in the list, not entries here.
+ *
+ * SIX now, not the five he first named: Cards was added after the fact that
+ * seven cards were living in seven different chats, each only visible from
+ * inside the one that owned it — see pages/CardsView.
  */
-export type Destination = 'home' | 'unread' | 'activity' | 'artifacts' | 'apps';
+export type Destination = 'home' | 'unread' | 'activity' | 'cards' | 'artifacts' | 'apps';
 
 export const DESTINATIONS: readonly Destination[] = [
   'home',
   'unread',
   'activity',
+  // CARDS SITS WITH THE PAGES, not with the views above it. A card is a thing
+  // muxpad is holding for you, like an artifact or an app — and like them it
+  // belongs to no workspace. It goes FIRST of the three because it is the one
+  // that changes on its own: artifacts and apps are where you go to find
+  // something you made, this is where you go to see what is true now.
+  'cards',
   'artifacts',
   'apps',
 ];
@@ -30,6 +40,7 @@ export const DESTINATION_LABEL: Record<Destination, string> = {
   home: 'Home',
   unread: 'Unread',
   activity: 'Activity',
+  cards: 'Cards',
   artifacts: 'Artifacts',
   apps: 'Apps',
 };
@@ -42,6 +53,7 @@ export const DESTINATION_LABEL: Record<Destination, string> = {
  */
 export function currentDestination(pathname: string, view: RailView): Destination {
   const p = pathname.replace(/\/+$/, '') || '/';
+  if (p === '/cards') return 'cards';
   if (p === '/artifacts') return 'artifacts';
   if (p === '/apps' || p.startsWith('/hosted')) return 'apps';
   if (p === '/activity') return 'activity';
@@ -58,9 +70,10 @@ export function currentDestination(pathname: string, view: RailView): Destinatio
 export function destinationAction(
   dest: Destination,
   pathname: string,
-): { view?: RailView; to?: '/artifacts' | '/apps' | 'back-to-work' } {
+): { view?: RailView; to?: '/cards' | '/artifacts' | '/apps' | 'back-to-work' } {
+  if (dest === 'cards') return { to: '/cards' };
   if (dest === 'artifacts') return { to: '/artifacts' };
   if (dest === 'apps') return { to: '/apps' };
-  const onPage = /^\/(artifacts|apps|activity|hosted)(\/|$)/.test(pathname);
+  const onPage = /^\/(cards|artifacts|apps|activity|hosted)(\/|$)/.test(pathname);
   return onPage ? { view: dest, to: 'back-to-work' } : { view: dest };
 }

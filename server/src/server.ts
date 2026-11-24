@@ -28,7 +28,7 @@ import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { bootRoutes } from './routes/boot.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
-import { cardsRoutes } from './routes/cards.js';
+import { allCardsRoutes, cardsRoutes } from './routes/cards.js';
 import { chatActionsRoutes } from './routes/chat-actions.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
@@ -403,6 +403,9 @@ export function createApp(deps: AppDeps): Hono {
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
   // because a card belongs to a chat; see routes/cards.ts.
   app.route('/api/tabs', cardsRoutes(resolved));
+  // Every card on the install, across every chat — the cards page. See
+  // allCardsRoutes for why it is not a child of /api/tabs.
+  app.route('/api/cards', allCardsRoutes(resolved));
   app.route('/api/tabs', tasksRoutes({ db: resolved.db }));
   app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));

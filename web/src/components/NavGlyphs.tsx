@@ -13,7 +13,14 @@ import type { ReactNode } from 'react';
  * neighbours. currentColor only — each surface decides the ink and the weight
  * (see the callers), the drawing never does.
  */
-export type NavGlyphName = 'home' | 'unread' | 'activity' | 'artifacts' | 'apps' | 'search';
+export type NavGlyphName =
+  | 'home'
+  | 'unread'
+  | 'activity'
+  | 'cards'
+  | 'artifacts'
+  | 'apps'
+  | 'search';
 
 export function NavGlyph({
   name,
@@ -46,6 +53,17 @@ export function NavGlyph({
 }
 
 const GLYPHS: Record<NavGlyphName, ReactNode> = {
+  // Two cards, the front one offset — "values I have pinned somewhere". A
+  // deck rather than a single rectangle, which at 22px is indistinguishable
+  // from a note, a window or a stop button. The inner line is the one row of
+  // content a card is allowed to be.
+  cards: (
+    <>
+      <rect x="3" y="7" width="14" height="11" rx="2" />
+      <path d="M8 4.5h11a2 2 0 0 1 2 2V15" />
+      <path d="M6.5 12.5h7" />
+    </>
+  ),
   // A house: pitched roof, a door.
   home: (
     <>

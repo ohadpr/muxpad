@@ -30,7 +30,9 @@ import { Markdown } from './ChatMarkdown';
  *  the thing you are reading off the screen. */
 const CARD_MAX_H = 600;
 
-function shortAge(ms: number): string {
+/** Exported for the cards PAGE, which answers the same question about the
+ *  same value and must not answer it in different words. */
+export function shortAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 45) return `${s}s`;
   const m = Math.round(s / 60);
@@ -396,7 +398,12 @@ function HtmlCard({
   );
 }
 
-function CardBody({
+/**
+ * Exported for the cards PAGE. The page lists the same cards this component
+ * pins, and a second renderer for them would be two things to keep agreeing
+ * about an html card's sandbox — which is the part that must never drift.
+ */
+export function CardBody({
   card,
   peek,
   onFoldable,

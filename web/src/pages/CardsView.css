@@ -1,0 +1,172 @@
+/* ──────────────────────────────────────────────────────────────────────
+   CardsView — every pinned value on one page. The frame only; the card's
+   own body is ChatCards' (chat-card-*), because an html card is a
+   self-measuring sandboxed frame and there must be exactly one of those.
+   ────────────────────────────────────────────────────────────────────── */
+
+/* A GRID THAT DOES NOT PRETEND TO BE FULL.
+   This page is five tiles on this install and may be three on another, so
+   `auto-fill` would stretch them across a 1600px window and leave a row of
+   very wide, very short boxes — a dashboard that looks like it failed to
+   load. `auto-fit` with a max column and the grid itself centred keeps a
+   tile tile-sized whatever the count, and a short page reads as a short
+   page rather than a broken wide one. */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 340px));
+  justify-content: start;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.cards-tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+/* OVERDUE IS A BORDER, NOT A WASH. The tile's interior belongs to whoever
+   wrote the card — tinting the background would recolour somebody else's
+   chart to say something about its clock. The edge is muxpad's. */
+.cards-tile.-stale {
+  border-color: color-mix(in srgb, var(--status-working) 60%, var(--border));
+}
+
+.cards-tile-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 12px 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+/* The card's NAME is shown here and deliberately not in the chat (see
+   ChatCards: there it is the identity, not a title, and it cost a line).
+   On a page of other people's cards it is the only thing that says which
+   card you are looking at before you have read it. */
+.cards-tile-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--chrome-font);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cards-tile-age {
+  flex: 0 0 auto;
+  font-family: var(--chrome-font);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+}
+.cards-tile-age.-stale {
+  color: var(--status-working);
+  font-weight: 700;
+}
+.cards-tile-overdue {
+  letter-spacing: 0.02em;
+}
+
+/* THE BODY IS NOT HEIGHT-CAPPED THE WAY THE CHAT'S IS. A pinned card is
+   capped because it sits above the conversation and would push it off the
+   screen; here the cards ARE the page, so a tall one is allowed to be tall
+   and the grid flows around it. */
+.cards-tile-body {
+  padding: 10px 12px;
+}
+.cards-tile-body .chat-card-text,
+.cards-tile-body .chat-card-md {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.cards-tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 9px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+/* THE ONLY NAVIGATION ON THE TILE. Not the whole tile: the body is an html
+   card's own frame, and a card that contains links would have them fighting
+   a parent that navigates somewhere else on every click. */
+.cards-tile-chat {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cards-tile-chat:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.cards-tile-ws {
+  color: var(--fg-faint);
+}
+.cards-tile-clear {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+.cards-tile-clear:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.cards-tile-clear:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ─── The archive ────────────────────────────────────────────────────────
+   Cards whose chat has left the live list. Quieter, and BELOW — but present,
+   because the reason they pile up is that nobody can see them. */
+.cards-archive {
+  margin-top: 26px;
+}
+.cards-archive-head {
+  margin: 0 0 10px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--fg-dim);
+}
+.cards-archive-note {
+  font-weight: 400;
+  color: var(--fg-faint);
+}
+.cards-grid.-archive .cards-tile {
+  background: transparent;
+}
+/* Dimmed until you go for one. Dimming a card dims somebody's chart, which
+   is the point here — these are not values anyone is watching — but it must
+   come back the moment it is the thing being looked at. */
+.cards-grid.-archive .cards-tile {
+  opacity: 0.62;
+  transition: opacity 120ms ease;
+}
+.cards-grid.-archive .cards-tile:hover,
+.cards-grid.-archive .cards-tile:focus-within {
+  opacity: 1;
+}
+
+@media (max-width: 760px) {
+  .cards-grid {
+    grid-template-columns: 1fr;
+  }
+}

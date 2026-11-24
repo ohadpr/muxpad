@@ -2,6 +2,7 @@ import {
   CARD_MAX_BYTES,
   CARD_MAX_PER_TAB,
   type CardFormat,
+  type CardWithChat,
   type ChatCard,
   isValidCardName,
 } from '@muxpad/shared';
@@ -129,6 +130,55 @@ export class TabCardStore {
       .prepare(`SELECT ${COLUMNS} FROM tab_cards WHERE tab_id = ? ORDER BY created_at ASC, id ASC`)
       .all(tabId) as RawCard[];
     return rows.map(toCard);
+  }
+
+  /**
+   * EVERY card on the install, with the chat that owns it — the cards page.
+   *
+   * One query with a join, not a list of chats and a `list()` each: the
+   * workspace list already measured what the second shape costs here (1,038
+   * `listByTab` calls for one 763-byte answer), and this page would have made
+   * the same mistake at a smaller scale.
+   *
+   * NEWEST FIRST, because the page is read as "what has happened", and an
+   * ordering by creation would put a card you set this morning under six you
+   * forgot about. A chat with no row (deleted out from under its cards) is
+   * dropped by the inner join rather than rendered as an orphan nobody can
+   * navigate to.
+   */
+  listAll(): CardWithChat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${COLUMNS.split(', ')
+          .map((c) => `c.${c}`)
+          .join(', ')},
+                t.name AS chat_name, t.slug AS chat_slug, t.retired_at AS chat_retired_at,
+                w.slug AS ws_slug, w.name AS ws_name
+           FROM tab_cards c
+           JOIN tabs t ON t.id = c.tab_id
+           JOIN workspaces w ON w.id = t.workspace_id
+          ORDER BY c.updated_at DESC, c.id DESC`,
+      )
+      .all() as Array<
+      RawCard & {
+        chat_name: string | null;
+        chat_slug: string;
+        chat_retired_at: number | null;
+        ws_slug: string;
+        ws_name: string | null;
+      }
+    >;
+    return rows.map((r) => ({
+      ...toCard(r),
+      chat: {
+        tabId: r.tab_id,
+        name: r.chat_name ?? '',
+        slug: r.chat_slug,
+        workspaceSlug: r.ws_slug,
+        workspaceName: r.ws_name ?? '',
+        retired: r.chat_retired_at !== null,
+      },
+    }));
   }
 
   count(tabId: string): number {

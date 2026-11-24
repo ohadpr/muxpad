@@ -9,14 +9,29 @@ import {
 } from './desktop-destinations';
 
 describe('the destination rail', () => {
-  it('holds the five, in his order, each with its word', () => {
+  it('holds them in his order, each with its word', () => {
+    // The five he named, plus Cards — added later, and placed at the head of
+    // the three PAGE entries rather than at the end of the strip: the views
+    // above are the chat list, and Cards belongs with the things that belong
+    // to no workspace. It leads them because it is the one that changes on
+    // its own.
     expect(DESTINATIONS.map((d) => DESTINATION_LABEL[d])).toEqual([
       'Home',
       'Unread',
       'Activity',
+      'Cards',
       'Artifacts',
       'Apps',
     ]);
+  });
+
+  it('Cards is a page, so standing on it is where you are', () => {
+    // A page entry wins over the list's view beside it — the same rule
+    // Artifacts and Apps follow, and the reason a view entry clicked FROM a
+    // page also navigates back to the work.
+    expect(currentDestination('/cards', 'home')).toBe('cards');
+    expect(destinationAction('cards', '/w/personal/t/main')).toEqual({ to: '/cards' });
+    expect(destinationAction('home', '/cards')).toEqual({ view: 'home', to: 'back-to-work' });
   });
 });
 
