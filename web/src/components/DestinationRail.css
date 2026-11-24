@@ -186,15 +186,40 @@
    width of the chat list. At 60px of usable rail the popover's
    `width: max(272px, 100%)` resolves to 272 and spills rightward over the
    list, which is the same direction it always spilled. */
+/* ─── ROOM, BUT NOT AS MUCH AS AN ENTRY ────────────────────────────────
+   First pass packed all three into about 50px: two 28px buttons touching,
+   and a 10px date immediately under them. "A bit less dense — don't turn it
+   into something like the icon row at the top, but no need to condense it to
+   death."
+   So: air between the two buttons, a real gap before the date, and padding at
+   the floor so the date is not sitting on the rail's edge. What it must NOT
+   grow into is a destination — no 36px plates, no labels, no hover fills the
+   size of an entry's. These three are controls you reach for occasionally;
+   the five above are where you GO, and the difference in weight is the thing
+   that says so. */
 .dest-rail-foot {
   position: relative;
-  margin-top: auto;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding-top: 8px;
+  gap: 6px;
+  padding-top: 12px;
+  padding-bottom: 8px;
+  /* FULL RAIL WIDTH. The rail pads 4px either side for the entries, which
+     left the foot 60px to fit two buttons and a ten-character date into —
+     the reason the first pass was packed. Cancelling that padding gives it
+     the whole 68px, which is the difference between 28px buttons 8px apart
+     and 26px buttons touching. It also lets the hairline run edge to edge,
+     so it reads as the rail's own division rather than a short line floating
+     in the middle of it. */
+  align-self: stretch;
+  /* `auto` TOP, and the shorthand is why this is spelled out: a plain
+     `margin: 0 -4px` after a `margin-top: auto` silently resets it, and the
+     foot rode up to the middle of the rail. */
+  margin: auto -4px 0;
+  padding-left: 2px;
+  padding-right: 2px;
   /* The hairline says "this is not a sixth destination". Same mix as the
      rail's own right edge, so the two lines are one family. */
   border-top: 1px solid color-mix(in srgb, var(--rail-ink) 14%, transparent);
@@ -206,6 +231,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* They were edge to edge, which read as one two-part control rather than
+     two. 6px is enough to separate them and still leaves both inside the
+     rail's 60px. */
+  gap: 8px;
 }
 /* `.icon-btn` is written against the APP's tokens (--fg-faint, --border,
    --bg-hover). On the rail island those are the wrong side of the palette —
@@ -233,10 +262,10 @@
    have to lean in for. It is a LINK to the repo, as it was in the footer. */
 .dest-rail-build {
   display: block;
-  padding: 1px 0 2px;
+  padding: 0;
   color: var(--rail-ink-dim);
   font-family: var(--chrome-font);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
   line-height: 1.2;
