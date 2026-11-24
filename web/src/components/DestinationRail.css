@@ -79,6 +79,12 @@
 .dest-rail-item[data-current="true"] .dest-rail-icon {
   background: color-mix(in srgb, var(--rail-ink) 16%, transparent);
 }
+/* THE ICON IS INKED ON ITS OWN, at the rail's full ink whether or not the
+   entry is current. The label beside it keeps the item's quieter ink; what
+   says "current" is the pill and the label's weight and ink, not the icon. */
+.dest-rail-glyph {
+  color: var(--rail-ink);
+}
 .dest-rail-label {
   font-size: 0.6875rem;
   font-weight: 600;

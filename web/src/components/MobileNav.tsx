@@ -20,6 +20,7 @@ import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { PreviewList } from './ChatPreviewList';
 import { ChatSearch } from './CommandPalette';
+import { NavGlyph } from './NavGlyphs';
 import { NavContextMenu, NavTree, createHouseTab } from './NavTree';
 import { SettingsMenu } from './SettingsMenu';
 import { StatusMark } from './StatusMark';
@@ -268,55 +269,19 @@ function SectionBar({
   );
 }
 
+/**
+ * The bar's glyphs are the DESKTOP RIBBON'S drawings (NavGlyphs) — "copy the
+ * ribbon icon design from the desktop app to the mobile app" — so Home, Unread
+ * and Activity are the same glyphs in both places, and Search is drawn into
+ * the same family. The bar keeps its own scale and arrangement.
+ *
+ * The current tab used to FILL its glyph. The ribbon's set is a line set and
+ * has no filled forms (a filled pulse is a scribble, a filled tray loses its
+ * slot), so the current tab says so in WEIGHT instead — a heavier stroke —
+ * beside the label's ink and the colour it already had.
+ */
 function SectionIcon({ section, filled }: { section: ChatSection; filled: boolean }) {
-  const stroke = { stroke: 'currentColor', strokeWidth: 1.8, strokeLinejoin: 'round' as const };
-  const fill = filled ? 'currentColor' : 'none';
-  switch (section) {
-    case 'home':
-      return (
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 10.5 12 4l8 6.5V20h-5.5v-5.5h-5V20H4z" fill={fill} {...stroke} />
-        </svg>
-      );
-    case 'unread':
-      return (
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M4 6.5h16v10.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"
-            fill={filled ? 'currentColor' : 'none'}
-            {...stroke}
-          />
-          <path
-            d="M4 7l8 6 8-6"
-            fill="none"
-            {...stroke}
-            stroke={filled ? 'var(--bg-chrome)' : 'currentColor'}
-          />
-        </svg>
-      );
-    case 'activity':
-      return (
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"
-            fill={fill}
-            {...stroke}
-          />
-        </svg>
-      );
-    case 'search':
-      return (
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="11" cy="11" r="6" fill="none" {...stroke} strokeWidth={filled ? 2.6 : 1.8} />
-          <path
-            d="M15.5 15.5 20 20"
-            stroke="currentColor"
-            strokeWidth={filled ? 2.6 : 1.8}
-            strokeLinecap="round"
-          />
-        </svg>
-      );
-  }
+  return <NavGlyph name={section} size={24} weight={filled ? 2.6 : 2} className="mcl-tab-glyph" />;
 }
 
 /**

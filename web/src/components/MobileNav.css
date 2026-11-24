@@ -437,6 +437,14 @@
   position: relative;
   display: inline-flex;
 }
+/* The glyph carries FULL ink at rest; the label keeps the tab's quieter ink.
+   A glyph is not text — its thin, anti-aliased stroke at the label's colour
+   read fainter than the word under it — and the current tab is told apart by
+   its label's ink and its glyph's weight (SectionIcon), not by dimming the
+   others' icons. */
+.mcl-tab-glyph {
+  color: var(--fg);
+}
 .mcl-tab-label {
   font-size: 0.75rem;
   font-weight: 600;
