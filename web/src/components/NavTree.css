@@ -319,7 +319,15 @@
      gap could never do it, because a FIXED track does not grow for its item's
      margin. Deriving it removes the whole class of bug: there is no second
      number left to disagree with the first. */
-  --nt-col-icon: calc(var(--nt-chip) + var(--nt-air));
+  /* ── AND THE ICON END IS ONE STEP TIGHTER: the GUTTER, not the air ──────
+     "Spacing between icons and chat names is just a tad too wide." Measured:
+     12px of air from the 24px chip to the name, and the emoji glyph sits
+     ~3px inside its chip on each side, so the eye saw ~15px between the icon
+     and its word. The chip and the name are one object — the scale's own
+     word for that is the CONTENT step — so this track takes 8px. The STATE
+     chip at the row's tail keeps its air; only the head moves, and every
+     name still starts on one x because the track is still derived. */
+  --nt-col-icon: calc(var(--nt-chip) + var(--nt-gutter));
   /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
      that has to be a fixed track; the height must not exceed the text line, or
      a one-line row becomes icon-driven and its single line floats with more
@@ -1765,12 +1773,13 @@
      ITS CARET SITS IN THE CHAT ICON COLUMN and its LABEL IN THE CHAT NAME
      COLUMN, because this is a row in that list — a disclosure for chats, not a
      second kind of header. The caret was already right at x=20; the label
-     landed at 42 where every chat name starts at 56, which is the 14px that
+     landed at 42 where every chat name started at 56 (52 since the icon
+     track took the gutter), which is the 14px that
      read as "not aligned". The first attempt at this moved the CARET to the
      workspace chevron's column instead, on the theory that one disclosure is
      like another — and it looked, correctly, glued to the left edge. */
   padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent));
-  gap: calc(56px - 35px);
+  gap: calc(52px - 35px);
   border: 0;
   background: none;
   font-family: inherit;

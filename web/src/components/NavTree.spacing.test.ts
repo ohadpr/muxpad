@@ -355,7 +355,7 @@ describe('gap 2 — the icon chip clears the name', () => {
     // The bug class, pinned: a literal track and a margin on the item are two
     // numbers that can disagree, and the margin is the one that loses.
     expect(decl(ruleBody(NAV_CSS, '.navtree'), '--nt-col-icon')).toBe(
-      'calc(var(--nt-chip) + var(--nt-air))',
+      'calc(var(--nt-chip) + var(--nt-gutter))',
     );
     // …and no variant may re-fix it.
     expect(tokensOf(NAV_CSS, '.navtree[data-variant="sheet"]')).not.toHaveProperty('--nt-col-icon');
@@ -373,19 +373,23 @@ describe('gap 2 — the icon chip clears the name', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the gap from the chip’s right edge to the name is one step of AIR', () => {
+  // ONE STEP TIGHTER, ON PURPOSE: it was the air (12px), and "spacing between
+  // icons and chat names is just a tad too wide" — the chip and its name are
+  // one object, which on this scale is the content step. Still a scale step,
+  // still derived; the state chip at the tail keeps its air.
+  it('the gap from the chip’s right edge to the name is one step of GUTTER', () => {
     // Rail only: the sheet's chat row has no icon TRACK at all now — its emoji
     // is a fixed flex item and the gap is the row's own `gap` property. See
     // the mobile-rail block at the bottom.
     for (const [name, t] of RAIL) {
       const track = resolve(t['--nt-col-icon'] as string, t);
       const chip = resolve(t['--nt-chip'] as string, t);
-      const air = resolve(t['--nt-air'] as string, t);
+      const gutter = resolve(t['--nt-gutter'] as string, t);
       expect({ name, gap: track - chip + columnGap('.navtree-tab-row', t) }).toEqual({
         name,
-        gap: air,
+        gap: gutter,
       });
-      expect(track - chip).toBeGreaterThanOrEqual(12);
+      expect(track - chip).toBe(8);
     }
   });
 
