@@ -292,7 +292,12 @@
   --rail-ink-faint: #7b82a0;
   --rail-hover: #404355;
   --rail-border: #484c5f;
-  --rail-seam: #4e5267;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #5f647c;
   --rail-accent: #8fb3ff;
   --rail-status-ready: #49c07d;
   --rail-status-working: #e8b34b;
@@ -336,7 +341,12 @@
   --rail-ink-faint: #a2a3a4;
   --rail-hover: #575960;
   --rail-border: #62636a;
-  --rail-seam: #696a71;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #7e8084;
   --rail-accent: #d0b3ff;
   --rail-status-ready: #50fa7b;
   --rail-status-working: #f1fa8c;
@@ -629,7 +639,12 @@
   --rail-ink-faint: #988f99;
   --rail-hover: #4f4466;
   --rail-border: #5a4f6e;
-  --rail-seam: #615672;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #756b80;
   --rail-accent: #c3b0ff;
   --rail-status-ready: #50fa7b;
   --rail-status-working: #f5c85a;
@@ -741,7 +756,12 @@
   --rail-ink-faint: #7ba39f;
   --rail-hover: #254b4e;
   --rail-border: #376a6c;
-  --rail-seam: #2a5457;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #58767b;
   --rail-accent: #ff2fd0;
   --rail-status-ready: #2bff9a;
   --rail-status-working: #ffb224;
@@ -1119,7 +1139,12 @@
   --rail-ink-faint: #9fbddb;
   --rail-hover: #27689f;
   --rail-border: #5491ca;
-  --rail-seam: #2a6099;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #5f88b6;
   --rail-accent: #ffcf6b;
   --rail-status-ready: #5ddba0;
   --rail-status-working: #ffcf6b;
