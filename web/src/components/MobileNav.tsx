@@ -435,7 +435,9 @@ export function MobileChatHeader({
         aria-label="Back to chats"
         title="Back to chats"
       >
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        {/* 20px, not 18: a bigger glyph is a bigger thing to aim AT, which
+            is the half of "hard to tap" that the hit box cannot fix. */}
+        <svg width="20" height="20" viewBox="0 0 18 18" aria-hidden="true">
           <path
             d="M11.5 3.5 L6 9 L11.5 14.5"
             stroke="currentColor"

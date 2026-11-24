@@ -54,8 +54,20 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* A full-height, thumb-wide target: this is the button pressed most. */
-  width: 44px;
+  /* ─── THE MOST-PRESSED BUTTON, AND IT WAS STILL HARD TO HIT ───────────
+     It was 44px, which clears Apple's 44pt minimum — and "I often find it
+     hard to tap that back button" was still right, because the number is
+     not the whole story when the target is in a CORNER. The box ran from
+     x=0, so the chevron inside it sat 13–31px from the left edge: you aim
+     at the glyph, the glyph hugs the edge, and a thumb coming in from the
+     left lands half of itself off the screen. The left edge is also where
+     iOS watches for its own interactive-pop gesture.
+     58px keeps the box starting at x=0 — no dead strip between the screen
+     edge and the button, which would be worse — and moves the GLYPH to
+     20–38px, clear of the edge, while making the box half again as large.
+     The title beside it is flex:1 and truncates, so the 14px comes out of
+     a name that was being cut off anyway. */
+  width: 58px;
   height: 100%;
   padding: 0;
   background: transparent;
