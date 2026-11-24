@@ -1777,9 +1777,17 @@
      track took the gutter), which is the 14px that
      read as "not aligned". The first attempt at this moved the CARET to the
      workspace chevron's column instead, on the theory that one disclosure is
-     like another — and it looked, correctly, glued to the left edge. */
-  padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent));
-  gap: calc(52px - 35px);
+     like another — and it looked, correctly, glued to the left edge.
+
+     THE CARET NOW TRAILS THE LABEL (see NavTree.tsx) because leading it put
+     a chevron one row above the next workspace header's chevron in nearly
+     the same column. The LABEL has not moved: what was the caret's 15px plus
+     the 17px gap after it is this padding's extra 32px, so the word still
+     starts in the chat-name column and the alignment the paragraph above
+     argues for is intact. The gap is now the space between the word and its
+     chevron. */
+  padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 32px);
+  gap: 5px;
   border: 0;
   background: none;
   font-family: inherit;
@@ -1968,7 +1976,9 @@
    control — it IS the done head, indented. */
 .navtree-done-head.-subs {
   padding-top: 6px;
-  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  /* The same +32px the head above carries, for the same reason: its caret
+     trails too, and the label keeps its indent. */
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2 + 32px);
   font-size: 0.75rem;
 }
 
@@ -3139,46 +3149,14 @@ body.sidenav-resizing iframe {
   justify-content: center;
 }
 
-.sidenav-footer {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  height: var(--chrome-h);
-  border-top: 1px solid var(--border);
-}
-.sidenav-build {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 12px;
-  color: var(--fg-dim);
-  font-family: var(--chrome-font);
-  font-size: 0.6875rem;
-  text-decoration: none;
-  transition: background 80ms ease, color 80ms ease;
-}
-.sidenav-build:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-  text-decoration: none;
-}
-/* Settings popover normally drops DOWN from the top bar; anchored to
-   the sidebar's foot it must open UP, with the sharp corner meeting
-   the gear plate below it. */
-.sidenav-footer .settings-popover {
-  top: auto;
-  bottom: 100%;
-  /* Anchor left and spill rightward over the workspace — right-anchored
-     it would overflow past the viewport's left edge (popover is wider
-     than the sidebar). */
-  right: auto;
-  left: 0;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 6px 6px 6px 0;
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
-}
+/* ─── NO `.sidenav-footer` ──────────────────────────────────────────────
+   The build stamp, the theme swatch and the gear closed this column with a
+   `--chrome-h` bar. They are at the foot of the destination rail now
+   (DestinationRail.css, .dest-rail-foot), so the list runs to the bottom of
+   the window.
+   Its `.settings-popover` rule went with it and is not missed: Settings has
+   been a portalled <dialog> since, and the popover it was positioning has no
+   markup left anywhere. */
 
 /* ─── Foot: Artifacts and Apps ─────────────────────────────────────────── */
 

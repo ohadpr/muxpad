@@ -10,7 +10,11 @@ import {
 import { setRailView, useRailView } from '../lib/rail-view';
 import { useChatCorpus } from '../lib/use-all-chats';
 import { NavGlyph } from './NavGlyphs';
+import { SettingsMenu } from './SettingsMenu';
+import { ThemeSwitch } from './ThemeSwitch';
 import './DestinationRail.css';
+
+const REPO_URL = 'https://github.com/ohadpr/muxpad';
 
 /**
  * THE LEFT RAIL — Home, Unread, Activity, Artifacts, Apps: an icon with its
@@ -78,6 +82,26 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
           </button>
         );
       })}
+      {/* ─── THE FOOT ────────────────────────────────────────────────────
+          The three controls that are about the APP rather than about any
+          conversation: what build this is, what it looks like, and the rest
+          of its settings. They were a bar across the bottom of the chat
+          list; see .dest-rail-foot for why they are here instead. */}
+      <div className="dest-rail-foot">
+        <div className="dest-rail-foot-row">
+          <ThemeSwitch />
+          <SettingsMenu />
+        </div>
+        <a
+          className="dest-rail-build"
+          href={REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`muxpad — build ${__MUXPAD_VERSION__}`}
+        >
+          {__MUXPAD_VERSION__}
+        </a>
+      </div>
     </nav>
   );
 }

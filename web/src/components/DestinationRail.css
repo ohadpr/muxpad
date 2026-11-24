@@ -33,9 +33,21 @@
      Declared as --bg-elev so the badge's ring reads this ground. */
   --bg-elev: color-mix(in srgb, var(--rail-ink) 7%, var(--rail-surface));
   background: var(--bg-elev);
-  /* No hairline on its edge: the tonal step IS the edge, and a line on top
-     of it drew a second divider into the corner where the header, this rail
-     and the chat list meet. */
+  /* ─── AND A HAIRLINE ON ITS RIGHT EDGE ────────────────────────────────
+     "use a slightly contrasting but not overdone vertical border line
+     between the list and icon row."
+     The tonal step alone was the edge for a while, and at 7% it is a quiet
+     one — on the lighter palettes the two columns read as one surface with a
+     smudge down it. So the step keeps the COLUMNS apart and this line says
+     where exactly.
+     Mixed from the rail's own ink at 14%, like everything else here, so it
+     follows the theme and stays under the chat list's own row dividers
+     rather than out-drawing them. The earlier objection to a line — that it
+     doubled up in the corner where the header, the rail and the list meet —
+     is answered by WHERE it starts: this element lives inside
+     `.sidenav-body`, which begins under the header's bottom rule, so the two
+     lines meet as a T instead of crossing. */
+  border-right: 1px solid color-mix(in srgb, var(--rail-ink) 14%, transparent);
 }
 .dest-rail-item {
   display: flex;
@@ -60,14 +72,21 @@
 }
 /* The icon sits on a pill; the CURRENT one's pill is filled, the way the
    chat list marks the row you are on — and the word goes to full ink. */
+/* SQUARE, not a lozenge. It was 40×30 — a shape wide enough to hold the
+   LABEL under it, which is not what it holds. A 22px glyph centred in a 4:3
+   plate has more air at its sides than over and under it, so the filled
+   current-item pill read as a stretched button rather than as the icon's own
+   tile; "make each icon wrapper container more square, it's better balance."
+   36×36 is the widest square the 68px rail fits with its padding, and the
+   label underneath is unaffected — it was never what set this width. */
 .dest-rail-icon {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 30px;
-  border-radius: 9px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   transition: background 120ms ease;
 }
 .dest-rail-item:hover .dest-rail-icon {
@@ -143,4 +162,88 @@
   position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* ─── THE RAIL'S FOOT: build, theme, settings ──────────────────────────────
+   "move the build-date, theme picker and settings icon to the icon row and
+   out of the chat list."
+
+   They were a `--chrome-h` bar across the bottom of the CHAT LIST, which put
+   three controls that are about the APP at the bottom of the one column that
+   is entirely about conversations — and cost the list a row of its height to
+   do it. The rail is where the app's own destinations already live, and it
+   has the room: the entries stop well short of the bottom on any screen that
+   can show five of them.
+
+   `margin-top: auto` on the first child pushes the group to the floor and
+   leaves the entries at the top, which is the arrangement both Slack and
+   every editor's activity bar settled on. The rail scrolls when it must; the
+   auto margin collapses first, so a short window loses the gap rather than
+   the gear.
+
+   POSITIONED, because `.themeswitch-pop` anchors to its offset parent and
+   opens upward — it was anchored to `.sidenav-footer`, which was the full
+   width of the chat list. At 60px of usable rail the popover's
+   `width: max(272px, 100%)` resolves to 272 and spills rightward over the
+   list, which is the same direction it always spilled. */
+.dest-rail-foot {
+  position: relative;
+  margin-top: auto;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 8px;
+  /* The hairline says "this is not a sixth destination". Same mix as the
+     rail's own right edge, so the two lines are one family. */
+  border-top: 1px solid color-mix(in srgb, var(--rail-ink) 14%, transparent);
+}
+/* Theme and settings sit side by side: two 16px glyphs are narrow enough to
+   share the rail's width, and stacking them would have pushed the build
+   stamp off a short screen. */
+.dest-rail-foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* `.icon-btn` is written against the APP's tokens (--fg-faint, --border,
+   --bg-hover). On the rail island those are the wrong side of the palette —
+   on the dark themes the rail's ink is inverted — so the two buttons are
+   re-inked here exactly the way a rail entry is, and the divider the top bar
+   gives each button is dropped: there is no bar here to divide. */
+.dest-rail-foot .icon-btn {
+  width: 28px;
+  height: 28px;
+  border-left: 0;
+  border-radius: 8px;
+  color: var(--rail-ink-dim);
+}
+.dest-rail-foot .icon-btn:hover,
+.dest-rail-foot .icon-btn:focus-visible {
+  color: var(--rail-ink);
+  background: var(--rail-hover);
+}
+.dest-rail-foot .settings-wrap,
+.dest-rail-foot .themeswitch {
+  height: auto;
+}
+/* The build stamp. 10px and tabular, because "2026.11.23" has to fit the
+   rail's 60px of usable width and a date that wraps is worse than a date you
+   have to lean in for. It is a LINK to the repo, as it was in the footer. */
+.dest-rail-build {
+  display: block;
+  padding: 1px 0 2px;
+  color: var(--rail-ink-dim);
+  font-family: var(--chrome-font);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dest-rail-build:hover {
+  color: var(--rail-ink);
+  text-decoration: none;
 }

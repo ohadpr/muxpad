@@ -18,7 +18,6 @@ import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
-import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
 
@@ -230,19 +229,14 @@ export function AppLayout() {
                     activeTabSlug={activeTabSlug}
                   />
                   <SidenavResizeHandle asideRef={sidenavRef} />
-                  <div className="sidenav-footer">
-                    <a
-                      className="sidenav-build"
-                      href={REPO_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={`muxpad — build ${__MUXPAD_VERSION__}`}
-                    >
-                      {__MUXPAD_VERSION__}
-                    </a>
-                    <ThemeSwitch />
-                    <SettingsMenu />
-                  </div>
+                  {/* ── NO FOOT ON THE LIST ────────────────────────────────
+                      The build stamp, the theme picker and the gear used to
+                      close this column with a `--chrome-h` bar. They are the
+                      APP's controls, not any conversation's, and the list is
+                      the one column that is entirely about conversations — so
+                      they sit at the foot of the destination rail now, which
+                      had the room and was already where the app's own places
+                      are listed. The list gets the row of height back. */}
                 </div>
               </div>
             </aside>

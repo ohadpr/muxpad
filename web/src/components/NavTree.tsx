@@ -1673,7 +1673,6 @@ export function TabList({
             onClick={() => setDoneOpen((o) => !o)}
             aria-expanded={doneOpen}
           >
-            <SvgCaret open={doneOpen} />
             {/* "older chats", AND NO NUMBER.
                 Two corrections, a day apart. "done" first: a chat leaves the
                 live list when its clock runs out — days of nobody touching it
@@ -1686,6 +1685,19 @@ export function TabList({
                 rail belongs to the archive. It is a door, not a report; what
                 is behind it is counted by scrolling it. */}
             older chats
+            {/* ─── THE CARET GOES AFTER THE WORDS ────────────────────────
+                It led, in the chat-icon column, so that the label would line
+                up with the chat names under it. That put a chevron directly
+                above the NEXT workspace header's chevron, one row apart and
+                in very nearly the same column — "put the caret after the
+                words so it doesn't collide with the caret for the next
+                workspace."
+                They are different controls: a workspace's opens a workspace,
+                this one opens the archive. Reading as a pair of the same
+                thing was the whole problem, and trailing it fixes that
+                without moving the label, which stays in the name column via
+                the head's padding. */}
+            <SvgCaret open={doneOpen} />
           </button>
           {doneOpen ? doneGroups.map((g) => renderGroup(g)) : null}
           {/* ─── AND NOTHING ABOUT SUB-AGENTS, ANY MORE ──────────────────
