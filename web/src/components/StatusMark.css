@@ -154,6 +154,22 @@
   inset: var(--wm-inset);
   box-sizing: border-box;
   pointer-events: none;
+  /* ─── SMOOTH, NOT CHOPPY ────────────────────────────────────────────────
+     Every mark in this file is a conic-gradient under a radial MASK, rotated
+     by transform. A transform alone is the composited, cheap thing to
+     animate — but a masked element is not: without a layer of its own the
+     compositor has to re-rasterize the gradient and re-apply the mask on
+     every frame, at whatever the main thread has left. With forty rows
+     turning at once that is exactly the stutter you see.
+     `will-change: transform` gives each mark its own layer, so the gradient
+     and the mask are rasterized ONCE and the frames are a layer rotation.
+     It is safe to leave standing because these selectors only match while
+     the thing is working — an idle row has no layer. A mark is ~14px, so
+     even every row at once is a rounding error of GPU memory.
+     `backface-visibility` is the old companion hint; harmless where it is
+     not needed, and it costs nothing to be explicit. */
+  will-change: transform;
+  backface-visibility: hidden;
 }
 
 /* ── tokyo-night · a neon trail going round ──────────────────────────────
@@ -162,7 +178,7 @@
    chunky PIECES with gaps between them (two dots, four dashes, six
    segments), so they survive 10px: the outline is still a circle when every
    interior detail is gone. Each theme keeps that geometry and differs by
-   material — the count of pieces, ink, weight, whether it ticks or sweeps.
+   material — the count of pieces, ink, weight, how fast it sweeps.
    Here: five dots running a faint track, each smaller and dimmer than the
    one ahead, like a streak of lights at night. A smooth sweep. (It replaced a
    tapered comet, one continuous arc — the shape family he did not pick.) */
@@ -240,12 +256,15 @@
     #000 calc(100% - 3px)
   );
   mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
-  animation: navtree-state-spin 0.9s steps(6) infinite;
+  animation: navtree-state-spin 0.9s linear infinite;
 }
 
 /* ── github-light · Primer's three dots, on a circle ────────────────────
    Primer's own vocabulary for "loading" is three dots; set round a circle
-   they turn, one lit, ticking a third of a turn at a time. Three pieces with
+   they turn, one lit, sweeping. (They TICKED a third of a turn at a time,
+   which is Primer's own behaviour and was still read as choppy at this size:
+   "all the status working animations should be smooth and not choppy." Every
+   mark in this file sweeps now.) Three pieces with
    gaps, the family's geometry. (It replaced a single arc on a track.) The
    unlit two are at 60%, not fainter: at 1:1 anything dimmer was a smudge. */
 [data-theme="github-light"]
@@ -265,7 +284,7 @@
       color-mix(in srgb, var(--wm-ink) 60%, transparent) 0 2.3px,
       transparent 2.7px
     );
-  animation: navtree-state-spin 1.05s steps(3) infinite;
+  animation: navtree-state-spin 1.05s linear infinite;
 }
 
 /* ── acme & acme-dark · a moon in orbit ──────────────────────────────────
@@ -417,10 +436,13 @@
    chunky PIECES with gaps between them (two dots, four dashes, six
    segments), so they survive 10px: the outline is still a circle when every
    interior detail is gone. Each theme keeps that geometry and differs by
-   material — the count of pieces, ink, weight, whether it ticks or sweeps.
+   material — the count of pieces, ink, weight, how fast it sweeps.
    Here: three hard blocks of a thick ring with hard gaps between them, in one
    ink and nothing else — 1-bit, as System 7 drew everything — ticking an
-   eighth of a turn at a time, as the Mac's busy cursors did. No hands and no
+   smoothly. (It stepped in eighths, as the Mac's busy cursors did — the one
+   quote in this family that was literally choppy, and dropped for the same
+   instruction as github-light's above. The three-blade shape is the quote
+   that survives.) No hands and no
    hour ticks: a clock means scheduled work in muxpad (`muxpad cron`), which
    is why the wristwatch went. It replaced the barber pole, a field of bands
    that never read as a spinner at row size. The ink is the yellow fixed last
@@ -446,7 +468,7 @@
     #000 calc(100% - 3.0px)
   );
   mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3.0px));
-  animation: navtree-state-spin 1.2s steps(8) infinite;
+  animation: navtree-state-spin 1.2s linear infinite;
 }
 
 /* Reduced motion: the moving layer stops at its rest frame, and every rest
