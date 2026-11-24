@@ -80,13 +80,50 @@ export function subscribeUpdate(l: Listener): () => void {
   };
 }
 
+/**
+ * How long one question may stay open before it is abandoned.
+ *
+ * ── WHY THERE IS A LIMIT AT ALL ─────────────────────────────────────────────
+ * "mobile stopped updating again." The guard below (`asking`) used to be
+ * cleared only when the request SETTLED, and a request can fail to settle: a
+ * fetch caught in flight when iOS suspends an installed app may come back with
+ * no answer and no error. Then `asking` stayed true for the life of the page,
+ * every later resume returned at the guard, and the banner could never appear
+ * again — on an app that is RESUMED, not relaunched, for days. Measured on the
+ * real server, headless at 390×844: one frozen /api/build, three resumes, zero
+ * further requests, no banner, while a new build was being served. A relaunch
+ * cleared it, which is exactly what he saw.
+ *
+ * So an ask is bounded twice: an AbortController times the request out, and
+ * the guard itself reads the CLOCK — iOS freezes timers with the page, so on
+ * resume the timeout that should have fired during the suspension can run
+ * after the visibility event that wants to ask. Neither is a poll: nothing
+ * here asks on a timer, it only stops waiting.
+ */
+const ASK_TIMEOUT_MS = 8_000;
+let askedAt = 0;
+/** Which ask is current — an abandoned one may still answer, and must not win. */
+let askSeq = 0;
+let inflight: AbortController | null = null;
+
 async function check(): Promise<void> {
   // A resume commonly fires both signals at once — visible, then the socket iOS
-  // killed without telling us reconnects. One question is enough.
-  if (asking) return;
+  // killed without telling us reconnects. One question is enough — unless the
+  // one already asked is stale, in which case it is abandoned (see above).
+  if (asking && Date.now() - askedAt < ASK_TIMEOUT_MS) return;
+  inflight?.abort();
+  const seq = ++askSeq;
+  const ctl = new AbortController();
+  inflight = ctl;
   asking = true;
+  askedAt = Date.now();
+  const timer = setTimeout(() => ctl.abort(), ASK_TIMEOUT_MS);
   try {
-    const { build } = await req<{ build: string | null }>('/api/build', { cache: 'no-store' });
+    const { build } = await req<{ build: string | null }>('/api/build', {
+      cache: 'no-store',
+      signal: ctl.signal,
+    });
+    if (seq !== askSeq) return; // a newer ask owns the answer
     // Null is "I cannot name a build" (no built shell on disk), which is no
     // information at all — it must not retire a prompt we already raised.
     if (!build) return;
@@ -95,10 +132,14 @@ async function check(): Promise<void> {
     theirs = next;
     emit();
   } catch {
-    // Offline, mid-deploy, or an older server with no such route. Silence is
-    // the right answer to all three.
+    // Offline, mid-deploy, timed out, or an older server with no such route.
+    // Silence is the right answer to all four.
   } finally {
-    asking = false;
+    clearTimeout(timer);
+    if (seq === askSeq) {
+      asking = false;
+      inflight = null;
+    }
   }
 }
 

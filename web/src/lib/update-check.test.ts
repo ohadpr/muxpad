@@ -74,7 +74,7 @@ describe('update check', () => {
     mod.startUpdateCheck();
     resync[0]?.();
     await settle();
-    expect(req).toHaveBeenCalledWith('/api/build', { cache: 'no-store' });
+    expect(req).toHaveBeenCalledWith('/api/build', expect.objectContaining({ cache: 'no-store' }));
   });
 
   it('stays quiet when the server is serving the build we are running', async () => {
@@ -136,6 +136,68 @@ describe('update check', () => {
     resync[0]?.();
     await settle();
     expect(req).toHaveBeenCalledTimes(2);
+  });
+
+  // ── THE WEDGE ───────────────────────────────────────────────────────────
+  // "mobile stopped updating again". A request that NEVER SETTLES — what a
+  // fetch caught in flight by an iOS suspension can look like on resume: no
+  // answer, no error — left `asking` true for the life of the page, and every
+  // later resume returned at the guard. Measured headless on the real server:
+  // one frozen /api/build, then three resumes, zero further requests, no
+  // banner, while the server was serving a new build. An installed PWA is
+  // RESUMED for days, so the page's life is the whole bug; a relaunch clears it.
+  it('is not wedged by a request that never answers — the next resume still asks', async () => {
+    vi.useFakeTimers();
+    try {
+      req.mockImplementationOnce(() => new Promise(() => {})); // frozen forever
+      const mod = await load();
+      const seen: Array<string | null> = [];
+      mod.subscribeUpdate((b) => seen.push(b));
+      mod.startUpdateCheck();
+      resync[0]?.();
+      expect(req).toHaveBeenCalledTimes(1);
+      // Time passes with the request still hanging (the app was suspended)…
+      await vi.advanceTimersByTimeAsync(60_000);
+      // …and the app comes back to a server serving a new build.
+      req.mockResolvedValue({ build: THEIRS });
+      resync[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(req).toHaveBeenCalledTimes(2);
+      expect(seen.at(-1)).toBe(THEIRS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is not wedged even when the resume beats the timeout — a stale ask is abandoned', async () => {
+    // iOS freezes timers with the page, so on resume the timeout that should
+    // have fired during the suspension may run AFTER the visibility event. The
+    // guard reads the clock, not only the timer.
+    vi.useFakeTimers();
+    try {
+      req.mockImplementationOnce(() => new Promise(() => {}));
+      const mod = await load();
+      mod.startUpdateCheck();
+      resync[0]?.();
+      // The clock moves (suspended for a minute) but no timer has run yet.
+      vi.setSystemTime(Date.now() + 60_000);
+      req.mockResolvedValue({ build: THEIRS });
+      resync[0]?.();
+      expect(req).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds the request it sends — an abortable ask, never an open-ended one', async () => {
+    req.mockResolvedValue({ build: MINE });
+    const mod = await load();
+    mod.startUpdateCheck();
+    resync[0]?.();
+    await settle();
+    const init = req.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.cache).toBe('no-store');
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('says nothing when the request fails', async () => {
