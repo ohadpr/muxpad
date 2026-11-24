@@ -54,6 +54,13 @@ describe('turnPreamble', () => {
     // …and the other two that are invisible when they go wrong.
     expect(resumed).toMatch(/muxpad agent new/);
     expect(resumed).toMatch(/muxpad cron/);
+    // And setsid, which is invisible in a third way: the work is started, it
+    // reports started, and it is dead by the time anyone looks. It has to be
+    // on the CARD and not only in the document — a codex pane gets the
+    // document once per runner start and the card every turn, so a pane that
+    // is already running would otherwise never be told.
+    expect(resumed).toMatch(/setsid/);
+    expect(resumed).toMatch(/start_new_session/);
   });
 
   it('is cheap enough to send on every turn', () => {
@@ -66,7 +73,19 @@ describe('turnPreamble', () => {
     // local file path and hand-rolled an http.server instead — twice, in two
     // different chats. +223 chars (~56 tokens) a turn is the cheapest fix
     // there is for a rule that only works if it is already in front of you.
-    expect(STANDING_RULES.length).toBeLessThan(2700);
+    //
+    // Raised 2,700 → 2,800 on 2026-11-23, for one more: setsid. Measured
+    // outside the cockpit — a bare `codex exec` in an empty directory — a
+    // command started the ordinary way is killed the instant the turn's
+    // process exits, because codex tears its session down at turn.completed
+    // and that kills the command groups it holds. A worker lost a scoring run
+    // to it and spent its next hour building a terminal-based workaround.
+    //
+    // It is HERE rather than only in the document for the reason the document
+    // cannot cover: codex gets the full text on the first turn after a runner
+    // start and the card every turn after, so a pane already running would
+    // never have seen it. +190 chars (~48 tokens).
+    expect(STANDING_RULES.length).toBeLessThan(2800);
     expect(STANDING_RULES.length).toBeGreaterThan(400);
   });
 

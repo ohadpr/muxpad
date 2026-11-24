@@ -130,6 +130,9 @@ been told.
   something.**
   Live work you cannot see dies with it. Read logs and status instead, and let
   the user choose the moment.
+- **Work meant to outlive your turn starts with \`setsid\`.** \`&\`, \`nohup\`
+  and \`disown\` do NOT save it — the reap signals the process GROUP. Python:
+  \`start_new_session=True\`. A server goes in \`muxpad app\`.
 `;
 
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad
