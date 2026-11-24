@@ -192,7 +192,10 @@
    into something like the icon row at the top, but no need to condense it to
    death."
    So: air between the two buttons, a real gap before the date, and padding at
-   the floor so the date is not sitting on the rail's edge. What it must NOT
+   the floor so the date is not sitting on the rail's edge. Loosened twice —
+   the first pass at 6/12/8 was still read as tight, so the three numbers here
+   (11px between the row and the stamp, 16px under the hairline, 14px of
+   floor) are the second. What it must NOT
    grow into is a destination — no 36px plates, no labels, no hover fills the
    size of an entry's. These three are controls you reach for occasionally;
    the five above are where you GO, and the difference in weight is the thing
@@ -203,9 +206,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding-top: 12px;
-  padding-bottom: 8px;
+  gap: 11px;
+  padding-top: 16px;
+  padding-bottom: 14px;
   /* FULL RAIL WIDTH. The rail pads 4px either side for the entries, which
      left the foot 60px to fit two buttons and a ten-character date into —
      the reason the first pass was packed. Cancelling that padding gives it
