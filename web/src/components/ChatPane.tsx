@@ -813,6 +813,10 @@ function attachmentExtFromName(name: string): string | null {
  *  fresh `[]` every render would defeat that for the whole transcript. */
 const NO_TERMS: readonly string[] = [];
 
+/** How often a conversation with children re-reads its rounds when nothing
+ *  about its children has moved — see the safety-net effect in ChatPane. */
+export const SPAWN_ROUNDS_NET_MS = 60_000;
+
 /**
  * WHAT THIS CHAT'S ROUNDS DEPEND ON, as one string: every field of a child's
  * row that moves when one of its rounds opens, ends or gets its result.
@@ -1521,36 +1525,48 @@ export function ChatPane({
   // (the corpus arrives first, and an older server sends none).
   const [spawnRounds, setSpawnRounds] = useState<SpawnRoundsByChild>(NO_ROUNDS);
   const myTabId = myChat?.tabId;
-  // ONLY A CHANGE TO ONE OF THIS CHAT'S OWN CHILDREN FORCES A READ. This effect
-  // used to force one on every corpus change, and the corpus changes whenever
+  // ONLY A CHANGE TO ONE OF THIS CHAT'S OWN CHILDREN TRIGGERS A READ. This
+  // effect used to run on every corpus change, and the corpus changes whenever
   // ANY agent on the install changes state: measured on the live server, one
   // idle viewer of a coordinator chat (192 children, 2 live) asked for its
   // 237 KB of rounds 47 times a minute at 100–200 ms of server time each — on
-  // the single thread every chat open waits behind.
+  // the single thread every chat open waits behind. The corpus is NOT a
+  // dependency here, deliberately: even unforced, every patch re-asked through
+  // a 4 s cache, which under forty busy agents is a real read every 4 s.
   const childSignature = useMemo(() => spawnRoundsSignature(corpus, myTabId), [corpus, myTabId]);
-  const askedSignature = useRef<{ tabId: string; signature: string } | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: corpus is the trigger for the cached re-ask.
+  const hasChildren = childSignature !== '';
   useEffect(() => {
     // NOTHING TO ASK FOR when this chat has spawned nothing, which is most
     // chats — the empty signature.
     if (!myTabId || childSignature === '') return;
-    // A round starting or ending moves the child's row, so a CHANGED signature
-    // is exactly the moment these go stale: invalidate even a fresh or
-    // in-flight read; the loader coalesces changes during a read into a
-    // trailing refresh (lib/spawn-rounds). Any OTHER corpus change re-asks only
-    // through the 4 s cache — the net under the rounds that change without
-    // their row moving (a silent round marked `failed`, an orphan closed).
-    const asked = askedSignature.current;
-    const changed = asked?.tabId !== myTabId || asked.signature !== childSignature;
-    askedSignature.current = { tabId: myTabId, signature: childSignature };
+    // A round starting or ending moves the child's row, so a moved signature is
+    // exactly the moment these go stale: invalidate even a fresh or in-flight
+    // read; the loader coalesces changes during a read into a trailing refresh
+    // (lib/spawn-rounds).
     let live = true;
-    void loadSpawnRounds(myTabId, changed).then((r) => {
+    void loadSpawnRounds(myTabId, true).then((r) => {
       if (live) setSpawnRounds(r);
     });
     return () => {
       live = false;
     };
-  }, [myTabId, corpus, childSignature]);
+  }, [myTabId, childSignature]);
+  // THE NET UNDER IT: a round can change without its row moving — a silent
+  // round marked `failed` at delivery, an orphan closed by the sweep — and no
+  // signature can see that. A slow re-ask catches it within a minute.
+  useEffect(() => {
+    if (!myTabId || !hasChildren) return;
+    let live = true;
+    const timer = window.setInterval(() => {
+      void loadSpawnRounds(myTabId).then((r) => {
+        if (live) setSpawnRounds(r);
+      });
+    }, SPAWN_ROUNDS_NET_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [myTabId, hasChildren]);
   const spawnedCards = useMemo(
     () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
     [corpus, myChat, spawnRounds],

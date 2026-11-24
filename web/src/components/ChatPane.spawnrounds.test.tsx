@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type MentionChat, toMentionChats } from '../lib/chat-mention';
 import type { WorkspaceTabs } from '../lib/nav-search';
-import { ChatPane, spawnRoundsSignature } from './ChatPane';
+import { ChatPane, SPAWN_ROUNDS_NET_MS, spawnRoundsSignature } from './ChatPane';
 
 /**
  * A CONVERSATION ASKS FOR ITS ROUNDS WHEN ITS OWN CHILDREN MOVE — NOT WHEN
@@ -16,8 +16,9 @@ import { ChatPane, spawnRoundsSignature } from './ChatPane';
  * chat open queues behind.
  *
  * Two halves are pinned here. The SIGNATURE moves for every child field a round
- * moves, and for nothing else; and the EFFECT forces a read only when the
- * signature moved, leaving every other corpus change to the loader's cache.
+ * moves, and for nothing else; and the EFFECT reads only when the signature
+ * moved, plus one slow safety-net read a minute — never because some other
+ * corpus patch landed, cached or not.
  */
 
 const loads = vi.hoisted(() => [] as Array<{ tabId: string; changed: boolean }>);
@@ -157,12 +158,14 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   host?.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   loads.length = 0;
   corpusFeed.listener = null;
 });
 
 async function mount(rows: Row[]) {
   corpusFeed.current = groups(rows);
+  vi.useFakeTimers();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('WebSocket', Socket);
   vi.stubGlobal('matchMedia', () => ({
@@ -198,30 +201,35 @@ async function publish(rows: Row[]) {
 
 const mine = () => loads.filter((l) => l.tabId === PARENT);
 
-describe('the conversation forces a rounds read only when its children move', () => {
-  it('forces the first read, then leaves unrelated churn to the cache', async () => {
+const advance = async (ms: number) => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+};
+
+/** The rest of the install keeps working: the corpus moves, the children do not. */
+const churn = (i: number) => [
+  tab(PARENT, { headline: `parent ${i}` }),
+  child({ headline: `step ${i}`, last_activity_at: i }),
+  tab('stranger', { status: i % 2 ? 'working' : 'ready', last_activity_at: i }),
+];
+
+describe('the conversation reads its rounds only when its children move', () => {
+  it('reads once on open, then NOTHING for 30 s of corpus churn', async () => {
     await mount([tab(PARENT), child(), tab('stranger')]);
     expect(mine()).toEqual([{ tabId: PARENT, changed: true }]);
-
-    // The rest of the install keeps working: corpus changes, children do not.
-    for (let i = 1; i <= 5; i++)
-      await publish([
-        tab(PARENT),
-        child({ headline: `step ${i}` }),
-        tab('stranger', { status: i % 2 ? 'working' : 'ready', last_activity_at: i }),
-      ]);
-    const later = mine().slice(1);
-    expect(later.length).toBeGreaterThan(0);
-    expect(later.every((l) => l.changed === false)).toBe(true);
+    loads.length = 0;
+    // Forty busy agents: a corpus patch every second for 30 s.
+    for (let i = 1; i <= 30; i++) {
+      await publish(churn(i));
+      await advance(1_000);
+    }
+    expect(mine()).toEqual([]);
   });
 
   it('forces a read the moment a child’s report lands', async () => {
     await mount([tab(PARENT), child(), tab('stranger')]);
-    await publish([
-      tab(PARENT),
-      child({ status: 'working' }),
-      tab('stranger', { status: 'working' }),
-    ]);
+    await publish(churn(1));
     loads.length = 0;
     await publish([
       tab(PARENT),
@@ -231,9 +239,30 @@ describe('the conversation forces a rounds read only when its children move', ()
     expect(mine()).toEqual([{ tabId: PARENT, changed: true }]);
   });
 
-  it('asks nothing at all for a chat that has spawned nothing', async () => {
+  it('still re-reads once a minute, for rounds that change without their row', async () => {
+    await mount([tab(PARENT), child(), tab('stranger')]);
+    loads.length = 0;
+    await advance(SPAWN_ROUNDS_NET_MS - 1_000);
+    expect(mine()).toEqual([]);
+    await advance(1_000);
+    expect(mine()).toHaveLength(1);
+    await advance(SPAWN_ROUNDS_NET_MS);
+    expect(mine()).toHaveLength(2);
+  });
+
+  it('stops the net when the conversation closes', async () => {
+    await mount([tab(PARENT), child(), tab('stranger')]);
+    loads.length = 0;
+    await act(async () => root?.unmount());
+    root = undefined;
+    await advance(SPAWN_ROUNDS_NET_MS * 3);
+    expect(mine()).toEqual([]);
+  });
+
+  it('asks nothing at all — not even the net — for a chat that has spawned nothing', async () => {
     await mount([tab(PARENT), tab('stranger')]);
     await publish([tab(PARENT), tab('stranger', { status: 'working' })]);
+    await advance(SPAWN_ROUNDS_NET_MS * 3);
     expect(mine()).toEqual([]);
   });
 });
