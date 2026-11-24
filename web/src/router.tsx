@@ -9,6 +9,7 @@ import { DocView } from './pages/DocView';
 import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
 import { RootRedirect } from './pages/RootRedirect';
+import { UnreadView } from './pages/UnreadView';
 
 const rootRoute = createRootRoute();
 
@@ -111,6 +112,15 @@ const docRoute = createRoute({
 // /cards — every pinned value on the install, across every chat. The fourth
 // workspace-less destination, built exactly as Artifacts and Apps are
 // (lib/shell-routes). See pages/CardsView for why a card needs a page at all.
+// /unread — the rail's Unread view as a real destination, so the rail entry
+// can be an anchor. See pages/UnreadView for why the page and the view both
+// exist and how they stay the same list.
+const unreadRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/unread',
+  component: UnreadView,
+});
+
 const cardsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/cards',
@@ -163,6 +173,7 @@ const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     rootRedirectRoute,
     chatListRoute,
+    unreadRoute,
     cardsRoute,
     artifactsRoute,
     appsRoute,

@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DESTINATIONS, destinationAction } from '../lib/desktop-destinations';
+import {
+  DESTINATIONS,
+  destinationAction,
+  destinationHref,
+  navigatesOnClick,
+} from '../lib/desktop-destinations';
 
 /**
  * A PLACE IS A LINK; A VIEW IS A BUTTON.
@@ -19,11 +24,11 @@ const src = readFileSync(join(__dirname, 'DestinationRail.tsx'), 'utf8');
 
 describe('the rail’s entries', () => {
   it('renders a Link when the entry is a route', () => {
-    expect(src).toMatch(/<Link\s+key=\{d\}\s+to=\{route\}/);
+    expect(src).toMatch(/<Link\s+key=\{d\}\s+to=\{href\}/);
     expect(src).toMatch(/import \{[^}]*\bLink\b[^}]*\} from '@tanstack\/react-router'/);
   });
 
-  it('decides which entries are places from destinationAction, not a second list', () => {
+  it('decides which entries NAVIGATE from one predicate, not a second list', () => {
     // A hand-written list here would be a second source of truth for "is this
     // a page", and the first thing to drift when a destination is added.
     const fn = /const pageRoute[\s\S]*?\n {2}\};/.exec(src)?.[0] ?? '';
@@ -44,15 +49,45 @@ describe('the rail’s entries', () => {
     expect(pages).toEqual(['cards', 'artifacts', 'apps']);
   });
 
-  it('a view entry is still a button, with the click that switches the view', () => {
-    expect(src).toMatch(/<button key=\{d\} type="button"[\s\S]{0,120}onClick=\{\(\) => go\(d\)\}/);
+  it('EVERY entry has an href, including the three that switch a view', () => {
+    // The first pass made only the page entries anchors, on the reasoning
+    // that a view switch is not a navigation. Right about the click, wrong
+    // about the element: "icon rail still not using <a>." A button cannot be
+    // right-clicked into a new tab and no handler can add that.
+    for (const d of DESTINATIONS) expect(destinationHref(d, 'personal'), d).toBeTruthy();
+    expect(destinationHref('unread', 'personal')).toBe('/unread');
+    expect(destinationHref('activity', 'personal')).toBe('/activity');
+    expect(destinationHref('home', 'personal')).toBe('/w/personal');
+  });
+
+  it('Home has no href before any workspace has been visited', () => {
+    // A link to nothing is worse than a button.
+    expect(destinationHref('home', '')).toBeNull();
+  });
+
+  it('a plain click on a VIEW entry does not navigate', () => {
+    expect(navigatesOnClick('unread')).toBe(false);
+    expect(navigatesOnClick('activity')).toBe(false);
+    expect(navigatesOnClick('home')).toBe(false);
+    expect(navigatesOnClick('cards')).toBe(true);
+  });
+
+  it('leaves a MODIFIED click to the browser', () => {
+    // This is the whole reason the href was added. Intercepting cmd-click
+    // would re-break what the element was changed to fix.
+    const handler =
+      /onClick=\{\(e: React\.MouseEvent\) => \{[\s\S]*?\n {12}\}\}/.exec(src)?.[0] ?? '';
+    expect(handler).toContain('navigatesOnClick');
+    for (const key of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey', 'button'])
+      expect(handler, key).toContain(key);
+    expect(handler).toContain('preventDefault');
   });
 
   it('both shapes carry the same attributes, from one object', () => {
-    // The marking, the label and the title must not depend on which element
-    // an entry happened to render as.
+    // The marking, the label and the title must not depend on whether an
+    // entry happened to render as a link or (Home, pre-workspace) a button.
     expect(src).toMatch(/const shared = \{/);
-    expect(src).toMatch(/<Link key=\{d\} to=\{route\} \{\.\.\.shared\}/);
+    expect(src).toMatch(/<Link\s+key=\{d\}\s+to=\{href\}\s+\{\.\.\.shared\}/);
     expect(src).toMatch(/<button key=\{d\} type="button" \{\.\.\.shared\}/);
   });
 });

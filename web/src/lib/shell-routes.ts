@@ -23,7 +23,7 @@
  *                    the thing you came to get away from.
  *   `/doc`, `/popout` their own windows, outside the layout entirely.
  */
-const SHELL_PATHS = ['/cards', '/artifacts', '/apps', '/activity'] as const;
+const SHELL_PATHS = ['/unread', '/cards', '/artifacts', '/apps', '/activity'] as const;
 
 /** Does this path want the sidebar even though it names no workspace? */
 export function keepsShell(pathname: string): boolean {

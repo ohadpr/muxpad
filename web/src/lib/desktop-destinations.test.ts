@@ -25,6 +25,14 @@ describe('the destination rail', () => {
     ]);
   });
 
+  it('standing on /unread marks Unread, not whatever view the list holds', () => {
+    // The page and the rail's view are the same list; the rail must agree
+    // about which one you are looking at. It said 'home' at first, because
+    // currentDestination fell through to the list's view for an unknown path.
+    expect(currentDestination('/unread', 'home')).toBe('unread');
+    expect(currentDestination('/activity', 'home')).toBe('activity');
+  });
+
   it('Cards is a page, so standing on it is where you are', () => {
     // A page entry wins over the list's view beside it — the same rule
     // Artifacts and Apps follow, and the reason a view entry clicked FROM a

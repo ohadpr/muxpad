@@ -6,6 +6,8 @@ import {
   type Destination,
   currentDestination,
   destinationAction,
+  destinationHref,
+  navigatesOnClick,
 } from '../lib/desktop-destinations';
 import { setRailView, useRailView } from '../lib/rail-view';
 import { useChatCorpus } from '../lib/use-all-chats';
@@ -57,19 +59,20 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
         const count = d === 'unread' ? unread : 0;
         const label =
           count > 0 ? `${DESTINATION_LABEL[d]} — ${count} unread` : DESTINATION_LABEL[d];
-        // ─── A PLACE IS A LINK; A VIEW IS A BUTTON ────────────────────
-        // Cards, Artifacts and Apps are ROUTES, and they were <button>s with
-        // an onClick — so right-click had no "open in new tab", cmd-click did
-        // nothing, the status bar showed no target and middle-click was dead.
-        // "card icon rail elements don't offer right click open menu maybe
-        // they are not <a> links annoying." They are now.
+        // ─── EVERY ENTRY IS AN ANCHOR ────────────────────────────────
+        // Cards, Artifacts and Apps were links and the other three were
+        // buttons, on the reasoning that a view switch is not a navigation.
+        // True about the CLICK, wrong about the ELEMENT: "icon rail still not
+        // using <a>." A button cannot be right-clicked into a new tab,
+        // middle-clicked, or copied as a link, and no handler can add those —
+        // they belong to the browser and the browser needs an href.
         //
-        // Home, Unread and Activity stay buttons, and that is not an
-        // oversight: they do not navigate. They switch which VIEW the chat
-        // list beside the rail is showing, and the URL does not change — you
-        // stay in the chat you were in. An anchor whose href is the page you
-        // are already on would offer a new tab that opens the wrong thing.
-        const route = pageRoute(d);
+        // So all six carry one, and the three VIEW entries intercept the plain
+        // left-click to switch in place exactly as they always did. The
+        // modified clicks fall through untouched, which is the whole point:
+        // cmd-click Unread and you get /unread in a new tab, plain-click it
+        // and the list beside you changes without leaving your chat.
+        const href = destinationHref(d, lastWsSlug);
         const body = <RailItemBody dest={d} count={count} />;
         const shared = {
           className: 'dest-rail-item',
@@ -79,14 +82,32 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
           'aria-label': label,
           title: label,
         };
-        return route ? (
-          <Link key={d} to={route} {...shared}>
+        // No workspace visited yet: Home has nowhere to point, so it stays a
+        // button rather than becoming a link to nothing.
+        if (!href)
+          return (
+            <button key={d} type="button" {...shared} onClick={() => go(d)}>
+              {body}
+            </button>
+          );
+        return (
+          <Link
+            key={d}
+            to={href}
+            {...shared}
+            onClick={(e: React.MouseEvent) => {
+              if (navigatesOnClick(d)) return;
+              // A MODIFIED CLICK IS THE BROWSER'S. cmd/ctrl (new tab), shift
+              // (new window), middle button, or any default already prevented
+              // by something upstream — leave every one of them alone. Taking
+              // them would be re-breaking what the href was added to fix.
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              go(d);
+            }}
+          >
             {body}
           </Link>
-        ) : (
-          <button key={d} type="button" {...shared} onClick={() => go(d)}>
-            {body}
-          </button>
         );
       })}
       {/* ─── THE FOOT ────────────────────────────────────────────────────

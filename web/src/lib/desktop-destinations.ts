@@ -53,6 +53,7 @@ export const DESTINATION_LABEL: Record<Destination, string> = {
  */
 export function currentDestination(pathname: string, view: RailView): Destination {
   const p = pathname.replace(/\/+$/, '') || '/';
+  if (p === '/unread') return 'unread';
   if (p === '/cards') return 'cards';
   if (p === '/artifacts') return 'artifacts';
   if (p === '/apps' || p.startsWith('/hosted')) return 'apps';
@@ -74,6 +75,42 @@ export function destinationAction(
   if (dest === 'cards') return { to: '/cards' };
   if (dest === 'artifacts') return { to: '/artifacts' };
   if (dest === 'apps') return { to: '/apps' };
-  const onPage = /^\/(cards|artifacts|apps|activity|hosted)(\/|$)/.test(pathname);
+  const onPage = /^\/(unread|cards|artifacts|apps|activity|hosted)(\/|$)/.test(pathname);
   return onPage ? { view: dest, to: 'back-to-work' } : { view: dest };
+}
+
+/**
+ * THE URL AN ENTRY STANDS FOR — every entry, including the three that do not
+ * navigate on a plain click.
+ *
+ * "Icon rail still not using <a>." Cards, Artifacts and Apps became anchors;
+ * Home, Unread and Activity did not, because they switch which view the chat
+ * list is showing and the URL does not change. That reasoning is right about
+ * the CLICK and wrong about the ELEMENT: a thing with no href cannot be
+ * right-clicked, opened in a new tab, middle-clicked or bookmarked, and the
+ * honest fix is for the destination to exist rather than for the entry to
+ * pretend.
+ *
+ * So all six are anchors now. The three view entries point at the page that
+ * shows the same thing — `/unread` and `/activity` are those pages, and Home
+ * is the workspace you were last in — and the rail intercepts their plain
+ * left-click to switch the view in place, exactly as before. The browser's
+ * own gestures fall through and land on the page.
+ *
+ * Home needs the caller's last workspace, which is why this takes it. With no
+ * workspace yet there is nowhere to point and the entry stays a button.
+ */
+export function destinationHref(dest: Destination, lastWsSlug: string): string | null {
+  if (dest === 'cards') return '/cards';
+  if (dest === 'artifacts') return '/artifacts';
+  if (dest === 'apps') return '/apps';
+  if (dest === 'unread') return '/unread';
+  if (dest === 'activity') return '/activity';
+  return lastWsSlug ? `/w/${lastWsSlug}` : null;
+}
+
+/** Does a plain left-click on this entry NAVIGATE, or switch the view in
+ *  place? The three views switch; the three pages go. */
+export function navigatesOnClick(dest: Destination): boolean {
+  return dest === 'cards' || dest === 'artifacts' || dest === 'apps';
 }

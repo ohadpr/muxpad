@@ -311,6 +311,7 @@ export function AppLayout() {
 
 /** The header's name for a phone destination that is not a chat. */
 function destinationTitle(pathname: string): string {
+  if (pathname.startsWith('/unread')) return 'Unread';
   if (pathname.startsWith('/cards')) return 'Cards';
   if (pathname.startsWith('/artifacts')) return 'Artifacts';
   if (pathname.startsWith('/activity')) return 'Activity';
