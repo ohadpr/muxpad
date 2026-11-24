@@ -1169,6 +1169,21 @@ export function decorateWorkspace(
   const panes = new PaneStore(db);
   const tabs = new TabStore(db);
   const manualUnreadIds = tabs.unreadIdsByWorkspace(workspace.id);
+  // ─── ONE QUERY FOR THE PANES, NOT ONE PER TAB ──────────────────────────
+  // This loop called `listByTab` per tab, which on this install is 1,454
+  // prepared-statement round trips to answer a 763-byte question — on a route
+  // every connected device re-polls on every `pane.updated` edge, and the
+  // edges never stop while forty agents are working. Measured during an
+  // outage report: the route took 0.4–2.7s, the event loop sat at p50 297ms /
+  // p90 972ms, and a 10s sample of the main thread was dominated by
+  // `sqlite3VdbeExec` and `Statement::JS_all` — rows being turned into JS.
+  //
+  // `byTabForWorkspace` already existed for exactly this, written for
+  // `decorateTab` when the same mistake was found one scale down on
+  // `/api/tabs/all`. This path simply never used it. NOTHING about what is
+  // counted changes — same tabs, same panes, same rollup — which is why this
+  // is the safe half of the fix and the "list only live chats" half is not.
+  const panesByTab = panes.byTabForWorkspace(workspace.id);
   let attention = false;
   let unread = false;
   let agents = 0;
@@ -1181,7 +1196,7 @@ export function decorateWorkspace(
     // A collapsed workspace has nothing mounted to observe its tabs, so the
     // children spawned under them are exactly the work it cannot otherwise see.
     agents += liveChildCount(clocks.index, t.id, clocks.now);
-    for (const p of panes.listByTab(t.id)) {
+    for (const p of panesByTab.get(t.id) ?? []) {
       if (cache.getAttention(p.id)) attention = true;
       if (p.unread) unread = true;
       statuses.push(cache.getStatus(p.id, p.unread === true));
