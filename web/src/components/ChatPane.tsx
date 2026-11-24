@@ -813,6 +813,44 @@ function attachmentExtFromName(name: string): string | null {
  *  fresh `[]` every render would defeat that for the whole transcript. */
 const NO_TERMS: readonly string[] = [];
 
+/**
+ * WHAT THIS CHAT'S ROUNDS DEPEND ON, as one string: every field of a child's
+ * row that moves when one of its rounds opens, ends or gets its result.
+ *
+ *   lastUserAt                      a round OPENS on the send that hands it a job
+ *   status                          …and ENDS when that turn does
+ *   done / doneReason / doneAt      retiring, delivering, being revived
+ *   report state + at, artifacts, task   the result, and the job it answers
+ *
+ * Everything else — a headline, the busy chat across the install — stays out,
+ * because leaving it out is the point. Empty means no children: nothing to ask.
+ */
+export function spawnRoundsSignature(
+  corpus: readonly MentionChat[],
+  tabId: string | undefined | null,
+): string {
+  if (!tabId) return '';
+  return corpus
+    .filter((c) => c.parentId === tabId && c.tabId !== tabId)
+    .map((c) =>
+      [
+        c.tabId,
+        c.createdAt ?? '',
+        c.lastUserAt ?? '',
+        c.status ?? '',
+        c.done ? 1 : 0,
+        c.doneReason ?? '',
+        c.doneAt ?? '',
+        c.task ?? '',
+        c.report?.state ?? '',
+        c.report?.at ?? '',
+        c.artifacts?.join('\u0001') ?? '',
+      ].join('\u0002'),
+    )
+    .sort()
+    .join('\u0003');
+}
+
 /*
  * The row-measuring helpers — `ANCHOR_ATTR`, `anchorRows`, `captureAnchor`,
  * `anchorAt`, `findAnchorRow`, `firstVisibleRow` — used to live here, and are now
@@ -1483,23 +1521,36 @@ export function ChatPane({
   // (the corpus arrives first, and an older server sends none).
   const [spawnRounds, setSpawnRounds] = useState<SpawnRoundsByChild>(NO_ROUNDS);
   const myTabId = myChat?.tabId;
+  // ONLY A CHANGE TO ONE OF THIS CHAT'S OWN CHILDREN FORCES A READ. This effect
+  // used to force one on every corpus change, and the corpus changes whenever
+  // ANY agent on the install changes state: measured on the live server, one
+  // idle viewer of a coordinator chat (192 children, 2 live) asked for its
+  // 237 KB of rounds 47 times a minute at 100–200 ms of server time each — on
+  // the single thread every chat open waits behind.
+  const childSignature = useMemo(() => spawnRoundsSignature(corpus, myTabId), [corpus, myTabId]);
+  const askedSignature = useRef<{ tabId: string; signature: string } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: corpus is the trigger for the cached re-ask.
   useEffect(() => {
-    if (!myTabId) return;
     // NOTHING TO ASK FOR when this chat has spawned nothing, which is most
-    // chats — and the corpus is how that is known, which is also why it belongs
-    // in the dependency list: a round starting or ending moves the child's tab
-    // row, so the corpus patch that lands for it is exactly the moment these go
-    // stale. Invalidate even a fresh or in-flight read; the loader coalesces
-    // changes during a read into a trailing refresh (lib/spawn-rounds).
-    if (!corpus.some((c) => c.parentId === myTabId)) return;
+    // chats — the empty signature.
+    if (!myTabId || childSignature === '') return;
+    // A round starting or ending moves the child's row, so a CHANGED signature
+    // is exactly the moment these go stale: invalidate even a fresh or
+    // in-flight read; the loader coalesces changes during a read into a
+    // trailing refresh (lib/spawn-rounds). Any OTHER corpus change re-asks only
+    // through the 4 s cache — the net under the rounds that change without
+    // their row moving (a silent round marked `failed`, an orphan closed).
+    const asked = askedSignature.current;
+    const changed = asked?.tabId !== myTabId || asked.signature !== childSignature;
+    askedSignature.current = { tabId: myTabId, signature: childSignature };
     let live = true;
-    void loadSpawnRounds(myTabId, true).then((r) => {
+    void loadSpawnRounds(myTabId, changed).then((r) => {
       if (live) setSpawnRounds(r);
     });
     return () => {
       live = false;
     };
-  }, [myTabId, corpus]);
+  }, [myTabId, corpus, childSignature]);
   const spawnedCards = useMemo(
     () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
     [corpus, myChat, spawnRounds],
