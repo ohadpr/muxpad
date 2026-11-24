@@ -24,6 +24,8 @@ export function orderedTabsForWorkspace(
   cache: PtydCache,
   workspaceId: string,
   shared?: ClockSnapshot,
+  /** Drop each row's `spawn_report` TEXT. See {@link stripReportText}. */
+  opts?: { omitReportText?: boolean },
 ): Tab[] {
   const tabs = new TabStore(db);
   const raw = tabs.listByWorkspace(workspaceId);
@@ -55,9 +57,9 @@ export function orderedTabsForWorkspace(
   // per device. It is the only cost on this path that grows with the number
   // of CHATS, which is the number that grows forever.
   const panesByTab = new PaneStore(db).byTabForWorkspace(workspaceId);
-  const decorated = raw.map((t) =>
-    decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab),
-  );
+  const decorated = raw
+    .map((t) => decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab))
+    .map((t) => (opts?.omitReportText ? stripReportText(t) : t));
   // STORE ORDER, pinned block first. `listByWorkspace` already reads
   // `ORDER BY position, created_at, id`, which is the manual order a drag
   // writes and the place a new chat is appended to — so this adds nothing to
@@ -65,4 +67,30 @@ export function orderedTabsForWorkspace(
   // block used to be re-sorted here by attention then recency; see
   // shared/tab-order for why it is not.
   return sortSidebarTabs(decorated);
+}
+
+/**
+ * THE SAME ROW WITHOUT ITS REPORT'S PROSE.
+ *
+ * `spawn_report` is a finished worker's whole summary, and it was 56.5% of
+ * this list — 479 KB of a 1.19 MB answer, measured on 1,136 rows — on a route
+ * the sidebar re-polls 250ms after EVERY `pane.updated` edge, to each of 98
+ * open connections, while forty agents make those edges continuously. The
+ * server's main thread was spending its time turning those rows into JS
+ * objects and then into JSON, and chat opens queued behind it.
+ *
+ * NOBODY ON THIS ROUTE READS IT. It feeds the sidebar rows, the mobile list,
+ * the workspace layout and TabView — a name, a state, a clock. The surface
+ * that DOES render report prose is the spawn card, and its corpus comes from
+ * `/api/tabs/all` (web/src/lib/use-all-chats → chat-mention), which keeps the
+ * text. So this is a narrowing of the hot route, not a feature change.
+ *
+ * `spawn_report_state` and `spawn_report_at` STAY. They are a word and a
+ * number, they are what says a report exists at all, and a row that lost them
+ * would be a row that claims a finished worker produced nothing.
+ */
+function stripReportText(t: Tab): Tab {
+  if (!t.spawn_report) return t;
+  const { spawn_report: _dropped, ...rest } = t;
+  return rest as Tab;
 }

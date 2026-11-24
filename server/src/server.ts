@@ -395,7 +395,15 @@ export function createApp(deps: AppDeps): Hono {
           .list(opts)
           .map((w) => decorateWorkspace(resolved.cache, resolved.db, w, clocks));
       },
-      listTabs: (workspaceId) => orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId),
+      // SAME SHAPE AS THE ROUTE IT STANDS IN FOR, report text included —
+      // which here means excluded. `GET /api/boot` prefetches the sidebar's
+      // first rungs, and tab-list.ts's whole reason for existing is that a
+      // prefetch disagreeing with its endpoint makes the sidebar render one
+      // thing and then change it.
+      listTabs: (workspaceId) =>
+        orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId, undefined, {
+          omitReportText: true,
+        }),
     }),
   );
   app.route('/api/tabs', tabsRoutes(lifecycle));

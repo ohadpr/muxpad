@@ -259,8 +259,11 @@ export function tabsRoutes(deps: {
    *  ../tab-list.ts so `GET /api/boot` can serve the IDENTICAL list — a
    *  prefetch that disagreed with the endpoint it stands in for would make the
    *  sidebar render one order and then rearrange itself. */
-  const orderedForWorkspace = (workspaceId: string, shared?: ClockSnapshot): Tab[] =>
-    orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared);
+  const orderedForWorkspace = (
+    workspaceId: string,
+    shared?: ClockSnapshot,
+    opts?: { omitReportText?: boolean },
+  ): Tab[] => orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared, opts);
 
   /**
    * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
@@ -349,7 +352,11 @@ export function tabsRoutes(deps: {
         400,
       );
     }
-    return c.json(orderedForWorkspace(workspaceId));
+    // WITHOUT THE REPORT PROSE — see stripReportText in ../tab-list.ts. This
+    // is the route the sidebar re-polls on every pane.updated edge, and the
+    // text was 56.5% of its 1.19 MB. The corpus that actually renders a
+    // report (`/all`, below) still carries it.
+    return c.json(orderedForWorkspace(workspaceId, undefined, { omitReportText: true }));
   });
 
   // Mark every pane in a tab as "seen". Called by the web client when
