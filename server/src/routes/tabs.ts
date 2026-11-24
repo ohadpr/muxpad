@@ -262,7 +262,7 @@ export function tabsRoutes(deps: {
   const orderedForWorkspace = (
     workspaceId: string,
     shared?: ClockSnapshot,
-    opts?: { omitReportText?: boolean },
+    opts?: { omitReportText?: boolean; excerptReportText?: boolean },
   ): Tab[] => orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared, opts);
 
   /**
@@ -286,7 +286,11 @@ export function tabsRoutes(deps: {
       id: w.id,
       slug: w.slug,
       name: w.name,
-      tabs: orderedForWorkspace(w.id, clocks),
+      // EXCERPTED, not whole — see REPORT_EXCERPT_CHARS in ../tab-list.ts.
+      // This is the corpus, so it is the one list that needs report text at
+      // all; carrying the full prose for 1,600 chats was 56.5% of it and was
+      // walking this answer into json-cache's 2 MB buffering cap.
+      tabs: orderedForWorkspace(w.id, clocks, { excerptReportText: true }),
     }));
     return c.json({ workspaces: list });
   });

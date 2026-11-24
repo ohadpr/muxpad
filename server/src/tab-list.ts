@@ -24,8 +24,9 @@ export function orderedTabsForWorkspace(
   cache: PtydCache,
   workspaceId: string,
   shared?: ClockSnapshot,
-  /** Drop each row's `spawn_report` TEXT. See {@link stripReportText}. */
-  opts?: { omitReportText?: boolean },
+  /** What to do with each row's `spawn_report` TEXT — see
+   *  {@link stripReportText} and {@link REPORT_EXCERPT_CHARS}. */
+  opts?: { omitReportText?: boolean; excerptReportText?: boolean },
 ): Tab[] {
   const tabs = new TabStore(db);
   const raw = tabs.listByWorkspace(workspaceId);
@@ -59,7 +60,10 @@ export function orderedTabsForWorkspace(
   const panesByTab = new PaneStore(db).byTabForWorkspace(workspaceId);
   const decorated = raw
     .map((t) => decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab))
-    .map((t) => (opts?.omitReportText ? stripReportText(t) : t));
+    .map((t) => {
+      if (opts?.omitReportText) return stripReportText(t);
+      return opts?.excerptReportText ? excerptReportText(t) : t;
+    });
   // STORE ORDER, pinned block first. `listByWorkspace` already reads
   // `ORDER BY position, created_at, id`, which is the manual order a drag
   // writes and the place a new chat is appended to — so this adds nothing to
@@ -93,4 +97,40 @@ function stripReportText(t: Tab): Tab {
   if (!t.spawn_report) return t;
   const { spawn_report: _dropped, ...rest } = t;
   return rest as Tab;
+}
+
+/**
+ * HOW MUCH OF A REPORT A BULK LIST CARRIES.
+ *
+ * `/api/tabs/all` is the corpus, and it is the one list that genuinely needs
+ * report text: it is what draws a finished worker's card. But it was carrying
+ * the WHOLE report for every chat ever created — 712 KB of a 1.76 MB answer,
+ * 56.5%, over 1,628 rows of which 1,605 are finished — and json-cache caps
+ * the body it will buffer at 2 MB (json-cache.ts, MAX_BUFFER_BYTES). Above
+ * that the answer is served raw: no ETag, no compression, 2 MB+ on the wire
+ * instead of ~441 KB, two to four times per chat opened. Measured at
+ * 1,693,590 bytes with ~1,067 bytes added per new chat, that cliff was about
+ * 390 chats away — a week or two at 25 chats a day.
+ *
+ * So the corpus carries the FIRST 200 CHARACTERS. A card renders folded to
+ * its first row anyway, so this is what is actually on screen until someone
+ * opens the chat — and opening it loads that chat's ROUNDS
+ * (web/src/lib/spawn-rounds), which carry the full text from
+ * `spawn_rounds.report`. Nothing a reader can see is lost; what goes is the
+ * 95% of prose that was being shipped to every device on every corpus fetch
+ * so that it could be folded away.
+ *
+ * NOT ZERO, deliberately. An empty report and a missing one are different
+ * facts — `spawnCardSummary` says "Finished with nothing to report" for the
+ * first — and a bulk list that dropped the text entirely would make every
+ * finished worker look like it produced nothing until its rounds arrived.
+ */
+export const REPORT_EXCERPT_CHARS = 200;
+
+function excerptReportText(t: Tab): Tab {
+  const text = t.spawn_report;
+  if (!text || text.length <= REPORT_EXCERPT_CHARS) return t;
+  // The ellipsis is the honest part: it says the text continues, so a reader
+  // (and a card) can tell a short report from a trimmed one.
+  return { ...t, spawn_report: `${text.slice(0, REPORT_EXCERPT_CHARS).trimEnd()}…` } as Tab;
 }
