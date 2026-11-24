@@ -942,7 +942,7 @@ export function decorateTab(
    * same two indexed reads `agents` already does.
    */
   const childTabs = clocks
-    ? liveChildTabs(clocks.index, tab.id, clocks.now)
+    ? liveChildTabs(clocks.index, tab.id, clocks.now, clocks.childrenOf)
     : tabLiveChildTabs(db, tab.id, Date.now());
   const childWork: PaneStatus[] = [];
   // ONE query for every child, or none at all — not `listByTab` per child.
@@ -1195,7 +1195,7 @@ export function decorateWorkspace(
     }
     // A collapsed workspace has nothing mounted to observe its tabs, so the
     // children spawned under them are exactly the work it cannot otherwise see.
-    agents += liveChildCount(clocks.index, t.id, clocks.now);
+    agents += liveChildCount(clocks.index, t.id, clocks.now, clocks.childrenOf);
     for (const p of panesByTab.get(t.id) ?? []) {
       if (cache.getAttention(p.id)) attention = true;
       if (p.unread) unread = true;
