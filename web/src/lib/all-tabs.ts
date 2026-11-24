@@ -263,11 +263,37 @@ function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
  * anyway.
  *
  * Both routes decorate through `orderedForWorkspace` (server/src/routes/tabs.ts),
- * so a group spliced in here is what `/api/tabs/all` would have returned for it.
+ * so a group spliced in here is what `/api/tabs/all` would have returned for
+ * it — WITH ONE EXCEPTION, which this function now repairs.
+ *
+ * `GET /api/tabs?workspaceId=` omits `spawn_report`'s TEXT (server/src/
+ * tab-list.ts, stripReportText): it was 56.5% of a 1.19 MB answer on the route
+ * the sidebar re-polls after every status edge. `/api/tabs/all` still carries
+ * it, because the corpus is what renders a spawn card.
+ *
+ * So a merge of the slim rows would overwrite the fat ones and every finished
+ * worker's card would quietly fall back to "Finished with nothing to report" —
+ * the text would be gone and nothing would say it had ever been there. The
+ * merge therefore KEEPS the text it already holds when the incoming row has
+ * none. Everything else about the row is taken from the fresh list, which is
+ * the whole point of merging it.
  *
  * NO FETCH, and no group invented — same rule as the push handlers above. A
  * corpus nobody has asked for stays unasked-for.
  */
+/**
+ * A fresh row, wearing the report text the corpus already had for it.
+ *
+ * Only when the fresh row has none: a row that genuinely carries text is
+ * newer, and a row whose report was DELETED keeps `spawn_report_state` null,
+ * so there is no case where this resurrects something that is gone.
+ */
+function keepReportText(fresh: Tab, held: readonly Tab[]): Tab {
+  if (fresh.spawn_report) return fresh;
+  const before = held.find((h) => h.id === fresh.id);
+  return before?.spawn_report ? { ...fresh, spawn_report: before.spawn_report } : fresh;
+}
+
 export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
   if (!cache) {
     // A list that landed while the first corpus fetch travels is newer than it.
@@ -283,9 +309,10 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // anything moved, and every corpus reader would re-render on that interval —
   // including `ChatPane`, which is a transcript. That is exactly the poll-on-
   // everything this module exists to avoid, arriving through the back door.
-  if (rowsSignature(group.tabs) === rowsSignature(tabs)) return;
+  const merged = tabs.map((t) => keepReportText(t, group.tabs));
+  if (rowsSignature(group.tabs) === rowsSignature(merged)) return;
   generation++;
-  publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: [...tabs] } : g)));
+  publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
 }
 
 /** Coalesce a burst of status edges into one corpus refetch. Matches the 250ms

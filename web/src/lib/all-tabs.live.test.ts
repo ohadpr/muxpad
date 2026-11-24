@@ -35,8 +35,14 @@ vi.mock('../events', () => ({
   subscribeResync: () => () => {},
 }));
 
-const { cachedAllTabs, loadAllTabs, refreshCorpusForTab, resetAllTabsCache, subscribeAllTabs } =
-  await import('./all-tabs');
+const {
+  cachedAllTabs,
+  loadAllTabs,
+  mergeWorkspaceTabs,
+  refreshCorpusForTab,
+  resetAllTabsCache,
+  subscribeAllTabs,
+} = await import('./all-tabs');
 
 const tab = (id: string, over: Partial<Tab> = {}): Tab =>
   ({ id, slug: id, name: id, layout: 'p', created_at: 1, updated_at: 1, ...over }) as Tab;
@@ -265,5 +271,66 @@ describe('a response that predates a push', () => {
     await settle();
     await settle();
     expect(row('t3')?.status).toBe('idle');
+  });
+});
+
+describe('the slim per-workspace list must not rob the corpus of report text', () => {
+  /**
+   * `GET /api/tabs?workspaceId=` omits `spawn_report`'s TEXT — it was 56.5% of
+   * a 1.19 MB answer on the route the sidebar re-polls after every status edge
+   * (server/src/tab-list.ts). `/api/tabs/all` still carries it, because the
+   * corpus is what renders a spawn card.
+   *
+   * So the merge of those slim rows is the exact place the text can be lost,
+   * and losing it is SILENT: the card falls back to "Finished with nothing to
+   * report", which is indistinguishable from a worker that really produced
+   * nothing. Caught in review, not by these tests, which is why they exist.
+   */
+  it('keeps the text the corpus already had when the fresh row has none', async () => {
+    SERVER = [
+      {
+        id: 'w1',
+        slug: 'personal',
+        name: 'Personal',
+        tabs: [tab('t1', { spawn_report: 'what the worker did', spawn_report_state: 'ok' })],
+      },
+    ];
+    await loadAllTabs();
+    // The sidebar's 5s poll lands: same row, renamed, and no report text.
+    mergeWorkspaceTabs('w1', [tab('t1', { name: 'renamed', spawn_report_state: 'ok' })]);
+    expect(row('t1')?.name).toBe('renamed');
+    expect(row('t1')?.spawn_report).toBe('what the worker did');
+  });
+
+  it('takes the fresh text when the fresh row HAS some', async () => {
+    SERVER = [
+      { id: 'w1', slug: 'personal', name: 'Personal', tabs: [tab('t1', { spawn_report: 'old' })] },
+    ];
+    await loadAllTabs();
+    mergeWorkspaceTabs('w1', [tab('t1', { spawn_report: 'new' })]);
+    expect(row('t1')?.spawn_report).toBe('new');
+  });
+
+  it('invents nothing for a row that never had any', async () => {
+    SERVER = [{ id: 'w1', slug: 'personal', name: 'Personal', tabs: [tab('t1')] }];
+    await loadAllTabs();
+    mergeWorkspaceTabs('w1', [tab('t1', { name: 'renamed' })]);
+    expect(row('t1')?.spawn_report).toBeUndefined();
+    expect(row('t1')?.name).toBe('renamed');
+  });
+
+  it('still publishes nothing when only the dropped text differs', async () => {
+    // The dedupe above it is load-bearing: without it the 5s poll would
+    // re-publish the corpus every 5s and re-render every reader, ChatPane
+    // included. Preserving the text must not defeat that.
+    SERVER = [
+      { id: 'w1', slug: 'personal', name: 'Personal', tabs: [tab('t1', { spawn_report: 'x' })] },
+    ];
+    await loadAllTabs();
+    const seen: WorkspaceTabs[][] = [];
+    subscribeAllTabs((g) => seen.push(g));
+    const before = seen.length;
+    mergeWorkspaceTabs('w1', [tab('t1')]);
+    expect(seen.length).toBe(before);
   });
 });
