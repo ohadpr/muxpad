@@ -319,6 +319,29 @@ describe('the slim per-workspace list must not rob the corpus of report text', (
     expect(row('t1')?.name).toBe('renamed');
   });
 
+  it('does not scan the held rows once per fresh row', async () => {
+    // It did: `held.find(...)` inside `tabs.map` — O(n²), ~1.4 million
+    // comparisons on a 1,200-row workspace, 20–30 ms per landing, on a merge
+    // that runs whenever a poll lands. Caught by review one commit after I
+    // fixed the identical shape on the server (0aff773b).
+    //
+    // A timing assertion would be flaky, so this pins the SHAPE: the held
+    // rows are turned into a Map once, outside the map over fresh rows.
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(join(__dirname, 'all-tabs.ts'), 'utf8');
+    const fn = /export function mergeWorkspaceTabs[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    // The held rows become a Map ONCE…
+    expect(fn).toMatch(/new Map\(group\.tabs\.map/);
+    // …and the per-row helper takes that Map, so it cannot scan.
+    // (A blanket ban on `.find` would be wrong: this function legitimately
+    // finds the group among the two or three workspaces.)
+    expect(fn).toMatch(/keepReportText\(t, heldById\)/);
+    const helper = /function keepReportText[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    expect(helper).toMatch(/heldById\.get\(/);
+    expect(helper).not.toMatch(/\.find\(/);
+  });
+
   it('still publishes nothing when only the dropped text differs', async () => {
     // The dedupe above it is load-bearing: without it the 5s poll would
     // re-publish the corpus every 5s and re-render every reader, ChatPane

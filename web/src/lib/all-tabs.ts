@@ -287,10 +287,13 @@ function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
  * Only when the fresh row has none: a row that genuinely carries text is
  * newer, and a row whose report was DELETED keeps `spawn_report_state` null,
  * so there is no case where this resurrects something that is gone.
+ *
+ * Takes the held rows AS A MAP. The caller builds it once; this used to take
+ * the array and scan it, which made the merge quadratic.
  */
-function keepReportText(fresh: Tab, held: readonly Tab[]): Tab {
+function keepReportText(fresh: Tab, heldById: Map<string, Tab>): Tab {
   if (fresh.spawn_report) return fresh;
-  const before = held.find((h) => h.id === fresh.id);
+  const before = heldById.get(fresh.id);
   return before?.spawn_report ? { ...fresh, spawn_report: before.spawn_report } : fresh;
 }
 
@@ -309,7 +312,13 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // anything moved, and every corpus reader would re-render on that interval —
   // including `ChatPane`, which is a transcript. That is exactly the poll-on-
   // everything this module exists to avoid, arriving through the back door.
-  const merged = tabs.map((t) => keepReportText(t, group.tabs));
+  // ONE MAP, NOT A SCAN PER ROW. This was `held.find(...)` inside the map —
+  // O(n²), up to ~1.4 million comparisons per landing on a 1,200-row
+  // workspace, measured by review at 20–30 ms each time, on a merge that runs
+  // every time a workspace poll lands. The same mistake as the quadratic
+  // child scan fixed in 0aff773b, written by me one commit after fixing it.
+  const heldById = new Map(group.tabs.map((t) => [t.id, t]));
+  const merged = tabs.map((t) => keepReportText(t, heldById));
   if (rowsSignature(group.tabs) === rowsSignature(merged)) return;
   generation++;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
