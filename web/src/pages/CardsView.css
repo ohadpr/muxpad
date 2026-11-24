@@ -4,18 +4,21 @@
    self-measuring sandboxed frame and there must be exactly one of those.
    ────────────────────────────────────────────────────────────────────── */
 
-/* A GRID THAT DOES NOT PRETEND TO BE FULL.
-   This page is five tiles on this install and may be three on another, so
-   `auto-fill` would stretch them across a 1600px window and leave a row of
-   very wide, very short boxes — a dashboard that looks like it failed to
-   load. `auto-fit` with a max column and the grid itself centred keeps a
-   tile tile-sized whatever the count, and a short page reads as a short
-   page rather than a broken wide one. */
-.cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 340px));
-  justify-content: start;
-  gap: 14px;
+/* A VERTICAL LIST OF FULL-WIDTH ROWS, not a grid of tiles.
+   It was a grid at 260–340px a column, and that was wrong twice. Wrong for
+   what these cards hold — a portfolio table, a quota strip, a backup status
+   line, all WIDE things being folded into a narrow column — and wrong for how
+   the page is read, which is straight down looking for the one that has
+   stopped. A grid asks the eye to scan in two directions to answer a question
+   that is a single list.
+   Capped at 860px: a card's own markup is written for a chat's width, and a
+   portfolio table stretched across a 1600px window is not more readable, just
+   wider. */
+.cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 860px;
   margin-top: 4px;
 }
 
@@ -35,31 +38,88 @@
   border-color: color-mix(in srgb, var(--status-working) 60%, var(--border));
 }
 
+/* ONE LINE ACROSS THE TOP: whose chat, which card, how late, and (archive
+   only) the control. The chat LEADS it — it used to be in a footer under the
+   value, which put the least ambiguous thing about a card last: you read a
+   number and then found out whose it was. */
 .cards-tile-head {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 9px 12px 7px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
 }
-/* The card's NAME is shown here and deliberately not in the chat (see
-   ChatCards: there it is the identity, not a title, and it cost a line).
-   On a page of other people's cards it is the only thing that says which
-   card you are looking at before you have read it. */
+/* The chat, as it is identified in the sidebar — emoji then name — so it is
+   recognised rather than read. The link is this group only, never the row. */
+.cards-tile-chat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  /* EXPLICIT, because it grew without being asked to: measured at 729px for a
+     group whose content is an emoji and two short words, which pushed the
+     card's name and the clock into the right-hand quarter of the row. The
+     spacer that puts the clock at the edge is the age's own `margin-left`,
+     and only that. */
+  flex: 0 1 auto;
+  text-decoration: none;
+  color: var(--fg);
+}
+.cards-tile-chat:hover {
+  text-decoration: none;
+}
+.cards-tile-chat:hover .cards-tile-chatname {
+  text-decoration: underline;
+}
+.cards-tile-icon {
+  flex: 0 0 auto;
+  font-size: 0.9375rem;
+  line-height: 1;
+  /* Emoji sit high on their own baseline; this drops them onto the name's. */
+  transform: translateY(1px);
+}
+.cards-tile-chatname {
+  min-width: 0;
+  /* THE CAP IS ON THE NAME, not on the link around it. `max-width: 60%` on
+     the link resolved as its WIDTH — every row's chat group ended at the same
+     x, short names included, leaving a corridor of nothing before the card's
+     name. A cap in `ch` bounds the one thing that can actually run long and
+     lets the group be the size of its contents. */
+  max-width: 34ch;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cards-tile-ws {
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  color: var(--fg-faint);
+}
+/* The card's own name, BESIDE the chat's and quieter: it is the identity for
+   `muxpad card set`, and on a page of other people's cards it says WHICH of
+   that chat's cards this is — which only matters once you know the chat, so
+   it has to read as the second half of one phrase rather than as a column.
+   It took `flex: 1` first and grew into the middle of the row, leaving the
+   name stranded a quarter of the way across with nothing either side of it. */
 .cards-tile-name {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-family: var(--chrome-font);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: var(--fg);
+  font-size: 0.6875rem;
+  color: var(--fg-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .cards-tile-age {
   flex: 0 0 auto;
+  /* THE SPACER. Everything before this is one phrase on the left; the clock
+     belongs at the far edge where it is in the same place on every row and
+     can be read down the list without reading anything else. */
+  margin-left: auto;
   font-family: var(--chrome-font);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
@@ -71,48 +131,6 @@
 }
 .cards-tile-overdue {
   letter-spacing: 0.02em;
-}
-
-/* THE BODY IS NOT HEIGHT-CAPPED THE WAY THE CHAT'S IS. A pinned card is
-   capped because it sits above the conversation and would push it off the
-   screen; here the cards ARE the page, so a tall one is allowed to be tall
-   and the grid flows around it. */
-.cards-tile-body {
-  padding: 10px 12px;
-}
-.cards-tile-body .chat-card-text,
-.cards-tile-body .chat-card-md {
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  color: var(--fg);
-}
-
-.cards-tile-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px 9px;
-  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
-}
-/* THE ONLY NAVIGATION ON THE TILE. Not the whole tile: the body is an html
-   card's own frame, and a card that contains links would have them fighting
-   a parent that navigates somewhere else on every click. */
-.cards-tile-chat {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.75rem;
-  color: var(--fg-dim);
-  text-decoration: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cards-tile-chat:hover {
-  color: var(--fg);
-  text-decoration: underline;
-}
-.cards-tile-ws {
-  color: var(--fg-faint);
 }
 .cards-tile-clear {
   flex: 0 0 auto;
@@ -134,6 +152,18 @@
   cursor: default;
 }
 
+.cards-tile-body {
+  padding: 10px 12px;
+}
+.cards-tile-body .chat-card-text,
+.cards-tile-body .chat-card-md {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+}
+
 /* ─── The archive ────────────────────────────────────────────────────────
    Cards whose chat has left the live list. Quieter, and BELOW — but present,
    because the reason they pile up is that nobody can see them. */
@@ -150,23 +180,28 @@
   font-weight: 400;
   color: var(--fg-faint);
 }
-.cards-grid.-archive .cards-tile {
+.cards-list.-archive .cards-tile {
   background: transparent;
 }
 /* Dimmed until you go for one. Dimming a card dims somebody's chart, which
    is the point here — these are not values anyone is watching — but it must
    come back the moment it is the thing being looked at. */
-.cards-grid.-archive .cards-tile {
+.cards-list.-archive .cards-tile {
   opacity: 0.62;
   transition: opacity 120ms ease;
 }
-.cards-grid.-archive .cards-tile:hover,
-.cards-grid.-archive .cards-tile:focus-within {
+.cards-list.-archive .cards-tile:hover,
+.cards-list.-archive .cards-tile:focus-within {
   opacity: 1;
 }
 
 @media (max-width: 760px) {
-  .cards-grid {
-    grid-template-columns: 1fr;
+  .cards-tile-head {
+    /* The workspace is the first thing to go: on a phone the chat's own name
+       is enough to place it, and the row has four other things to fit. */
+    gap: 8px;
+  }
+  .cards-tile-ws {
+    display: none;
   }
 }

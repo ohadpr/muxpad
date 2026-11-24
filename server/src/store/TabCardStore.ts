@@ -152,7 +152,8 @@ export class TabCardStore {
         `SELECT ${COLUMNS.split(', ')
           .map((c) => `c.${c}`)
           .join(', ')},
-                t.name AS chat_name, t.slug AS chat_slug, t.retired_at AS chat_retired_at,
+                t.name AS chat_name, t.slug AS chat_slug, t.icon AS chat_icon,
+                t.retired_at AS chat_retired_at,
                 w.slug AS ws_slug, w.name AS ws_name
            FROM tab_cards c
            JOIN tabs t ON t.id = c.tab_id
@@ -163,6 +164,7 @@ export class TabCardStore {
       RawCard & {
         chat_name: string | null;
         chat_slug: string;
+        chat_icon: string | null;
         chat_retired_at: number | null;
         ws_slug: string;
         ws_name: string | null;
@@ -173,6 +175,7 @@ export class TabCardStore {
       chat: {
         tabId: r.tab_id,
         name: r.chat_name ?? '',
+        icon: r.chat_icon,
         slug: r.chat_slug,
         workspaceSlug: r.ws_slug,
         workspaceName: r.ws_name ?? '',

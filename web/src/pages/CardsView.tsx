@@ -1,4 +1,4 @@
-import { type CardWithChat, cardIsStale } from '@muxpad/shared';
+import { type CardWithChat, cardIsStale, fallbackTabIcon } from '@muxpad/shared';
 import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { CardBody, shortAge } from '../components/ChatCards';
@@ -106,7 +106,7 @@ export function CardsView() {
         ) : null}
 
         {ordered.length > 0 ? (
-          <div className="cards-grid">
+          <div className="cards-list">
             {ordered.map((card) => (
               <CardTile key={card.id} card={card} now={now} />
             ))}
@@ -122,7 +122,7 @@ export function CardsView() {
                 — the chat left the live list, so nothing is writing these any more.
               </span>
             </h2>
-            <div className="cards-grid -archive">
+            <div className="cards-list -archive">
               {archived.map((card) => (
                 <CardTile key={card.id} card={card} now={now} onCleared={load} />
               ))}
@@ -135,13 +135,21 @@ export function CardsView() {
 }
 
 /**
- * One card, with the two things the chat does not have to say: whose chat it
- * is, and how late it is.
+ * One card as a FULL-WIDTH ROW: the chat it belongs to across the top left,
+ * the card's own name beside it, how late it is on the right, and the value
+ * underneath at the width of the page.
  *
- * The chat's name is a LINK, and it is the only navigation on the tile. The
- * body is somebody else's markup in a frame, so making the whole tile a target
- * would mean a click inside an html card sometimes navigating away — the card
- * owns its own interior, including its links.
+ * It was a grid of narrow tiles. Wrong twice over for what these hold — the
+ * cards on this install are a portfolio table, a quota strip and a backup
+ * status line, all of which are WIDE things that were being folded into a
+ * 340px column — and wrong for how the page is read, which is down the list
+ * looking for the one that has stopped.
+ *
+ * THE CHAT LEADS THE ROW. It was in a footer under the value, which put the
+ * least ambiguous thing about a card last: you read a number, then learned
+ * whose it was. Icon and name at the top left is how the same chat is
+ * identified three rows up in the sidebar, so it is recognised rather than
+ * read.
  */
 function CardTile({
   card,
@@ -158,6 +166,9 @@ function CardTile({
   const stale = cardIsStale(card, now);
   const [clearing, setClearing] = useState(false);
   const chatName = card.chat.name || 'untitled chat';
+  // The rail's own stand-in for a chat that never got an emoji — stable per
+  // id, never persisted — so the two surfaces show the same chat the same way.
+  const icon = card.chat.icon ?? fallbackTabIcon(card.chat.tabId);
 
   const clear = async () => {
     setClearing(true);
@@ -177,6 +188,20 @@ function CardTile({
   return (
     <article className={`cards-tile${stale ? ' -stale' : ''}`}>
       <header className="cards-tile-head">
+        {/* THE ONLY NAVIGATION ON THE ROW. Not the whole row: the body is an
+            html card's own frame, and a card that contains links would have
+            them fighting a parent that navigates elsewhere on every click. */}
+        <Link
+          className="cards-tile-chat"
+          to="/w/$wsSlug/t/$tabSlug"
+          params={{ wsSlug: card.chat.workspaceSlug, tabSlug: card.chat.slug }}
+        >
+          <span className="cards-tile-icon" aria-hidden="true">
+            {icon}
+          </span>
+          <span className="cards-tile-chatname">{chatName}</span>
+          <span className="cards-tile-ws">{card.chat.workspaceName}</span>
+        </Link>
         <span className="cards-tile-name" title={`muxpad card set ${card.name}`}>
           {card.name}
         </span>
@@ -184,22 +209,6 @@ function CardTile({
           {shortAge(now - card.updated_at)}
           {stale ? <span className="cards-tile-overdue"> overdue</span> : null}
         </span>
-      </header>
-      <div className="cards-tile-body">
-        {/* `peek` false and a no-op for the fold: the chat folds a tall card
-            because it is pinned above the thing you came to read. Here the
-            card IS the thing you came to read. */}
-        <CardBody card={card} peek={false} onFoldable={() => {}} />
-      </div>
-      <footer className="cards-tile-foot">
-        <Link
-          className="cards-tile-chat"
-          to="/w/$wsSlug/t/$tabSlug"
-          params={{ wsSlug: card.chat.workspaceSlug, tabSlug: card.chat.slug }}
-        >
-          {chatName}
-          <span className="cards-tile-ws"> · {card.chat.workspaceName}</span>
-        </Link>
         {onCleared ? (
           <button
             type="button"
@@ -211,7 +220,13 @@ function CardTile({
             {clearing ? 'clearing…' : 'clear'}
           </button>
         ) : null}
-      </footer>
+      </header>
+      <div className="cards-tile-body">
+        {/* `peek` false and a no-op for the fold: the chat folds a tall card
+            because it is pinned above the thing you came to read. Here the
+            card IS the thing you came to read. */}
+        <CardBody card={card} peek={false} onFoldable={() => {}} />
+      </div>
     </article>
   );
 }

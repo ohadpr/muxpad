@@ -150,6 +150,10 @@ export interface CardChat {
   tabId: string;
   /** The chat's name, or '' if it never got one. */
   name: string;
+  /** The chat's emoji, or null if it never got one — the page falls back to
+   *  `fallbackTabIcon`, the same stable per-id stand-in the rail uses, so a
+   *  card from an unlabelled chat is still identifiable by shape. */
+  icon: string | null;
   slug: string;
   workspaceSlug: string;
   workspaceName: string;

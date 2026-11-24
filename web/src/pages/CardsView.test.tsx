@@ -45,6 +45,7 @@ const card = (
       slug: 's-t1',
       workspaceSlug: 'personal',
       workspaceName: 'Personal',
+      icon: '📁',
       retired: false,
       ...(over.chat ?? {}),
     },
@@ -105,14 +106,14 @@ const render = async () => {
   return host;
 };
 
-const tileNames = (el: HTMLElement, scope = '.cards-grid:not(.-archive)') =>
+const tileNames = (el: HTMLElement, scope = '.cards-list:not(.-archive)') =>
   [...el.querySelectorAll(`${scope} .cards-tile-name`)].map((n) => n.textContent);
 
 describe('the cards page', () => {
   it('says what to do instead of showing an empty grid', async () => {
     const el = await render();
     expect(el.querySelector('.mcl-empty-title')?.textContent).toContain('No cards');
-    expect(el.querySelector('.cards-grid')).toBeNull();
+    expect(el.querySelector('.cards-list')).toBeNull();
   });
 
   it('puts the overdue first — the question the page is for', async () => {
@@ -132,7 +133,7 @@ describe('the cards page', () => {
       card('market', { every_ms: 60_000, updated_at: NOW }),
     ];
     const el = await render();
-    const tiles = [...el.querySelectorAll('.cards-grid:not(.-archive) .cards-tile')];
+    const tiles = [...el.querySelectorAll('.cards-list:not(.-archive) .cards-tile')];
     expect(tiles[0]?.className).toContain('-stale');
     expect(tiles[1]?.className).not.toContain('-stale');
   });
@@ -152,7 +153,7 @@ describe('the cards page', () => {
     ];
     const el = await render();
     expect(tileNames(el)).toEqual(['market']);
-    expect(tileNames(el, '.cards-grid.-archive')).toEqual(['leftover']);
+    expect(tileNames(el, '.cards-list.-archive')).toEqual(['leftover']);
     expect(el.querySelector('.cards-archive-head')?.textContent).toContain('finished with');
   });
 
@@ -163,7 +164,7 @@ describe('the cards page', () => {
     const el = await render();
     const clears = [...el.querySelectorAll('.cards-tile-clear')];
     expect(clears).toHaveLength(1);
-    expect(clears[0]?.closest('.cards-grid')?.className).toContain('-archive');
+    expect(clears[0]?.closest('.cards-list')?.className).toContain('-archive');
   });
 
   it('every tile leads back to the chat that owns it', async () => {
@@ -178,5 +179,26 @@ describe('the cards page', () => {
     payload = [card('market', { chat: { name: '' } })];
     const el = await render();
     expect(el.querySelector('.cards-tile-chat')?.textContent).toContain('untitled chat');
+  });
+
+  it('leads each row with the chat, icon first, as the sidebar does', async () => {
+    // The chat used to sit in a footer UNDER the value, which put the least
+    // ambiguous thing about a card last — you read a number and then found
+    // out whose it was.
+    payload = [card('market', { chat: { icon: '💾', name: 'Investing' } })];
+    const el = await render();
+    const head = el.querySelector('.cards-tile-head');
+    expect(head?.firstElementChild?.className).toContain('cards-tile-chat');
+    expect(el.querySelector('.cards-tile-icon')?.textContent).toBe('💾');
+    expect(el.querySelector('.cards-tile-chatname')?.textContent).toBe('Investing');
+  });
+
+  it('falls back to the rail’s own stand-in icon, not a shared default', async () => {
+    // A chat with no emoji still has to be identifiable by shape, and it must
+    // be the SAME shape the sidebar gives it three rows up.
+    payload = [card('market', { chat: { icon: null, tabId: 't-abc' } })];
+    const el = await render();
+    const { fallbackTabIcon } = await import('@muxpad/shared');
+    expect(el.querySelector('.cards-tile-icon')?.textContent).toBe(fallbackTabIcon('t-abc'));
   });
 });

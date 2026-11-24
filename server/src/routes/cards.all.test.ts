@@ -21,13 +21,19 @@ const ws = (id: string, slug: string, name: string) =>
     )
     .run(id, slug, name);
 
-const tab = (id: string, wsId: string, name: string, retiredAt: number | null = null) =>
+const tab = (
+  id: string,
+  wsId: string,
+  name: string,
+  retiredAt: number | null = null,
+  icon: string | null = '💾',
+) =>
   db
     .prepare(
-      `INSERT INTO tabs (id, slug, name, workspace_id, layout, position, created_at, updated_at, retired_at)
-       VALUES (?,?,?,?,'{}',0,0,0,?)`,
+      `INSERT INTO tabs (id, slug, name, icon, workspace_id, layout, position, created_at, updated_at, retired_at)
+       VALUES (?,?,?,?,?,'{}',0,0,0,?)`,
     )
-    .run(id, `s-${id}`, name, wsId, retiredAt);
+    .run(id, `s-${id}`, name, icon, wsId, retiredAt);
 
 beforeEach(() => {
   db = new Database(':memory:');
@@ -55,6 +61,7 @@ describe('GET /api/cards', () => {
     expect(card?.chat).toMatchObject({
       tabId: 't1',
       name: 'Investing',
+      icon: '💾',
       slug: 's-t1',
       workspaceSlug: 'personal',
       retired: false,
@@ -86,6 +93,15 @@ describe('GET /api/cards', () => {
     // The page groups these away from the values actually being watched; it
     // needs the fact, not a guess from the card's own age.
     expect((await list()).cards[0]?.chat).toMatchObject({ retired: true });
+  });
+
+  it('carries a null icon rather than inventing one — the page picks the stand-in', async () => {
+    // The fallback is the RAIL's, keyed on the tab id, so the same chat wears
+    // the same shape in both places. A default chosen here would be a second
+    // one, and they would drift.
+    tab('t1', 'w1', 'No emoji', null, null);
+    new TabCardStore(db).set({ tabId: 't1', name: 'c', content: 'x' });
+    expect((await list()).cards[0]?.chat).toMatchObject({ icon: null });
   });
 
   it('a card cannot outlive its chat, which is why the join is safe', async () => {
