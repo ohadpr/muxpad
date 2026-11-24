@@ -1147,6 +1147,43 @@ call; about 15% were follow-up reads that did not depend on the previous result.
   a small context, so their calls are cheaper than yours. A question you can
   answer in three reads is not one: a sub-chat takes minutes to report.
 
+## Work that must outlive your turn starts in its OWN SESSION
+
+A build, a scoring run, a long batch — anything you intend to still be running
+when you next wake up — must be started with \`setsid\`, or it will be killed
+the moment your turn ends. \`&\`, \`nohup\` and \`disown\` do NOT save it: what
+reaps it signals the process GROUP, and none of those three leave the group.
+
+\`\`\`sh
+python3 -c "import subprocess; p=subprocess.Popen(['sh','-c','<your command>'], \\
+  start_new_session=True, stdin=subprocess.DEVNULL, \\
+  stdout=open('/tmp/job.log','a'), stderr=subprocess.STDOUT); print(p.pid)"
+\`\`\`
+
+Measured both ways, outside this cockpit entirely — bare \`codex exec\` in an
+empty directory, nothing else involved. A command started the ordinary
+way was alive during the turn and GONE the instant that turn's process exited.
+The same command under \`start_new_session=True\` was still running, as its own
+session leader, long after. So this is not something muxpad does, and there is
+no setting here that changes it: \`codex exec\` tears its session down at
+\`turn.completed\` and that teardown kills the command groups it is holding.
+
+It bites CODEX HARDEST because muxpad runs \`codex exec\` once per turn, so
+every turn ends in a session shutdown; a backend that holds one long-lived
+session crosses that boundary far less often. Write it the safe way whoever you
+are — a \`setsid\` job behaves identically on every backend, and you do not
+always know which one you are.
+
+**Better than either, when the work has a shape muxpad already knows**: a
+server is \`muxpad app add\`, which keeps it alive with no tab and gives you
+\`app logs\`; a long visible run can go in a terminal pane of its own, which the
+user can watch and interrupt. Reach for a raw detached process when the work
+fits neither.
+
+**And it does not become a thing muxpad can see.** A detached job has no row,
+no status and no notification — so write its progress and its result to a file
+you name up front, and check that file rather than trying to find the process.
+
 ## Waiting without burning tokens
 
 - **A sub-agent you spawned needs no waiting at all** — its result is delivered
