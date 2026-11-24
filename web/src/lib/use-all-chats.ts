@@ -1,5 +1,5 @@
 import type { Tab, Workspace } from '@muxpad/shared';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
@@ -64,12 +64,52 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
   }, []);
 
   const byId = new Map((corpus ?? []).map((g) => [g.id, g.tabs]));
-  return visibleWorkspaces(workspaces).map((w) => ({
+  const groups = visibleWorkspaces(workspaces).map((w) => ({
     workspace: w,
     // The corpus if we have it, else whatever this workspace's own poll has
     // already cached — which for the workspace you are in is always something.
     tabs: byId.get(w.id) ?? cachedTabsFor(w.id),
   }));
+  return stableGroups(useRef<Groups | null>(null), groups);
+}
+
+type Groups = { workspace: Workspace; tabs: Tab[] }[];
+
+/**
+ * THE SAME ARRAY BACK, when nothing underneath it moved.
+ *
+ * This returned a freshly built array on every render — and `useChatCorpus`
+ * below memoises on it, so the memo NEVER hit and `toSearchableTabs` re-ran
+ * for every consumer on every render, over every chat on the install. Found
+ * by the performance review (web/src/lib/use-all-chats.ts:66 in its report).
+ *
+ * NOT `useMemo([workspaces, corpus])`, which is the obvious fix and is wrong:
+ * the `cachedTabsFor` fallback is read non-reactively, for workspaces the
+ * corpus does not hold — `mergeWorkspaceTabs` returns early for those rather
+ * than publishing — so keying on the corpus would freeze exactly the rows that
+ * have no other way to update. Recomputing every render is what kept them
+ * fresh.
+ *
+ * So: build the array every render as before, and hand back the PREVIOUS one
+ * when every workspace and every tabs array is identity-identical to last
+ * time. Cheap (a length check and N comparisons over ~2 workspaces), correct
+ * for the fallback (a changed cache is a changed array identity), and it gives
+ * the memo downstream something stable to hold.
+ */
+/** Test seam — the identity rule is the whole fix, so it is tested directly
+ *  rather than through a hook that would need a renderer to drive it. */
+export const stableGroupsForTest = stableGroups;
+
+function stableGroups(ref: { current: Groups | null }, next: Groups): Groups {
+  const held = ref.current;
+  if (
+    held &&
+    held.length === next.length &&
+    held.every((g, i) => g.workspace === next[i]?.workspace && g.tabs === next[i]?.tabs)
+  )
+    return held;
+  ref.current = next;
+  return next;
 }
 
 /**
