@@ -380,3 +380,45 @@ describe('every message muxpad injects reads as machine', () => {
     expect(isMachineMessage('the <muxpad-rebase> wrapper is confusing')).toBe(false);
   });
 });
+
+/**
+ * ── A GENERATED SUMMARY MAY NOT OUTRANK A RECORDED FACT ──────────────────
+ *
+ * Reported from a live run: the delivery for a worker read "Show HN run
+ * complete, report published, task marked done" while its task was OPEN with a
+ * next step recorded and `run.lock` held by a live PID. The parent nearly
+ * relayed that completion to the user.
+ *
+ * The summary is a model's description of a transcript. The task is the
+ * worker's own statement of record, written through `muxpad task`. When they
+ * disagree the reader is shown both — at the point of reading, not in a
+ * footer.
+ */
+describe('a worker whose task is still open', () => {
+  const done = 'Show HN run complete, report published, task marked done.';
+
+  it('says so under the summary that claims otherwise', () => {
+    const text = renderSpawnDelivery([
+      entry({ report: done, openTask: { nextStep: 'score the remaining 180 rows' } }),
+    ]);
+    expect(text).toContain('Its task is still OPEN');
+    expect(text).toContain('score the remaining 180 rows');
+    // The note lands AFTER the report, where the contradiction is unmissable.
+    expect(text.indexOf('still OPEN')).toBeGreaterThan(text.indexOf('task marked done'));
+  });
+
+  it('does not edit or suppress what the worker said', () => {
+    // Hiding a worker's own words removes exactly what a reviewer needs when
+    // the worker is wrong.
+    const text = renderSpawnDelivery([entry({ report: done, openTask: { nextStep: null } })]);
+    expect(text).toContain(done);
+    expect(text).toContain('Its task is still OPEN');
+  });
+
+  it('says nothing at all for a worker with no open task', () => {
+    // The ordinary case, which must render exactly as it did before.
+    const text = renderSpawnDelivery([entry({ report: done })]);
+    expect(text).not.toContain('still OPEN');
+    expect(text).toContain(done);
+  });
+});

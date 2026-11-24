@@ -9,6 +9,7 @@ import type Database from 'better-sqlite3';
 import { PaneStore } from '../store/PaneStore.js';
 import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { TaskStore } from './TaskStore.js';
 
 /**
  * THE JOIN — a finished child's result, into its parent's conversation.
@@ -670,6 +671,17 @@ export class ReportDelivery {
       report: round.report,
       artifacts: round.artifacts,
       rounds: new SpawnRoundStore(this.db).roundCount(round.tab_id),
+      // THE WORKER'S OWN RECORD, carried beside the model's description of it.
+      // A delivery once read "run complete, report published, task marked
+      // done" while the task was open with a next step recorded and a lock
+      // held by a live PID; the parent nearly relayed that completion. The
+      // summary is written by a model reading a transcript and can say
+      // anything — the task is written by the worker through `muxpad task`.
+      // When they disagree, the reader is shown both.
+      ...(() => {
+        const open = new TaskStore(this.db).openFor(round.tab_id);
+        return open ? { openTask: { nextStep: open.next_step } } : {};
+      })(),
       // Only when it will actually be clipped — a path beside a report you
       // have read in full is noise, and teaches a parent to open the file
       // every time.
