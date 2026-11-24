@@ -156,10 +156,16 @@
   pointer-events: none;
 }
 
-/* ── tokyo-night · the modern indeterminate spinner, done properly ────────
-   An arc on a faint track (Material/iOS), but the arc is a TAPERED comet whose
-   tail fades into the track — a neon streak at night — instead of a cut ring
-   with two hard ends. */
+/* ── tokyo-night · a neon trail going round ──────────────────────────────
+   ONE FAMILY. "i like riso, blueprint, alucard" — and what those three
+   share is that they are ROUND, they TURN, and they are built from a few
+   chunky PIECES with gaps between them (two dots, four dashes, six
+   segments), so they survive 10px: the outline is still a circle when every
+   interior detail is gone. Each theme keeps that geometry and differs by
+   material — the count of pieces, ink, weight, whether it ticks or sweeps.
+   Here: five dots running a faint track, each smaller and dimmer than the
+   one ahead, like a streak of lights at night. A smooth sweep. (It replaced a
+   tapered comet, one continuous arc — the shape family he did not pick.) */
 [data-theme="tokyo-night"]
   :is(
     .navtree-mark[data-state="working"],
@@ -167,7 +173,7 @@
     .navtree-status[data-status="working"]
   )::before {
   border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--wm-ink) 22%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--wm-ink) 20%, transparent);
 }
 [data-theme="tokyo-night"]
   :is(
@@ -175,15 +181,28 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  border-radius: 50%;
-  background: conic-gradient(from 0deg, transparent 0 12%, var(--wm-ink));
-  -webkit-mask: radial-gradient(
-    farthest-side,
-    transparent calc(100% - 2.5px),
-    #000 calc(100% - 2px)
-  );
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
-  animation: navtree-state-spin 0.9s linear infinite;
+  background: radial-gradient(circle at 50.0% 14.3%, var(--wm-ink) 0 2.2px, transparent 2.6px),
+    radial-gradient(
+      circle at 24.7% 24.7%,
+      color-mix(in srgb, var(--wm-ink) 78%, transparent) 0 1.9px,
+      transparent 2.3px
+    ),
+    radial-gradient(
+      circle at 14.3% 50.0%,
+      color-mix(in srgb, var(--wm-ink) 58%, transparent) 0 1.6px,
+      transparent 2.0px
+    ),
+    radial-gradient(
+      circle at 24.7% 75.3%,
+      color-mix(in srgb, var(--wm-ink) 40%, transparent) 0 1.3px,
+      transparent 1.7px
+    ),
+    radial-gradient(
+      circle at 50.0% 85.7%,
+      color-mix(in srgb, var(--wm-ink) 26%, transparent) 0 1.1px,
+      transparent 1.5px
+    );
+  animation: navtree-state-spin 1s linear infinite;
 }
 
 /* ── dracula & alucard · the segmented activity wheel ───────────────────
@@ -224,106 +243,85 @@
   animation: navtree-state-spin 0.9s steps(6) infinite;
 }
 
-/* ── github-light · Primer's spinner, from pending to running ────────────
-   Primer's own Spinner: a quarter arc going round a full faint track, in
-   GitHub's pending amber. It replaced Primer's
-   animated ellipsis: at rest a row of three dots is the "···" overflow menu
-   every workspace row already carries, so a working chat looked like a
-   button. */
-[data-theme="github-light"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before {
-  border-radius: 50%;
-  /* Solid, not the dotted "pending" ring it first had: at 1:1 a 2px dotted
-     ring on a 14px circle is a scatter of single pixels, i.e. noise. */
-  border: 2px solid color-mix(in srgb, var(--wm-ink) 30%, transparent);
-}
+/* ── github-light · Primer's three dots, on a circle ────────────────────
+   Primer's own vocabulary for "loading" is three dots; set round a circle
+   they turn, one lit, ticking a third of a turn at a time. Three pieces with
+   gaps, the family's geometry. (It replaced a single arc on a track.) The
+   unlit two are at 60%, not fainter: at 1:1 anything dimmer was a smudge. */
 [data-theme="github-light"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
+  background: radial-gradient(circle at 50.0% 17.1%, var(--wm-ink) 0 2.5px, transparent 2.9px),
+    radial-gradient(
+      circle at 78.5% 66.4%,
+      color-mix(in srgb, var(--wm-ink) 60%, transparent) 0 2.3px,
+      transparent 2.7px
+    ),
+    radial-gradient(
+      circle at 21.5% 66.4%,
+      color-mix(in srgb, var(--wm-ink) 60%, transparent) 0 2.3px,
+      transparent 2.7px
+    );
+  animation: navtree-state-spin 1.05s steps(3) infinite;
+}
+
+/* ── acme & acme-dark · a moon in orbit ──────────────────────────────────
+   A body at the centre, its orbit drawn faint, and one moon going round it:
+   round, turning, the pieces apart. It replaced the "live" ping, a ring that
+   pulsed without turning. (A ring at the centre, tried first, touched the
+   moon at 1:1 and the pair read as a key.) */
+:is([data-theme="acme"], [data-theme="acme-dark"])
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::before {
   border-radius: 50%;
-  background: conic-gradient(var(--wm-ink) 0 90deg, transparent 0);
+  background: radial-gradient(circle, var(--wm-ink) 0 1.3px, transparent 1.7px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wm-ink) 35%, transparent);
+}
+:is([data-theme="acme"], [data-theme="acme-dark"])
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  background: radial-gradient(circle at 50.0% 7.9%, var(--wm-ink) 0 2.1px, transparent 2.5px);
+  animation: navtree-state-spin 1.2s linear infinite;
+}
+
+/* ── demoscene · a copper ring ───────────────────────────────────────────
+   The copper bar's two inks, the working amber and the phosphor cyan, cut
+   into four segments of a thick ring that sweeps round — the raster colours
+   on the family's round form. (It replaced the tape-loading bands, which
+   were a box.) */
+[data-theme="demoscene"]
+  :is(
+    .navtree-mark[data-state="working"],
+    .navtree-state-spin,
+    .navtree-status[data-status="working"]
+  )::after {
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--wm-ink) 0 70deg,
+    transparent 0 90deg,
+    var(--pane-accent) 90deg 160deg,
+    transparent 0 180deg,
+    var(--wm-ink) 180deg 250deg,
+    transparent 0 270deg,
+    var(--pane-accent) 270deg 340deg,
+    transparent 0
+  );
   -webkit-mask: radial-gradient(
     farthest-side,
-    transparent calc(100% - 2.5px),
-    #000 calc(100% - 2px)
+    transparent calc(100% - 3px),
+    #000 calc(100% - 2.5px)
   );
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
-  animation: navtree-state-spin 0.9s linear infinite;
-}
-
-/* ── acme & acme-dark · the "live" ping ──────────────────────────────────
-   The radar pulse that a live indicator or a sending message uses: a ring
-   sends out a wave that widens and fades. The twist: the core is a RING, not
-   a dot, so it can never be mistaken for the filled ready/blocked marks. */
-:is([data-theme="acme"], [data-theme="acme-dark"])
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before {
-  background: radial-gradient(closest-side, transparent 46%, var(--wm-ink) 50% 72%, transparent 76%);
-}
-:is([data-theme="acme"], [data-theme="acme-dark"])
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::after {
-  border-radius: 50%;
-  border: 1.5px solid var(--wm-ink);
-  animation: wm-ping 1.3s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
-}
-@keyframes wm-ping {
-  from {
-    transform: scale(0.55);
-    opacity: 1;
-  }
-  to {
-    transform: scale(1.15);
-    opacity: 0;
-  }
-}
-
-/* ── demoscene · the tape-loading border ─────────────────────────────────
-   The C64 said "LOADING" by flickering bands of colour across the border
-   while the tape ran, every scener's first progress bar. A framed block split
-   into TWO thick bands, the working ink and the theme's phosphor cyan, that
-   swap places on every beat (opacity only, 0.9s a cycle).
-   Two bands, not the 2px ones it had: a repeating pattern finer than ~3px
-   aliases into shimmer at 1:1. And every frame is two colours, never one
-   colour with gaps (a boxed "≡", a menu) and never solid ("■", Stop). */
-[data-theme="demoscene"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before {
-  border: 1.5px solid var(--wm-ink);
-  border-radius: 2px;
-  padding: 1.5px;
-  background: linear-gradient(to bottom, var(--wm-ink) 0 50%, var(--pane-accent) 50%) content-box;
-}
-[data-theme="demoscene"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::after {
-  margin: 3px;
-  background: linear-gradient(to bottom, var(--pane-accent) 0 50%, var(--wm-ink) 50%);
-  animation: wm-flip 0.9s step-end infinite;
-}
-@keyframes wm-flip {
-  50% {
-    opacity: 0;
-  }
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  animation: navtree-state-spin 1s linear infinite;
 }
 
 /* ── blueprint · the construction circle ─────────────────────────────────
@@ -376,29 +374,20 @@
   animation: navtree-state-spin 0.9s linear infinite;
 }
 
-/* ── memphis · the indeterminate bar, in zigzag ──────────────────────────
-   The indeterminate progress bar, the stripe that runs along a track, with
-   Memphis's zigzag as the stripe: yellow teeth marching over a magenta track.
-   It replaced a square tumbling over its own offset shadow, which at rest
-   is two overlapping squares (the copy icon), or an empty checkbox beside
-   the ✓ that marks a finished row. The bar is clipped on the host (see
-   wokintosh), so the teeth can travel one period and loop seamlessly. */
-[data-theme="memphis"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  ) {
-  clip-path: inset(calc(var(--wm-inset) + 3px) var(--wm-inset));
-}
+/* ── memphis · a sticker ring ────────────────────────────────────────────
+   A thick ring in two of the confetti colours, yellow and cyan, sweeping
+   round over its own hard magenta offset shadow, which stays put — the
+   Memphis sticker on the family's round form. (It replaced a zigzag bar and,
+   before that, a tumbling square: neither read as a spinner.) */
 [data-theme="memphis"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::before {
-  inset: calc(var(--wm-inset) + 3px) var(--wm-inset);
-  background: var(--pane-accent);
+  border-radius: 50%;
+  border: 3px solid var(--pane-accent);
+  transform: translate(1.5px, 1.5px);
 }
 [data-theme="memphis"]
   :is(
@@ -406,78 +395,66 @@
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  inset: calc(var(--wm-inset) + 3px) var(--wm-inset) calc(var(--wm-inset) + 3px)
-    calc(var(--wm-inset) - 8px);
-  background:
-    linear-gradient(135deg, var(--wm-ink) 25%, transparent 25%) -4px 0 / 8px 8px,
-    linear-gradient(225deg, var(--wm-ink) 25%, transparent 25%) -4px 0 / 8px 8px,
-    linear-gradient(315deg, var(--wm-ink) 25%, transparent 25%) 0 0 / 8px 8px,
-    linear-gradient(45deg, var(--wm-ink) 25%, transparent 25%) 0 0 / 8px 8px;
-  animation: wm-march-8 0.7s linear infinite;
-}
-@keyframes wm-march-8 {
-  to {
-    transform: translateX(8px);
-  }
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--wm-ink) 0 160deg,
+    transparent 0 180deg,
+    #00c2e0 180deg 340deg,
+    transparent 0
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3px),
+    #000 calc(100% - 2.5px)
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  animation: navtree-state-spin 1.1s linear infinite;
 }
 
-/* ── wokintosh · the barber pole ─────────────────────────────────────────
-   System 7's answer to "working, duration unknown": the indeterminate
-   progress bar, diagonal bands marching through a framed bar. It replaced the
-   wristwatch cursor, which at row size is a CLOCK FACE, and in muxpad a clock
-   means scheduled work ("this busy-indicator feels like cron").
-   In ONE INK and in COLOUR, not the 1-bit black and white of the original:
-   "u can't do this in white". A black bar full of near-white stripes on the
-   teal was a dark blob with noise in it, belonging to neither the Mac nor the
-   desktop it sat on. Frame and bands are --wm-ink (on the rail #ffe14a,
-   4.86:1 against the teal; on the grey title bar, the paper's amber), and the
-   gaps between bands are the ground itself showing through.
-   BANDS 3px THICK on a 6px period, so one or two cross the mark at a time:
-   at 1:1 you see a couple of bars moving, not a texture vibrating. They
-   travel exactly one period so the loop is seamless; the host is clipped to
-   the bar so the waiting extra period never shows. */
-[data-theme="wokintosh"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  ) {
-  clip-path: inset(calc(var(--wm-inset) + 2px) var(--wm-inset));
-}
-[data-theme="wokintosh"]
-  :is(
-    .navtree-mark[data-state="working"],
-    .navtree-state-spin,
-    .navtree-status[data-status="working"]
-  )::before {
-  inset: calc(var(--wm-inset) + 2px) var(--wm-inset);
-  border: 1.5px solid var(--wm-ink);
-}
+/* ── wokintosh · a 1-bit ring that ticks ─────────────────────────────────
+   ONE FAMILY. "i like riso, blueprint, alucard" — and what those three
+   share is that they are ROUND, they TURN, and they are built from a few
+   chunky PIECES with gaps between them (two dots, four dashes, six
+   segments), so they survive 10px: the outline is still a circle when every
+   interior detail is gone. Each theme keeps that geometry and differs by
+   material — the count of pieces, ink, weight, whether it ticks or sweeps.
+   Here: three hard blocks of a thick ring with hard gaps between them, in one
+   ink and nothing else — 1-bit, as System 7 drew everything — ticking an
+   eighth of a turn at a time, as the Mac's busy cursors did. No hands and no
+   hour ticks: a clock means scheduled work in muxpad (`muxpad cron`), which
+   is why the wristwatch went. It replaced the barber pole, a field of bands
+   that never read as a spinner at row size. The ink is the yellow fixed last
+   round, #ffe14a, 4.86:1 on the teal. */
 [data-theme="wokintosh"]
   :is(
     .navtree-mark[data-state="working"],
     .navtree-state-spin,
     .navtree-status[data-status="working"]
   )::after {
-  inset: calc(var(--wm-inset) + 3.5px) calc(var(--wm-inset) + 1.5px) calc(var(--wm-inset) + 3.5px)
-    calc(var(--wm-inset) + 1.5px - 8.485px);
-  background: repeating-linear-gradient(-45deg, var(--wm-ink) 0 3px, transparent 3px 6px);
-  animation: wm-march-pole 0.8s linear infinite;
-}
-/* 8.485px = the bands' 6px period measured along the bar (6 ÷ sin 45°). */
-@keyframes wm-march-pole {
-  to {
-    transform: translateX(8.485px);
-  }
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--wm-ink) 0 75deg,
+    transparent 0 120deg,
+    var(--wm-ink) 120deg 195deg,
+    transparent 0 240deg,
+    var(--wm-ink) 240deg 315deg,
+    transparent 0
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3.5px),
+    #000 calc(100% - 3.0px)
+  );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3.0px));
+  animation: navtree-state-spin 1.2s steps(8) infinite;
 }
 
 /* Reduced motion: the moving layer stops at its rest frame, and every rest
-   frame above is a complete glyph: the striped bar, the comet, the segmented wheel, the
-   arc on its dotted track, the ringed ping, the dashed
-   circle round its point, the two inks, the zigzag on its track; demoscene's
-   two-colour bands. Nothing gets
-   fainter. (StateChip's spinner still hands over to the
-   WORKING word there, as it always has.) */
+   frame above is a complete glyph: the 1-bit ring, the neon trail, the
+   segmented wheel, the three dots, the moon and its ring, the copper ring,
+   the dashed circle round its point, the two inks, the sticker ring. Nothing
+   gets fainter. (StateChip's spinner still hands over to the WORKING word
+   there, as it always has.) */
 @media (prefers-reduced-motion: reduce) {
   [data-theme] .navtree-mark[data-state="working"]::after,
   [data-theme] .navtree-state-spin::after,
