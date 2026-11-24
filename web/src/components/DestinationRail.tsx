@@ -1,4 +1,4 @@
-import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { unreadByWorkspace } from '../lib/chat-sections';
 import {
   DESTINATIONS,
@@ -32,6 +32,15 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
   // them, so its badge counts all of them (no sub-chats; see isUnreadChat).
   const unread = [...unreadByWorkspace(useChatCorpus()).values()].reduce((a, b) => a + b, 0);
 
+  /** The ROUTE an entry goes to, or null if it only switches the list's view.
+   *  Derived from destinationAction so the two cannot disagree about which
+   *  entries are places — `back-to-work` is a view's return trip, not a
+   *  destination of its own, and must not become an href. */
+  const pageRoute = (dest: Destination): '/cards' | '/artifacts' | '/apps' | null => {
+    const to = destinationAction(dest, pathname).to;
+    return to === '/cards' || to === '/artifacts' || to === '/apps' ? to : null;
+  };
+
   const go = (dest: Destination) => {
     const act = destinationAction(dest, pathname);
     if (act.view) setRailView(act.view);
@@ -48,38 +57,35 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
         const count = d === 'unread' ? unread : 0;
         const label =
           count > 0 ? `${DESTINATION_LABEL[d]} — ${count} unread` : DESTINATION_LABEL[d];
-        return (
-          <button
-            key={d}
-            type="button"
-            className="dest-rail-item"
-            data-dest={d}
-            data-current={d === current ? 'true' : undefined}
-            aria-current={d === current ? 'page' : undefined}
-            aria-label={label}
-            title={label}
-            onClick={() => go(d)}
-          >
-            <span className="dest-rail-icon">
-              {/* WEIGHT 2.3, not the 1.75 the set was drawn at. A glyph is not
-                  text: at a label's colour its thin anti-aliased stroke read
-                  fainter than the word under it — the stroke's MEDIAN painted
-                  pixel measured 2.3–3.7:1 on the lifted ground (memphis aside)
-                  while the labels cleared 4.5. So the icon carries FULL rail
-                  ink and a heavier stroke (median now 3.65–8.7 at rest), and the
-                  label and the current-item marking stay where they were. At
-                  2.0 wokintosh's and blueprint's resting icons still medianed
-                  ~2.9–3.1; 2.3 is where every theme clears 3:1. */}
-              <NavGlyph name={d} size={22} weight={2.3} className="dest-rail-glyph" />
-              {count > 0 && (
-                <span className="dest-rail-badge" aria-hidden="true">
-                  {count > 99 ? '99+' : count}
-                </span>
-              )}
-            </span>
-            <span className="dest-rail-label" aria-hidden="true">
-              {DESTINATION_LABEL[d]}
-            </span>
+        // ─── A PLACE IS A LINK; A VIEW IS A BUTTON ────────────────────
+        // Cards, Artifacts and Apps are ROUTES, and they were <button>s with
+        // an onClick — so right-click had no "open in new tab", cmd-click did
+        // nothing, the status bar showed no target and middle-click was dead.
+        // "card icon rail elements don't offer right click open menu maybe
+        // they are not <a> links annoying." They are now.
+        //
+        // Home, Unread and Activity stay buttons, and that is not an
+        // oversight: they do not navigate. They switch which VIEW the chat
+        // list beside the rail is showing, and the URL does not change — you
+        // stay in the chat you were in. An anchor whose href is the page you
+        // are already on would offer a new tab that opens the wrong thing.
+        const route = pageRoute(d);
+        const body = <RailItemBody dest={d} count={count} />;
+        const shared = {
+          className: 'dest-rail-item',
+          'data-dest': d,
+          'data-current': d === current ? 'true' : undefined,
+          'aria-current': d === current ? ('page' as const) : undefined,
+          'aria-label': label,
+          title: label,
+        };
+        return route ? (
+          <Link key={d} to={route} {...shared}>
+            {body}
+          </Link>
+        ) : (
+          <button key={d} type="button" {...shared} onClick={() => go(d)}>
+            {body}
           </button>
         );
       })}
@@ -104,5 +110,42 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
         </a>
       </div>
     </nav>
+  );
+}
+
+/**
+ * What is inside a rail entry — the glyph, its unread badge, and the word.
+ *
+ * Its own component rather than a fragment built in the map, because the
+ * entry is either a <Link> or a <button> depending on whether it is a place
+ * or a view, and the contents must be identical either way. (It was a
+ * `const body = <>…</>` inside the loop; biome reads a fragment there as an
+ * unkeyed iterable item, which is a false positive but a fair hint that this
+ * wanted to be a component.)
+ */
+function RailItemBody({ dest, count }: { dest: Destination; count: number }) {
+  return (
+    <>
+      <span className="dest-rail-icon">
+        {/* WEIGHT 2.3, not the 1.75 the set was drawn at. A glyph is not text:
+            at a label's colour its thin anti-aliased stroke read fainter than
+            the word under it — the stroke's MEDIAN painted pixel measured
+            2.3–3.7:1 on the lifted ground (memphis aside) while the labels
+            cleared 4.5. So the icon carries FULL rail ink and a heavier stroke
+            (median now 3.65–8.7 at rest), and the label and the current-item
+            marking stay where they were. At 2.0 wokintosh's and blueprint's
+            resting icons still medianed ~2.9–3.1; 2.3 is where every theme
+            clears 3:1. */}
+        <NavGlyph name={dest} size={22} weight={2.3} className="dest-rail-glyph" />
+        {count > 0 && (
+          <span className="dest-rail-badge" aria-hidden="true">
+            {count > 99 ? '99+' : count}
+          </span>
+        )}
+      </span>
+      <span className="dest-rail-label" aria-hidden="true">
+        {DESTINATION_LABEL[dest]}
+      </span>
+    </>
   );
 }
