@@ -357,3 +357,51 @@ describe('the slim per-workspace list must not rob the corpus of report text', (
     expect(seen.length).toBe(before);
   });
 });
+
+describe('corpus equality without serialized signatures', () => {
+  it('compares unchanged polls without serializing report text', async () => {
+    SERVER[0]!.tabs = [tab('t1', { spawn_report: 'report'.repeat(10_000) })];
+    await loadAllTabs();
+    const held = cachedAllTabs();
+    const incoming = structuredClone(SERVER[0]!.tabs);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      mergeWorkspaceTabs('w1', incoming);
+      expect(cachedAllTabs()).toBe(held);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('stops reading rows after the first visible difference', async () => {
+    await loadAllTabs();
+    const later = tab('t2');
+    const read = vi.fn(() => 't2');
+    Object.defineProperty(later, 'name', { enumerable: true, get: read });
+    mergeWorkspaceTabs('w1', [tab('t1', { name: 'new name' }), later]);
+    expect(row('t1')?.name).toBe('new name');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('ignores key insertion order and absent undefined fields but catches nested changes', async () => {
+    await loadAllTabs();
+    const held = cachedAllTabs();
+    mergeWorkspaceTabs(
+      'w1',
+      SERVER[0]!.tabs.map(
+        (t) =>
+          ({
+            extra: undefined,
+            ...Object.fromEntries(Object.entries(t).reverse()),
+          }) as unknown as Tab,
+      ),
+    );
+    expect(cachedAllTabs()).toBe(held);
+    mergeWorkspaceTabs('w1', [
+      tab('t1', { layout: { direction: 'row', first: 'a', second: 'b' } as never }),
+      tab('t2'),
+    ]);
+    expect(cachedAllTabs()).not.toBe(held);
+  });
+});

@@ -220,8 +220,28 @@ function signatureReplacer(key: string, value: unknown): unknown {
     : value;
 }
 
-function rowsSignature(tabs: readonly Tab[]): string {
-  return JSON.stringify(tabs, signatureReplacer);
+/** Compare wire values without allocating two corpus-sized JSON strings.
+ * Stop at the first change; shared rows and report strings compare by identity.
+ * Undefined object fields are omitted, just as on the JSON wire. */
+function sameRows(a: unknown, b: unknown, key = ''): boolean {
+  if (a === b) return true;
+  if (key === 'fill') return signatureReplacer(key, a) === signatureReplacer(key, b);
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, i) => sameRows(value, b[i]))
+    );
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left).filter((k) => left[k] !== undefined);
+  return (
+    keys.length === Object.keys(right).filter((k) => right[k] !== undefined).length &&
+    keys.every((k) => Object.hasOwn(right, k) && sameRows(left[k], right[k], k))
+  );
 }
 
 /**
@@ -239,8 +259,7 @@ function rowsSignature(tabs: readonly Tab[]): string {
  * enough; React compares by reference.
  */
 function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
-  if (cache && JSON.stringify(cache, signatureReplacer) === JSON.stringify(next, signatureReplacer))
-    return cache;
+  if (cache && sameRows(cache, next)) return cache;
   publish(next);
   return next;
 }
@@ -319,7 +338,7 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // child scan fixed in 0aff773b, written by me one commit after fixing it.
   const heldById = new Map(group.tabs.map((t) => [t.id, t]));
   const merged = tabs.map((t) => keepReportText(t, heldById));
-  if (rowsSignature(group.tabs) === rowsSignature(merged)) return;
+  if (sameRows(group.tabs, merged)) return;
   generation++;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
 }
