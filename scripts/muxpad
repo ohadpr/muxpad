@@ -1009,10 +1009,10 @@ write (a draft reply; it can never send):
   run <args…>                               send argv straight to msgvault (reviewed, approved once)
                                             (for usage, run `msgvault <command> --help` directly:
                                              it opens no database and needs no approval)
-  calendar-freebusy|calendar-conflicts --account=<email> --start=<…> --end=<…> --tz=<IANA>
-  calendar-update --account=<email> --event=<id> [--summary=…] [--start=…] [--end=…] [--tz=…]
-  calendar-delete --account=<email> --event=<id>
-  calendar-create --account=<email> --summary="…" --start=<YYYY-MM-DDTHH:MM>
+  calendar-freebusy|calendar-conflicts [--account=<email>] --start=<…> --end=<…> --tz=<IANA>
+  calendar-update [--account=<email>] --event=<id> [--summary=…] [--start=…] [--end=…] [--tz=…]
+  calendar-delete [--account=<email>] --event=<id>
+  calendar-create [--account=<email>] --summary="…" --start=<YYYY-MM-DDTHH:MM>
                   --end=<…> --tz=<IANA> [--calendar=<id>] [--location=…]
   draft-compose --to=<addr> [--to=…] --subject="…" --body="…"
   draft-reply <message-id> --body="…" [--all]
@@ -1278,14 +1278,23 @@ cmd_msgvault() {
         esac
         shift
       done
-      for pair in "account:$facct" "start:$ffrom" "end:$fto" "tz:$ftz"; do
+      # --account IS OPTIONAL, and that is the whole point of the configured
+      # default: msgvault.defaultCalendar in /Library/muxpad/integrations.json.
+      # An agent cannot discover an account (the accounts listing is refused to
+      # delegated callers), so a CLI that demanded one made the owner's
+      # configured calendar unreachable through every supported caller — the
+      # broker's fallback existed and could never run. When it is not given
+      # the key is OMITTED rather than sent empty, so the fallback is reached
+      # by the absence the broker actually looks for.
+      for pair in "start:$ffrom" "end:$fto" "tz:$ftz"; do
         [ -n "${pair#*:}" ] || { echo "muxpad: $verb needs --${pair%%:*}=" >&2; return 1; }
       done
       local fbody; fbody="$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
         --arg account "$facct" --arg calendar "$fcal" \
         --arg start "$ffrom" --arg end "$fto" --arg tz "$ftz" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,start:$start,end:$end,tz:$tz}')"
+        '{pane:$pane,key:$key,calendar:$calendar,start:$start,end:$end,tz:$tz}
+         + (if $account == "" then {} else {account:$account} end)')"
       # Literal paths, not "$verb": the set of endpoints this CLI may call is
       # pinned by a test that READS these strings, and a URL built from a
       # variable is an endpoint that test cannot see.
@@ -1311,14 +1320,14 @@ cmd_msgvault() {
         esac
         shift
       done
-      [ -n "$uacct" ] || { echo "muxpad: $verb needs --account=" >&2; return 1; }
       [ -n "$uevent" ] || { echo "muxpad: $verb needs --event=" >&2; return 1; }
       local ubody; ubody="$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
         --arg account "$uacct" --arg calendar "$ucal" --arg event "$uevent" \
         --arg summary "$usum" --arg start "$ufrom" --arg end "$uto" \
         --arg tz "$utz" --arg location "$uloc" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,event:$event}
+        '{pane:$pane,key:$key,calendar:$calendar,event:$event}
+         + (if $account == "" then {} else {account:$account} end)
          + (if $summary == "" then {} else {summary:$summary} end)
          + (if $start == "" then {} else {start:$start} end)
          + (if $end == "" then {} else {end:$end} end)
@@ -1346,7 +1355,7 @@ cmd_msgvault() {
         esac
         shift
       done
-      for pair in "account:$cacct" "summary:$csum" "start:$cfrom" "end:$cto" "tz:$ctz"; do
+      for pair in "summary:$csum" "start:$cfrom" "end:$cto" "tz:$ctz"; do
         [ -n "${pair#*:}" ] || { echo "muxpad: calendar-create needs --${pair%%:*}=" >&2; return 1; }
       done
       slack_call POST /api/msgvault/calendar-create "$(jq -nc \
@@ -1354,7 +1363,8 @@ cmd_msgvault() {
         --arg account "$cacct" --arg calendar "$ccal" --arg summary "$csum" \
         --arg start "$cfrom" --arg end "$cto" --arg tz "$ctz" \
         --arg location "$cloc" --arg description "$cdesc" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,summary:$summary,start:$start,end:$end,tz:$tz}
+        '{pane:$pane,key:$key,calendar:$calendar,summary:$summary,start:$start,end:$end,tz:$tz}
+         + (if $account == "" then {} else {account:$account} end)
          + (if $location == "" then {} else {location:$location} end)
          + (if $description == "" then {} else {description:$description} end)')" ;;
     draft-get)

@@ -449,9 +449,23 @@ describe('the calendar account trap', () => {
     expect(doc).toMatch(/do not infer the form/i);
   });
 
-  it('says to ASK, since there is no way to discover it', () => {
-    expect(doc).toMatch(/ask the\s+owner/i);
+  // v3's fix, and the reason the first three versions all read as "there is
+  // always something else in the way": the broker has ALWAYS had a configured
+  // default, and every layer in front of it — this CLI, the route's schema —
+  // required the one value an agent cannot discover, so the default had never
+  // once been used. The instruction now names the call that works.
+  it('tells the agent to OMIT the flag and use the configured account', () => {
+    expect(doc).toMatch(/OMIT\s+`--account` ENTIRELY/);
     expect(doc).toMatch(/no accounts listing/i);
+    // And not to pass one it has guessed — only one the owner named in words.
+    expect(doc).toMatch(/owner has told you/i);
+  });
+
+  it('does not tell the agent to interrupt the owner for it', () => {
+    // The v2 instruction was "ask the owner which account to use", which is a
+    // question about plumbing the owner should never have been asked: the
+    // answer was already in their config file.
+    expect(doc).not.toMatch(/ASK the\s+owner which account/i);
   });
 
   it('explains what the 403 actually means', () => {

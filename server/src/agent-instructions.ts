@@ -434,18 +434,23 @@ export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
   calendar control. Both versions were written from one failure each, by
   someone who had not looked at the successes.
 
-  So: do not guess, and do not infer the form from this paragraph. ASK the
-  owner which account to use, or use the one muxpad is configured with.
-  There is no accounts listing for you to discover it with, and a wrong guess
-  returns \`403 calendar operation denied: enabled calendar source is
-  required\` — which reads like a permissions problem and is not one. It is
-  "that account cannot drive a calendar".
+  So: do not guess, and do not infer the form from this paragraph. **OMIT
+  \`--account\` ENTIRELY** and muxpad uses the account the owner configured —
+  that is now the normal way to call these, and the only one you can be sure
+  of. There is no accounts listing for you to discover an account with, and a
+  wrong guess returns \`403 calendar operation denied: enabled calendar source
+  is required\` — which reads like a permissions problem and is not one. It is
+  "that account cannot drive a calendar". Pass \`--account\` only when the
+  owner has told you, in words, which one to use.
+
+  If nothing is configured the refusal says so and names the file; that is a
+  message for the owner, not something to work around.
 
   \`--calendar=<id>\` names WHICH calendar of that account, and defaults to
   the primary one.
 
   \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
-  is busy and what overlaps (\`--account --start --end --tz\`);
+  is busy and what overlaps (\`--start --end --tz\`);
   \`calendar-create --summary="…"\` puts an event in their own calendar, and
   \`calendar-update --event=<id>\` / \`calendar-delete --event=<id>\` fix or
   remove one. **No guests, no reminders, no notifications** — every flag that

@@ -866,7 +866,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
         .object({
           pane: z.string(),
           key: z.string(),
-          account: z.string().min(3).max(256),
+          account: z.string().max(256).optional(),
           calendar: z.string().min(1).max(256).optional(),
           start: z.string().min(10).max(40),
           end: z.string().min(10).max(40),
@@ -904,7 +904,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       .object({
         pane: z.string(),
         key: z.string(),
-        account: z.string().min(3).max(256),
+        account: z.string().max(256).optional(),
         calendar: z.string().min(1).max(256).optional(),
         event: z.string().min(1).max(256),
         summary: z.string().min(1).max(500).optional(),
@@ -925,7 +925,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       .object({
         pane: z.string(),
         key: z.string(),
-        account: z.string().min(3).max(256),
+        account: z.string().max(256).optional(),
         calendar: z.string().min(1).max(256).optional(),
         event: z.string().min(1).max(256),
       })
@@ -941,7 +941,7 @@ export function connectorRoutes(deps: Deps): { slack: Hono; archive: Hono } {
       .object({
         pane: z.string(),
         key: z.string(),
-        account: z.string().min(3).max(256),
+        account: z.string().max(256).optional(),
         calendar: z.string().min(1).max(256).optional(),
         summary: z.string().min(1).max(500),
         start: z.string().min(10).max(40),
