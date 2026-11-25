@@ -207,7 +207,13 @@ type TabWithLifecycle = {
  * that this eventually REPLACES that box, and two corpora would mean two
  * answers to "which chats are there".
  */
+// All mounted transcripts receive the same immutable corpus. Share its
+// projection across them; weak keys release old corpora after their readers do.
+const mentionCorpora = new WeakMap<readonly WorkspaceTabs[], MentionChat[]>();
+
 export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] {
+  const held = mentionCorpora.get(groups);
+  if (held) return held;
   const rows = new Map<string, TabWithLifecycle>();
   for (const g of groups) {
     for (const t of g.tabs) rows.set(t.id, t as TabWithLifecycle);
@@ -216,7 +222,7 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
   for (const g of groups) {
     for (const t of g.tabs) names.set(t.id, t.name);
   }
-  return toSearchableTabs(groups).map((t) => {
+  const result = toSearchableTabs(groups).map((t) => {
     const row = rows.get(t.tabId);
     const done = row?.done === true;
     const reason = row?.done_reason ?? undefined;
@@ -266,6 +272,8 @@ export function toMentionChats(groups: readonly WorkspaceTabs[]): MentionChat[] 
       },
     };
   });
+  mentionCorpora.set(groups, result);
+  return result;
 }
 
 // ── What this chat SPAWNED ───────────────────────────────────────────────────
