@@ -303,7 +303,7 @@ export function AppLayout() {
                 Hidden on the list itself, which renders its own; the section
                 travels through sessionStorage rather than props (see
                 MobileChatSectionBar). */}
-            {chatList && !onChatList && <MobileChatSectionBar />}
+            {chatList && !onChatList && <MobileChatSectionBar onLeave={backToList} />}
           </div>
         </div>
       ) : (

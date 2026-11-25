@@ -12,6 +12,7 @@ import {
 import { flushSync } from 'react-dom';
 import { CHAT_SECTIONS, type ChatSection, activityChats, unreadChats } from '../lib/chat-sections';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
+import { readSection, subscribeSection, writeSection } from '../lib/mobile-section';
 import { toSearchableTabs } from '../lib/nav-search';
 import { useAllChats } from '../lib/use-all-chats';
 import { useUnreadCorpus } from '../lib/use-unread';
@@ -76,6 +77,17 @@ export function MobileChatList({
   const unread = useMemo(() => unreadChats(unreadCorpus), [unreadCorpus]);
   const activity = useMemo(() => activityChats(corpus), [corpus]);
 
+  // The chat's ribbon writes the section and comes here; this list may have
+  // been mounted since long before that. See subscribeSection.
+  useEffect(
+    () =>
+      subscribeSection((next) => {
+        setSection(next);
+        setVisited((v) => (v.has(next) ? v : new Set([...v, next])));
+      }),
+    [],
+  );
+
   const pick = (next: ChatSection) => {
     // flushSync for Search: iOS raises the keyboard only for a focus() made
     // inside the tap that asked for it — the palette's button does the same.
@@ -139,25 +151,6 @@ export function MobileChatList({
       <SectionBar section={section} unread={unread.length} onPick={pick} />
     </div>
   );
-}
-
-const SECTION_KEY = 'muxpad.mobileSection.v1';
-
-/** The tab you were on survives a reload of the PWA, not just a trip into a chat. */
-function readSection(): ChatSection {
-  try {
-    const v = sessionStorage.getItem(SECTION_KEY);
-    return (CHAT_SECTIONS as readonly string[]).includes(v ?? '') ? (v as ChatSection) : 'home';
-  } catch {
-    return 'home';
-  }
-}
-function writeSection(s: ChatSection): void {
-  try {
-    sessionStorage.setItem(SECTION_KEY, s);
-  } catch {
-    // private mode etc. — the in-memory state still holds for this session
-  }
 }
 
 /**
@@ -255,8 +248,7 @@ const SECTION_LABEL: Record<ChatSection, string> = {
  * somewhere and that is where Back goes, which is how Slack behaves when you
  * open a conversation from a tab.
  */
-export function MobileChatSectionBar() {
-  const navigate = useNavigate();
+export function MobileChatSectionBar({ onLeave }: { onLeave: () => void }) {
   const corpus = useUnreadCorpus();
   const pathname = useRouterState({ select: (st) => st.location.pathname });
   // NO SECTION IS CURRENT ON A PAGE. The bar marks the stored section so a
@@ -274,7 +266,12 @@ export function MobileChatSectionBar() {
       onChat={true}
       onPick={(next) => {
         writeSection(next);
-        void navigate({ to: CHAT_LIST_PATH });
+        // BACK TO THE LIST, NOT A SECOND COPY OF IT. Pushing /chats from a
+        // chat made the stack list → chat → list, so the OS back gesture on
+        // what looks like the root dived into the chat you just left. This is
+        // the same walk the header's back button takes (useBackToList), which
+        // is the only thing that knows where the list's own entry is.
+        onLeave();
       }}
     />
   );
