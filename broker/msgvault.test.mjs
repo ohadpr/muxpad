@@ -5,6 +5,7 @@ import {
   OWNER_DRAFT_ACCOUNT,
   describeMsgvault,
   msgvaultArgv,
+  resolveCalendarAccount,
   validateMsgvault,
 } from './msgvault.mjs';
 
@@ -515,9 +516,11 @@ test('a calendar source identifier is accepted, not only a bare address', () => 
   }
 });
 
-test('a calendar account still cannot be a flag, a sentence, or empty', () => {
+test('a calendar account still cannot be a flag or a sentence', () => {
   for (const account of [
-    '',
+    // NOT `''`: an empty account now means 'not given', and falls through to
+    // the configured calendar (or to the refusal that names how to configure
+    // one). Only a MALFORMED value is a malformed value.
     'no-at-sign',
     'a@b c',
     'a@b/with space',
@@ -649,4 +652,61 @@ test('editing or deleting a draft forwards the revision msgvault requires', () =
     assert.equal(args[args.indexOf('--revision') + 1], '4');
     assert.match(describeMsgvault(action, p), /revision 4/);
   }
+});
+
+test('a calendar verb with no account says how to configure one', () => {
+  // THE TRAP THIS CLOSES. Calendar verbs need a source identifier
+  // (account/calendar-id) and the verb that enumerates them is refused to
+  // delegated agents, so an agent was being asked for a string it could not
+  // discover. A wrong guess returned `403 calendar operation denied` -- which
+  // reads like a permissions problem and is not one -- and that is what the
+  // owner hit trying to create an event.
+  //
+  // With nothing configured the refusal must say what to DO, not repeat the
+  // demand. If this message ever goes back to asking for the account, the
+  // trap is back.
+  assert.throws(
+    () =>
+      validateMsgvault('msgvault.calendar-create', {
+        summary: 'Dinner',
+        start: '2026-12-01T19:00',
+        end: '2026-12-01T21:00',
+        tz: 'America/Los_Angeles',
+      }),
+    /No calendar is configured|defaultCalendar/,
+  );
+});
+
+test('an account the agent DOES name is still obeyed', () => {
+  // A person with two calendars has to be able to say which, so the
+  // configured default is a fallback and never an override.
+  const out = validateMsgvault('msgvault.calendar-freebusy', {
+    account: 'me@example.com/c_x@group.calendar.google.com',
+    start: '2026-11-14T09:00',
+    end: '2026-11-14T18:00',
+    tz: 'America/Los_Angeles',
+  });
+  assert.equal(out.account, 'me@example.com/c_x@group.calendar.google.com');
+});
+
+test('the configured calendar is used only when the agent named none', () => {
+  // Tested on the PURE resolver, not through validateMsgvault: this machine
+  // has nothing configured, so deleting the fallback from calendarAccount
+  // changed no test at all. An untested fallback is how a fallback silently
+  // stops working.
+  const cfg = 'me@example.com/c_fam@group.calendar.google.com';
+  assert.deepEqual(resolveCalendarAccount(undefined, cfg), { account: cfg });
+  assert.deepEqual(resolveCalendarAccount('', cfg), { account: cfg });
+  // Named wins: a person with two calendars has to be able to say which.
+  assert.deepEqual(resolveCalendarAccount('me@example.com/work@example.com', cfg), {
+    account: 'me@example.com/work@example.com',
+  });
+  // Invalid is refused, NOT silently replaced by the default — otherwise a
+  // flag smuggled into the value would be accepted and the event would land
+  // on the wrong calendar.
+  assert.deepEqual(resolveCalendarAccount('--from=2026-01-01', cfg), { error: 'invalid' });
+  assert.deepEqual(resolveCalendarAccount('a@b c', cfg), { error: 'invalid' });
+  // And with nothing configured and nothing named, the caller is told to go
+  // and configure one.
+  assert.deepEqual(resolveCalendarAccount(undefined, null), { error: 'unconfigured' });
 });

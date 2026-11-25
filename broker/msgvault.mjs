@@ -147,14 +147,85 @@ const CAL_WHEN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
  * the verb is passed `--read-only` for the two queries, and a name the
  * archive does not hold is refused by msgvault rather than by a guess here.
  */
+/**
+ * THE CONFIGURED CALENDAR, so an agent does not have to know one.
+ *
+ * -- THE CONTRACT THAT KEPT FAILING ---------------------------------------
+ * Calendar verbs require a SOURCE identifier
+ * (`me@example.com/c_x@group.calendar.google.com`), and the only verb that
+ * enumerates them is refused to a delegated agent by msgvault itself. So
+ * every calendar call asked the agent for a string it was structurally
+ * forbidden from discovering, and a wrong guess came back `403 calendar
+ * operation denied: enabled calendar source is required`, which reads like a
+ * permissions failure and is not one. The owner hit this trying to create an
+ * event; the agent had passed a Gmail address, because a Gmail address is the
+ * only identifier it had any way to know.
+ *
+ * That is the mistake Slack does NOT make. There the broker owns the identity
+ * and the agent only names the intent -- it cannot pick who sends, so it
+ * cannot pick wrong. Calendar had it inverted.
+ *
+ * So the binding lives HERE, beside the binary declaration the runner already
+ * reads from the same file. An agent that names no account gets the
+ * configured one; an agent that names one is still obeyed, because a person
+ * with two calendars has to be able to say which.
+ *
+ * With nothing configured the refusal says what to DO about it rather than
+ * repeating the demand that caused the problem: the agent cannot look this
+ * up, so the only correct next move is to ask the owner.
+ */
+function configuredCalendar() {
+  try {
+    const d = JSON.parse(readFileSync('/Library/muxpad/integrations.json', 'utf8'))?.msgvault;
+    const v = d?.defaultCalendar;
+    return typeof v === 'string' && CAL_ACCOUNT.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `local@host`, optionally followed by `/<calendar-id>` -- no whitespace in
+ *  either half, so it stays one argv word and cannot smuggle a flag. */
+const CAL_ACCOUNT = /^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/;
+
+/**
+ * WHICH CALENDAR, given what the agent asked for and what is configured.
+ *
+ * Pure, exported and tested directly, because the fallback is the whole
+ * point and it cannot be exercised through `calendarAccount` on a machine
+ * with nothing configured -- removing the fallback there changed no test,
+ * which is how an untested fallback stays untested.
+ *
+ * ABSENT IS NOT THE SAME AS INVALID. `str()` refuses a leading `-` (the argv
+ * note above), so reading "str() said no" as "the agent gave nothing" would
+ * hand `--from=2026-01-01` the CONFIGURED calendar instead of refusing it --
+ * a flag smuggled into a value, silently accepted.
+ */
+export function resolveCalendarAccount(given, configured) {
+  const present = given !== undefined && given !== null && given !== '';
+  if (present) {
+    const v = String(given);
+    return CAL_ACCOUNT.test(v) && v.length <= 256 && !v.startsWith('-')
+      ? { account: v }
+      : { error: 'invalid' };
+  }
+  return configured ? { account: configured } : { error: 'unconfigured' };
+}
+
 function calendarAccount(p) {
-  // `local@host`, optionally followed by `/<calendar-id>` — no whitespace in
-  // either half, so it stays one argv word and cannot smuggle a flag.
-  if (!str(p.account, 256) || !/^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/.test(String(p.account)))
+  const r = resolveCalendarAccount(p.account, configuredCalendar());
+  if (r.error === 'invalid')
     fail(
-      'Give the calendar account — an email address, or the account/calendar-id that list-accounts prints',
+      'Give the calendar account - an email address, or the account/calendar-id that the accounts listing prints',
     );
-  return { account: p.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
+  if (r.error === 'unconfigured')
+    fail(
+      'No calendar is configured for muxpad, and an agent cannot discover one: ' +
+        'the accounts listing is refused to delegated callers. Ask the owner to set ' +
+        'msgvault.defaultCalendar in /Library/muxpad/integrations.json to an ' +
+        'account/calendar-id.',
+    );
+  return { account: r.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
 }
 /** …plus a time window, for the two reads. */
 function calendarWindow(p) {
