@@ -8,6 +8,7 @@ import {
   AGENT_INSTRUCTIONS_SEED,
   ALL_INSTRUCTION_TEXT,
   INSTRUCTIONS_MIGRATION,
+  INSTRUCTION_TOPICS,
   SHIPPED_INSTRUCTIONS_DEFAULTS,
   agentInstructionsPath,
   readAgentInstructions,
@@ -415,5 +416,40 @@ describe('the archive section teaches the shape of the data', () => {
   it('says contacts cannot be read AT ALL, rather than implying they are missing', () => {
     expect(policy).toMatch(/no contact lookup/i);
     expect(policy).toMatch(/the archive holds the user's contacts/i);
+  });
+});
+
+describe('the calendar account trap', () => {
+  /**
+   * The owner tried to create a calendar event and got 403. Not a missing
+   * feature — calendar-create has existed since Nov 11 and had made seven
+   * events — and not the week-long daemon outage either. The agent passed a
+   * bare Gmail address to `--account`, which resolves to the mail source and
+   * is not a calendar, so msgvault refused it.
+   *
+   * The instructions named the flag and never said what shape its value is,
+   * and they also say `list-accounts` does not exist — so an agent could not
+   * discover the answer either. That combination is what made it a trap
+   * rather than a mistake.
+   */
+  // The msgvault detail lives in the `msgvault` HELP TOPIC, not in the
+  // resident seed — it is paged in when an agent asks, which is why the
+  // resident document has a character ceiling and this does not.
+  const doc = INSTRUCTION_TOPICS.msgvault ?? '';
+
+  it('shows the account/calendar form, not just the flag name', () => {
+    expect(doc).toMatch(/me@example\.com\/me@example\.com/);
+    expect(doc).toMatch(/group\.calendar\.google\.com/);
+  });
+
+  it('names the exact error a bare address produces', () => {
+    // So the next agent recognises it instead of reading it as a permissions
+    // problem and giving up.
+    expect(doc).toMatch(/enabled calendar source is required/);
+  });
+
+  it('says to ASK, since there is no way to discover the string', () => {
+    expect(doc).toMatch(/list-accounts/);
+    expect(doc.toLowerCase()).toMatch(/if you do not know the right string, ask/);
   });
 });

@@ -423,7 +423,23 @@ export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  CALENDAR: \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
+  CALENDAR — AND \`--account\` IS A CALENDAR, NOT A MAILBOX. This is the one
+  that wastes an afternoon: msgvault names a calendar as ACCOUNT SLASH
+  CALENDAR, and the bare address you would reach for is the Gmail source,
+  which is not a calendar at all.
+
+      me@example.com/me@example.com                       the owner's own
+      me@example.com/work@example.com                     another of theirs
+      me@example.com/c_family@group.calendar.google.com   a shared one
+
+  Pass the bare \`me@example.com\` and every call comes back \`403 calendar
+  operation denied: enabled calendar source is required\` — which reads like
+  a permissions problem and is not one. It cost the owner a real attempt at
+  creating an event. If you do not know the right string, ASK: there is no
+  \`list-accounts\` for you to discover it with, so guessing produces a 403
+  and a person wondering why their calendar is broken.
+
+  \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
   is busy and what overlaps (\`--account --start --end --tz\`);
   \`calendar-create --summary="…"\` puts an event in their own calendar, and
   \`calendar-update --event=<id>\` / \`calendar-delete --event=<id>\` fix or
