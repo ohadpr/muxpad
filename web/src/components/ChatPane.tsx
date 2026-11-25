@@ -3598,9 +3598,18 @@ export function ChatPane({
    * Completion only: a launch card says the work started, which is not the
    * same claim as "its result is here".
    */
-  const cardedChildren = useMemo(
-    () => new Set(spawnedCards.filter((c) => c.kind === 'completion').map((c) => c.chat.tabId)),
+  // The voice pass reads membership only. A new corpus/card object must not
+  // reprocess the transcript when the same completion cards are still shown.
+  const cardedChildIds = useMemo(
+    () =>
+      [...new Set(spawnedCards.filter((c) => c.kind === 'completion').map((c) => c.chat.tabId))]
+        .sort()
+        .join('\0'),
     [spawnedCards],
+  );
+  const cardedChildren = useMemo(
+    () => new Set(cardedChildIds ? cardedChildIds.split('\0') : []),
+    [cardedChildIds],
   );
   const voiced = useMemo(
     // …then ONE chip per quiet stretch rather than one per fire. Last, because
