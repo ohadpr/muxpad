@@ -41,6 +41,16 @@ const QUERY_TTL_MS = 30_000;
 const MAX_QUERIES = 40;
 /** Rows held, total. Each surface shows ≤12; this is generous and still bounded. */
 export const LOOKUP_MAX_ROWS = 600;
+/**
+ * Rows a MOUNTED CONSUMER still points at are exempt from eviction, up to
+ * this many. A review found the failure that needs it: a historical chat is
+ * picked into a draft, other transcripts and searches fill the 600-row cache
+ * and evict it, and `mentionedChats` then resolves that pick to nothing — so
+ * SENDING silently omitted the chat's context, with the chip still on screen.
+ * The cap keeps the exemption from becoming its own unbounded cache; picks in
+ * open drafts are a handful, not hundreds.
+ */
+const MAX_RETAINED = 200;
 /** A pane id the server did not know is not asked about again for this long. */
 const PANE_MISS_TTL_MS = 60_000;
 const MAX_PANE_MISSES = 2_000;
@@ -63,6 +73,8 @@ const queriesInFlight = new Set<string>();
 const panesPending = new Set<string>();
 const panesInFlight = new Set<string>();
 let paneTimer: ReturnType<typeof setTimeout> | null = null;
+/** tab id → how many mounted consumers are pointing at it. */
+const retained = new Map<string, number>();
 const tabMisses = new Map<string, number>();
 const tabsPending = new Set<string>();
 const tabsInFlight = new Set<string>();
@@ -115,10 +127,20 @@ function holdRow(held: Held): void {
   if (before) dropPanesOf(before);
   rows.delete(held.tab.id);
   rows.set(held.tab.id, held);
+  // Oldest first, SKIPPING retained rows — see MAX_RETAINED. If everything
+  // left is retained there is nothing to evict and the loop has to stop, or
+  // it spins; the cap is what keeps that bounded.
   while (rows.size > LOOKUP_MAX_ROWS) {
-    const [, oldest] = rows.entries().next().value as [string, Held];
-    rows.delete(oldest.tab.id);
-    dropPanesOf(oldest);
+    let victim: Held | null = null;
+    for (const [id, row] of rows) {
+      if (!retained.has(id)) {
+        victim = row;
+        break;
+      }
+    }
+    if (!victim) break;
+    rows.delete(victim.tab.id);
+    dropPanesOf(victim);
   }
   for (const p of collectLayoutLeaves(held.tab.layout)) {
     paneToTab.set(p, held.tab.id);
@@ -136,6 +158,27 @@ function take(groups: readonly WorkspaceTabs[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Keep these rows while the caller is mounted. Returns the release.
+ *
+ * Idempotent per call, refcounted across callers: two drafts picking the same
+ * chat retain it once each, and it becomes evictable again when both let go.
+ * Beyond MAX_RETAINED the request is simply not honoured — the row stays
+ * evictable, which is the pre-existing behaviour, rather than the cache
+ * growing without a bound.
+ */
+export function retainTabIds(ids: readonly string[]): () => void {
+  const held = ids.filter((id) => id && (retained.has(id) || retained.size < MAX_RETAINED));
+  for (const id of held) retained.set(id, (retained.get(id) ?? 0) + 1);
+  return () => {
+    for (const id of held) {
+      const n = (retained.get(id) ?? 1) - 1;
+      if (n > 0) retained.set(id, n);
+      else retained.delete(id);
+    }
+  };
 }
 
 /** Test seam — how much the cache holds. Both are bounded by the rows. */
@@ -162,7 +205,13 @@ export function requestLookupQuery(q: string): void {
   if (unsupported || !lookupAskable(q)) return;
   const key = lookupKey(q);
   const held = queries.get(key);
-  if (held && Date.now() - held.at < QUERY_TTL_MS) return;
+  // A FRESH RECORD WHOSE ROWS ARE GONE IS NOT AN ANSWER. The record outlives
+  // the rows it names — different maps, different LRUs — so reopening a query
+  // whose rows had been evicted returned zero rows, made zero requests and
+  // reported `searching: false`: a search that confidently answered nothing.
+  if (held && Date.now() - held.at < QUERY_TTL_MS && held.tabIds.every((id) => rows.has(id))) {
+    return;
+  }
   if (queriesInFlight.has(key)) return;
   queriesInFlight.add(key);
   changed();
@@ -479,13 +528,21 @@ export function useTabLookup(opts: {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `v` is the cache version — an eviction is the event this must re-ask after
   useEffect(() => {
     if (paneKey) requestLookupPanes(paneKey.split(','));
-  }, [paneKey]);
+  }, [paneKey, v]);
 
+  // RETAINED WHILE THIS HOOK IS MOUNTED, and re-asked if a row goes missing
+  // anyway (a cold reload, or more retained references than the cap allows).
+  // `v` is in the deps for exactly that: the eviction that used to be
+  // invisible here is a version bump, and `requestLookupTabIds` skips every
+  // id it already holds, so the cost of looking is one map lookup per id.
+  useEffect(() => retainTabIds(tabKey ? tabKey.split(',') : []), [tabKey]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: same — `v` changing is how this hook learns a held row is gone
   useEffect(() => {
     if (tabKey) requestLookupTabIds(tabKey.split(','));
-  }, [tabKey]);
+  }, [tabKey, v]);
 
   useEffect(() => {
     if (queriesKey) for (const q of queriesKey.split('\n')) requestLookupQuery(q);
@@ -518,6 +575,7 @@ export function resetTabLookup(): void {
   panesInFlight.clear();
   if (paneTimer !== null) clearTimeout(paneTimer);
   paneTimer = null;
+  retained.clear();
   tabMisses.clear();
   tabsPending.clear();
   tabsInFlight.clear();

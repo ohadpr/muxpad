@@ -33,6 +33,7 @@ const {
   requestLookupTabIds,
   lookupTabsPending,
   resetTabLookup,
+  retainTabIds,
 } = await import('./tab-lookup');
 
 const flush = async () => {
@@ -266,5 +267,122 @@ describe('the 600-row bound covers the pane index too', () => {
     expect(ids(lookupGroups({ paneIds: ['p-old'] }))).toEqual([]);
     expect(ids(lookupGroups({ paneIds: ['p-new'] }))).toEqual(['moved']);
     expect(lookupCacheSizes()).toEqual({ rows: 1, panes: 1 });
+  });
+});
+
+/**
+ * EVICTION MUST NOT QUIETLY DESTROY SOMETHING IN USE. Two failures a review
+ * reproduced, both of which the bound's own tests could not see, because they
+ * assert cache SIZE and the pane index — not what a live consumer still needs.
+ */
+describe('a row someone is still pointing at', () => {
+  const settle = async () => {
+    for (let n = -1; n !== calls.length; ) {
+      n = calls.length;
+      await flush();
+    }
+  };
+  const fill = async (count: number) => {
+    answer = async (by) => ({
+      workspaces: [
+        ws(
+          'w1',
+          ('tabIds' in by ? by.tabIds : []).map((id) => tab(id, `p-${id}`)),
+        ),
+      ],
+    });
+    requestLookupTabIds(Array.from({ length: count }, (_, i) => `filler${i}`));
+    await settle();
+  };
+
+  it('survives the cache filling up — the pick in an open draft is the case', async () => {
+    answer = async (by) => ({
+      workspaces: [
+        ws(
+          'w1',
+          ('tabIds' in by ? by.tabIds : []).map((id) => tab(id, `p-${id}`)),
+        ),
+      ],
+    });
+    requestLookupTabIds(['picked']);
+    await settle();
+    const release = retainTabIds(['picked']);
+
+    // Everything else churns through: transcripts, searches, other panes.
+    await fill(LOOKUP_MAX_ROWS + 50);
+    // The whole point: sending now must still resolve the pick's context.
+    expect(ids(lookupGroups({ tabIds: ['picked'] }))).toEqual(['picked']);
+
+    // Let go, churn again, and it is ordinary cache content once more.
+    release();
+    await fill(LOOKUP_MAX_ROWS + 50);
+    expect(ids(lookupGroups({ tabIds: ['picked'] }))).toEqual([]);
+  });
+
+  it('is refetched when it goes missing anyway', async () => {
+    answer = async (by) => ({
+      workspaces: [
+        ws(
+          'w1',
+          ('tabIds' in by ? by.tabIds : []).map((id) => tab(id, `p-${id}`)),
+        ),
+      ],
+    });
+    requestLookupTabIds(['gone']);
+    await settle();
+    await fill(LOOKUP_MAX_ROWS + 50);
+    expect(ids(lookupGroups({ tabIds: ['gone'] }))).toEqual([]);
+    // Not a server miss — an eviction. Asking again must reach the server.
+    const before = calls.length;
+    requestLookupTabIds(['gone']);
+    await settle();
+    expect(calls.length).toBeGreaterThan(before);
+    expect(ids(lookupGroups({ tabIds: ['gone'] }))).toEqual(['gone']);
+  });
+
+  it('does not report a query as answered once its rows have been evicted', async () => {
+    answer = async (by) => ({
+      workspaces: [
+        ws(
+          'w1',
+          'q' in by
+            ? [tab('hit', 'p-hit')]
+            : ('tabIds' in by ? by.tabIds : []).map((id) => tab(id, `p-${id}`)),
+        ),
+      ],
+    });
+    requestLookupQuery('needle');
+    await settle();
+    expect(ids(lookupGroups({ query: 'needle' }))).toEqual(['hit']);
+
+    // Churn the cache WITHOUT replacing `answer` — this test needs the query
+    // to still be answerable when it is asked again.
+    requestLookupTabIds(Array.from({ length: LOOKUP_MAX_ROWS + 50 }, (_, i) => `filler${i}`));
+    await settle();
+    expect(ids(lookupGroups({ query: 'needle' }))).toEqual([]);
+    // The record is still inside its 30 s TTL. It must not be believed.
+    const before = calls.length;
+    requestLookupQuery('needle');
+    await settle();
+    expect(calls.length).toBeGreaterThan(before);
+    expect(ids(lookupGroups({ query: 'needle' }))).toEqual(['hit']);
+  });
+
+  it('never retains more than the cap, so the exemption is bounded too', async () => {
+    const many = Array.from({ length: 400 }, (_, i) => `keep${i}`);
+    answer = async (by) => ({
+      workspaces: [
+        ws(
+          'w1',
+          ('tabIds' in by ? by.tabIds : []).map((id) => tab(id, `p-${id}`)),
+        ),
+      ],
+    });
+    requestLookupTabIds(many);
+    await settle();
+    retainTabIds(many);
+    await fill(LOOKUP_MAX_ROWS + 300);
+    // 600 ordinary rows plus at most 200 retained ones, never 400.
+    expect(lookupCacheSizes().rows).toBeLessThanOrEqual(LOOKUP_MAX_ROWS + 200);
   });
 });
