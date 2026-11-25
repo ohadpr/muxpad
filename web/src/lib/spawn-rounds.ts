@@ -49,7 +49,28 @@ interface Entry {
   rounds: SpawnRoundsByChild;
 }
 
+/**
+ * How many parents' answers are held at once.
+ *
+ * It used to be every parent a session had ever opened, and each answer is
+ * every child's rounds plus every child's row — the 519-child coordinator
+ * measured at 1.41 MB was ONE entry. Bounded LRU now: the 4 s TTL means a
+ * returning conversation re-asks almost immediately anyway, so holding more
+ * than the handful you are moving between buys nothing and retains megabytes.
+ */
+const MAX_PARENTS = 12;
+
 const cache = new Map<string, Entry>();
+
+/** Insertion order is the LRU order; re-setting moves a key to the back. */
+function hold(parentTabId: string, entry: Entry): void {
+  cache.delete(parentTabId);
+  cache.set(parentTabId, entry);
+  while (cache.size > MAX_PARENTS) {
+    const oldest = cache.keys().next().value as string;
+    cache.delete(oldest);
+  }
+}
 const inFlight = new Map<string, Promise<SpawnRoundsByChild>>();
 const dirty = new Set<string>();
 /** False once the route has 404ed — an older server with no rounds table. */
@@ -88,7 +109,7 @@ export async function loadSpawnRounds(
           `/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`,
         );
         rounds = toAnswer(res);
-        cache.set(parentTabId, { at: Date.now(), rounds });
+        hold(parentTabId, { at: Date.now(), rounds });
       } catch (err: unknown) {
         if ((err as { status?: number } | null)?.status === 404) unsupported = true;
       }
@@ -100,6 +121,11 @@ export async function loadSpawnRounds(
   });
   inFlight.set(parentTabId, p);
   return p;
+}
+
+/** Test seam — how many parents are held. */
+export function spawnRoundsCacheSize(): number {
+  return cache.size;
 }
 
 /** Test seam — drops the module cache and the older-server latch. */

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NO_ROUNDS, loadSpawnRounds, resetSpawnRoundsCache } from './spawn-rounds';
+import {
+  NO_ROUNDS,
+  loadSpawnRounds,
+  resetSpawnRoundsCache,
+  spawnRoundsCacheSize,
+} from './spawn-rounds';
 
 /**
  * One request per CONVERSATION, and never a blank log when it fails.
@@ -142,5 +147,20 @@ describe('loadSpawnRounds', () => {
   it('an older server with no `children` leaves the cards to the corpus', async () => {
     vi.stubGlobal('fetch', async () => ok({ kid: [] }));
     expect((await loadSpawnRounds('p')).children).toBeUndefined();
+  });
+
+  // ONE ENTRY IS EVERY CHILD'S ROUNDS AND EVERY CHILD'S ROW — the 519-child
+  // coordinator measured at 1.41 MB was a single one. Held per parent the
+  // session had ever opened, with no eviction, that is a leak the 4 s TTL
+  // does nothing about. Found by review.
+  it('holds a bounded number of parents, newest kept', async () => {
+    vi.stubGlobal('fetch', async () => ok({ kid: [] }));
+    for (let i = 0; i < 40; i++) await loadSpawnRounds(`parent${i}`);
+    expect(spawnRoundsCacheSize()).toBeLessThanOrEqual(12);
+    // And the one you are on is still a cache HIT, not a re-ask.
+    const f = vi.fn(async () => ok({ kid: [] }));
+    vi.stubGlobal('fetch', f);
+    await loadSpawnRounds('parent39');
+    expect(f).not.toHaveBeenCalled();
   });
 });

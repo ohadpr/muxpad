@@ -1306,7 +1306,14 @@ export const ChatPane = memo(function ChatPane({
   // report on a child that has already left the corpus — and no signature can
   // see that. A slow re-ask catches it within a minute.
   useEffect(() => {
-    if (!spawnParent || !hasChildren) return;
+    // ONLY FOR THE CONVERSATION IN FRONT OF YOU. Every visited chat stays
+    // MOUNTED (AppLayout keeps the hosts alive), so with no `active` guard a
+    // session that had opened eight coordinators ran eight of these forever,
+    // each re-fetching every child's rounds a minute apart for a pane nobody
+    // was looking at. Found by review. The effect above still runs for a
+    // hidden pane — it is driven by a signature that actually moved, and it
+    // is what keeps the cards correct when you come back.
+    if (!spawnParent || !hasChildren || !active) return;
     let live = true;
     const timer = window.setInterval(() => {
       void loadSpawnRounds(spawnParent).then((r) => {
@@ -1317,7 +1324,7 @@ export const ChatPane = memo(function ChatPane({
       live = false;
       window.clearInterval(timer);
     };
-  }, [spawnParent, hasChildren]);
+  }, [spawnParent, hasChildren, active]);
   // THE CORPUS AS THIS CONVERSATION'S CHILDREN SEE IT — live rows, plus the
   // finished children the rounds answer put back. The drawer and the cards
   // read the same list, so a worker cannot be in one and missing from the other.

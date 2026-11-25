@@ -122,6 +122,33 @@ describe('GET /api/tabs/:id/spawn-rounds', () => {
       expect(row?.spawn_report_state).toBe('ok');
     });
 
+    // THE SAME PROSE, ONCE. The cards draw the round's report when there is
+    // one and fall back to the tab-level copy when there is not — so sending
+    // both put every report in the response twice. Measured on a snapshot:
+    // 413 KB of a 519-child coordinator's 1.41 MB. Found by review.
+    it('omits the tab-level report when the rounds already carry it', async () => {
+      const long = `${'x'.repeat(600)} the end.`;
+      new TabStore(db).setSpawnReport(child, { report: long, state: 'ok' }, 400);
+      const rounds = new SpawnRoundStore(db);
+      rounds.open(child, 100);
+      rounds.close(child, 200, { report: long, state: 'ok' });
+
+      const body = await get(parent);
+      expect(body.rounds[child]?.[0]?.report).toBe(long); // still said once
+      const row = body.children[0]?.tabs[0];
+      expect(row?.spawn_report).toBeUndefined();
+      // The STATE still rides the row: it is what the card's chip reads.
+      expect(row?.spawn_report_state).toBe('ok');
+    });
+
+    it('keeps it when the child has rounds but none of them reported', async () => {
+      const long = `${'x'.repeat(600)} the end.`;
+      new TabStore(db).setSpawnReport(child, { report: long, state: 'ok' }, 400);
+      new SpawnRoundStore(db).open(child, 100); // running, nothing said yet
+      const row = (await get(parent)).children[0]?.tabs[0];
+      expect(row?.spawn_report).toBe(long);
+    });
+
     it('lists only DIRECT children of this parent, never itself or a grandchild', async () => {
       const tabs = new TabStore(db);
       const ws = new WorkspaceStore(db).list()[0]?.id as string;

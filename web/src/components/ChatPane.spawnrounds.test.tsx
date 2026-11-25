@@ -278,6 +278,24 @@ describe('the conversation reads its rounds only when its children move', () => 
     expect(mine()).toHaveLength(2);
   });
 
+  // EVERY VISITED CHAT STAYS MOUNTED (AppLayout keeps the hosts alive), so a
+  // net with no `active` guard meant a session that had opened eight
+  // coordinators ran eight of them forever, each re-reading every child's
+  // rounds a minute apart for a pane nobody was looking at. Found by review.
+  it('runs no net for a conversation that is mounted but not in front of you', async () => {
+    await mount([tab(PARENT), child(), tab('stranger')]);
+    loads.length = 0;
+    await act(async () =>
+      root?.render(<ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} agentNative />),
+    );
+    await advance(SPAWN_ROUNDS_NET_MS * 3);
+    expect(mine()).toEqual([]);
+    // Come back to it and the net resumes.
+    await show(PARENT);
+    await advance(SPAWN_ROUNDS_NET_MS);
+    expect(mine()).toHaveLength(1);
+  });
+
   it('stops the net when the conversation closes', async () => {
     await mount([tab(PARENT), child(), tab('stranger')]);
     loads.length = 0;

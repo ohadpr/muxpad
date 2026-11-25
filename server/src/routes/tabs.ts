@@ -383,15 +383,24 @@ export function tabsRoutes(deps: {
    * by the same function, so a card cannot describe a worker differently
    * depending on which list it came from.
    *
-   * The report TEXT is whole here, not stripped: this is one parent's
-   * children, and the tab-level report is the card's only text for a child
-   * with no rounds.
+   * The report TEXT is whole here, not stripped — but ONLY for a child whose
+   * rounds do not already carry it. The cards render the round's report when
+   * there is one and fall back to the tab-level copy when there is not, so
+   * sending both put the same prose in the response twice: measured on a
+   * snapshot, a 519-child coordinator's response was 1.41 MB, of which 413 KB
+   * was tab-level report text duplicating what the rounds beside it already
+   * said. Found by review. A child with no round that reported still gets its
+   * card's only text, which is what this was for.
    */
   app.get('/:id/spawn-rounds', (c) => {
     const id = c.req.param('id');
     const byChild = new SpawnRoundStore(deps.db).listByParent(id);
     const raw = tabs.listChildren(id).filter((r) => r.id !== id);
-    const text = new Map(raw.map((t) => [t.id, t.spawn_report]));
+    const text = new Map(
+      raw
+        .filter((t) => !(byChild.get(t.id) ?? []).some((r) => r.report))
+        .map((t) => [t.id, t.spawn_report]),
+    );
     const decorated = decorateSelectedTabs(deps.db, deps.cache, raw).map((t) =>
       text.get(t.id) ? ({ ...t, spawn_report: text.get(t.id) } as Tab) : t,
     );
