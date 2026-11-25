@@ -420,8 +420,28 @@ describe('every theme’s tree reads, rail and phone', () => {
     /\/\*[\s\S]*?\*\//g,
     '',
   );
-  const sheetOf = (css: 'mobile' | 'dest' | undefined) =>
-    css === 'mobile' ? MOBILE : css === 'dest' ? DEST : NAV;
+  // THE PAGE SURFACE: the destinations that are routes, not rail entries.
+  // They sit on the PANE's ground in the pane's own ink — a third surface the
+  // sweep did not have, which is how two information roles came to be inked in
+  // --fg-faint (2.76–4.69:1 here) with nothing to catch it.
+  const CARDS = readFileSync(join(HERE, 'pages', 'CardsView.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const ACTIVITY = readFileSync(join(HERE, 'pages', 'ActivityView.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const sheetOf = (css: 'mobile' | 'dest' | 'cards' | 'activity' | undefined) =>
+    css === 'mobile'
+      ? MOBILE
+      : css === 'dest'
+        ? DEST
+        : css === 'cards'
+          ? CARDS
+          : css === 'activity'
+            ? ACTIVITY
+            : NAV;
   type RGBA = [number, number, number, number];
   type Ctx = Record<string, string>;
 
@@ -567,6 +587,8 @@ describe('every theme’s tree reads, rail and phone', () => {
     return [
       { name: 'rail', ctx: { ...rail, ...NAVROOT }, ground: resolve('var(--rail-surface)', pane) },
       { name: 'phone', ctx: { ...phone, ...NAVROOT }, ground: resolve(sheetSurface, phone) },
+      // No island and no rebinds: a page is the pane, in the pane's ink.
+      { name: 'page', ctx: pane, ground: resolve('var(--bg)', pane) },
     ] as const;
   };
 
@@ -580,9 +602,9 @@ describe('every theme’s tree reads, rail and phone', () => {
     /** A rule whose custom properties re-point tokens for this role, and
      *  whose background-color is laid over the ground. */
     scope?: string;
-    only?: 'rail' | 'phone';
+    only?: 'rail' | 'phone' | 'page';
     /** Which stylesheet declares it — NavTree.css unless said. */
-    css?: 'mobile' | 'dest';
+    css?: 'mobile' | 'dest' | 'cards' | 'activity';
     bar: number;
   }[] = [
     { role: 'section header', base: '.navtree-ws-row .navtree-name-text', bar: 4.5 },
@@ -685,6 +707,37 @@ describe('every theme’s tree reads, rail and phone', () => {
       only: 'rail',
       bar: 4.5,
     },
+    // ── THE DESTINATION PAGES ────────────────────────────────────────────
+    // Each of these is the ONLY thing its row says about a chat, or the
+    // column the page exists to be read down. Both were --fg-faint.
+    {
+      role: 'cards: the clock',
+      base: '.cards-tile-age',
+      css: 'cards',
+      only: 'page',
+      bar: 4.5,
+    },
+    {
+      role: 'cards: the workspace',
+      base: '.cards-tile-ws',
+      css: 'cards',
+      only: 'page',
+      bar: 4.5,
+    },
+    {
+      role: 'cards: the card’s own name',
+      base: '.cards-tile-name',
+      css: 'cards',
+      only: 'page',
+      bar: 4.5,
+    },
+    {
+      role: 'activity: runs on another machine',
+      base: '.activity-view .mcl-row-preview[data-elsewhere="true"]',
+      css: 'activity',
+      only: 'page',
+      bar: 4.5,
+    },
     {
       role: 'destination label (current)',
       base: '.dest-rail-item[data-current="true"]',
@@ -711,14 +764,28 @@ describe('every theme’s tree reads, rail and phone', () => {
   const cases = THEMES.flatMap((t) =>
     ROLES.flatMap((r) =>
       surfaces(t.value)
-        .filter((s) => !r.only || r.only === s.name)
+        // The PAGE is opt-in, both ways: the tree's roles need the island's
+        // tokens and mean nothing on the pane, and a page role has no rail or
+        // phone to be measured on. The two default surfaces are unchanged.
+        .filter((s) =>
+          s.name === 'page'
+            ? r.only === 'page'
+            : r.only !== 'page' && (!r.only || r.only === s.name),
+        )
         .map((s) => [`${t.value} · ${s.name} · ${r.role}`, t.value, r, s] as const),
     ),
   );
 
-  it('covers every theme, both surfaces, every role', () => {
-    const both = ROLES.filter((r) => !r.only).length;
-    expect(cases.length).toBe(THEMES.length * (both * 2 + ROLES.length - both));
+  it('covers every theme, every surface a role belongs to, every role', () => {
+    // A role with no `only` is measured on all three grounds; a scoped one
+    // exactly once. Stated as arithmetic so adding a surface cannot silently
+    // leave the existing roles unmeasured on it.
+    const everywhere = ROLES.filter((r) => !r.only).length;
+    const scoped = ROLES.length - everywhere;
+    expect(cases.length).toBe(THEMES.length * (everywhere * 2 + scoped));
+    // And the page surface is genuinely populated — an empty third surface
+    // would satisfy the arithmetic above and measure nothing new.
+    expect(ROLES.filter((r) => r.only === 'page').length).toBeGreaterThanOrEqual(4);
   });
 
   it.each(cases)('%s', (_n, theme, r, s) => {

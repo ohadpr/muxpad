@@ -47,13 +47,17 @@
   -webkit-line-clamp: 2;
 }
 /* A chat on another machine: said as a fact, in the quiet ink, with a small
-   monitor — not italic like a fallback, and not red like a failure. */
+   monitor — not italic like a fallback, and not red like a failure.
+   QUIET IS --fg-dim: this line is the ONLY thing the row says about that chat
+   (there is no preview to fall back to), and --fg-faint measures 2.76–4.69:1
+   on the page ground — under 4.5:1 in ten of the eleven themes. Found by
+   review; swept in themes.test.ts now. */
 .activity-view .mcl-row-preview[data-elsewhere="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
   font-style: normal;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 .activity-view .mcl-row-elsewhere-icon {
   flex: 0 0 auto;

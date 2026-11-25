@@ -96,7 +96,10 @@
 .cards-tile-ws {
   flex: 0 0 auto;
   font-size: 0.6875rem;
-  color: var(--fg-faint);
+  /* Which workspace the chat is in — the thing that tells two same-named
+     chats apart, so it has to be readable. See the clock below on why
+     --fg-faint is not. */
+  color: var(--fg-dim);
 }
 /* The card's own name, BESIDE the chat's and quieter: it is the identity for
    `muxpad card set`, and on a page of other people's cards it says WHICH of
@@ -123,7 +126,12 @@
   font-family: var(--chrome-font);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
-  color: var(--fg-faint);
+  /* --fg-dim, NOT --fg-faint. This is the page's answer to "which of my
+     watchers stopped", so the clock is the column you read down — and
+     --fg-faint measures 2.76–4.69:1 on the page ground, under WCAG's 4.5:1 in
+     ten of the eleven themes (themes.test.ts sweeps it now). Quiet is a rung
+     down, which --fg-dim is: 5.9–9.8:1. Found by review. */
+  color: var(--fg-dim);
 }
 .cards-tile-age.-stale {
   color: var(--status-working);
