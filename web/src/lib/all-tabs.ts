@@ -80,6 +80,7 @@ let inFlight: Promise<WorkspaceTabs[]> | null = null;
  * Row pushes and landed workspace lists are replayed instead: a boot measured
  * two 2.82 MB responses because its own sidebar list invalidated the first. */
 let generation = 0;
+let refreshNeeded = false;
 type CorpusChange = (groups: WorkspaceTabs[]) => WorkspaceTabs[];
 let inFlightChanges: CorpusChange[] | null = null;
 // A hung request must not retain an unlimited stream of pushed rows. On
@@ -97,10 +98,11 @@ type RowEvent = Extract<MuxpadEvent, { type: 'tab.updated' | 'tab.added' | 'tab.
 function upsertWorkspace(event: RowEvent): string | undefined {
   if (event.type === 'tab.removed' || !isCorpusLive(event.tab)) return undefined;
   if (event.type === 'tab.added') return event.workspace_id;
-  // New servers always send placement for a row re-entering the live corpus.
-  // Optional for wire compatibility with servers that only patched held rows.
+  // Placement is optional. Without it, a missing live row needs a bounded
+  // corpus refresh; neither done/status nor a workspace guess can place it.
   return event.tab.corpus_live === true
-    ? (event as { workspace_id?: string }).workspace_id
+    ? ((event.tab as Tab & { workspace_id?: string }).workspace_id ??
+        (event as { workspace_id?: string }).workspace_id)
     : undefined;
 }
 
@@ -112,6 +114,10 @@ function replayRow(groups: WorkspaceTabs[], event: RowEvent): WorkspaceTabs[] {
   const next = groups.map((g) => {
     const index = g.tabs.findIndex((t) => t.id === id);
     if (index >= 0) {
+      if (row && workspaceId && g.id !== workspaceId) {
+        changed = true;
+        return { ...g, tabs: g.tabs.filter((t) => t.id !== id) };
+      }
       if (event.type === 'tab.added' && row) return g;
       if (g.tabs[index] === row) return g;
       changed = true;
@@ -153,22 +159,35 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
 /**
  * Splice a server-pushed row into the corpus, if we are holding one.
  *
- * Nothing is fetched here: historical pushes must not wake the corpus. An
- * excluded row is ejected; an explicitly live row can re-enter using the
- * event's workspace placement. Workspace metadata still comes from /all.
+ * Historical pushes do not wake the corpus. An excluded row is ejected;
+ * an explicitly live row re-enters using placement when provided, otherwise
+ * a bounded refresh discovers it. Workspace metadata still comes from /all.
  */
+function missingLivePlacement(groups: WorkspaceTabs[], event: RowEvent): boolean {
+  if (event.type !== 'tab.updated' || event.tab.corpus_live !== true) return false;
+  const workspaceId = upsertWorkspace(event);
+  return workspaceId
+    ? !groups.some((g) => g.id === workspaceId)
+    : !groups.some((g) => g.tabs.some((t) => t.id === event.tab.id));
+}
+
 const unsubscribeLive = subscribe((e) => {
   if (e.type !== 'tab.updated' && e.type !== 'tab.added' && e.type !== 'tab.removed') return;
   const workspaceId = upsertWorkspace(e);
   rememberChange((groups) => {
-    // Placement without workspace metadata still needs the retry backstop.
-    if (workspaceId && !groups.some((g) => g.id === workspaceId)) generation++;
+    // Preserve the existing add backstop. Revivals without placement use the
+    // shared request floor instead of superseding every in-flight response.
+    if (e.type === 'tab.added' && workspaceId && !groups.some((g) => g.id === workspaceId))
+      generation++;
+    if (missingLivePlacement(groups, e)) scheduleCorpusRefresh();
     return replayRow(groups, e);
   });
   if (!cache) return;
+  const missing = missingLivePlacement(cache, e);
   const next = replayRow(cache, e);
   if (next !== cache) publish(next);
   else if (workspaceId && !cache.some((g) => g.id === workspaceId)) settledAt = 0;
+  if (missing) scheduleCorpusRefresh();
 });
 
 /**
@@ -379,7 +398,14 @@ export function refreshCorpusForTab(tabId: string): void {
   // mount will fetch anyway. This is what keeps an idle page silent.
   if (listeners.size === 0) return;
   if (!cache.some((g) => g.tabs.some((t) => t.id === tabId))) return;
-  if (edgeTimer !== null) return;
+  scheduleCorpusRefresh();
+}
+
+/** Shared by status edges and live rows whose workspace placement is unknown. */
+function scheduleCorpusRefresh(): void {
+  refreshNeeded = true;
+  settledAt = 0;
+  if (listeners.size === 0 || edgeTimer !== null) return;
   // Held rather than dropped: a stream of edges still gets its refetch, just on
   // the floor's schedule instead of its own.
   const since = Date.now() - lastEdgeFetchAt;
@@ -486,6 +512,10 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
   if (cache && Date.now() - settledAt < FRESH_MS) return cache;
   if (inFlight) return inFlight;
   const issuedAt = generation;
+  // A refresh queued behind a slow read starts only now. Anchor the floor to
+  // that actual request, not the earlier timer that merely joined inFlight.
+  if (refreshNeeded) lastEdgeFetchAt = Date.now();
+  refreshNeeded = false;
   const changes: CorpusChange[] = [];
   inFlightChanges = changes;
   let superseded = false;
@@ -505,7 +535,7 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
         return cache ?? publishFetched(next);
       }
       supersededRetries = 0;
-      settledAt = Date.now();
+      settledAt = refreshNeeded ? 0 : Date.now();
       // Landing is what makes the corpus fresh; publishing is only what tells
       // the readers, and an answer identical to the one they hold is not news.
       return publishFetched(next);
@@ -536,6 +566,7 @@ export function resetAllTabsCache(): void {
   unsupported = false;
   refetchQueued = false;
   generation = 0;
+  refreshNeeded = false;
   supersededRetries = 0;
   if (edgeTimer !== null) {
     clearTimeout(edgeTimer);

@@ -566,3 +566,168 @@ describe('the structural corpus stays narrower than workspace history', () => {
     expect(row('owner')).toBeDefined();
   });
 });
+
+describe('live rows with unknown workspace placement', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+  });
+  afterEach(() => vi.useRealTimers());
+  const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+  const unknown = (id = 'revived') =>
+    emit({ type: 'tab.updated', tab: tab(id, { corpus_live: true, done: true }) } as MuxpadEvent);
+  const serverRevival = () => {
+    SERVER = [
+      ...SERVER,
+      {
+        id: 'never-expanded',
+        slug: 'other',
+        name: 'Other',
+        tabs: [tab('revived', { corpus_live: true, done: true })],
+      },
+    ];
+  };
+
+  it('coalesces revivals into one read and discovers a never-expanded workspace', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    listAllTabs.mockClear();
+    serverRevival();
+    for (let i = 0; i < 40; i++) unknown();
+    await advance(249);
+    expect(listAllTabs).not.toHaveBeenCalled();
+    await advance(1);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    expect(cachedAllTabs()?.find((g) => g.id === 'never-expanded')?.tabs[0]?.id).toBe('revived');
+  });
+
+  it('bounds a sustained stream to the existing two-second request floor', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    listAllTabs.mockClear();
+    unknown();
+    await advance(250);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) {
+      unknown(`missing-${i}`);
+      await advance(50);
+    }
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    await advance(999);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates a fresh cache without fetching when nobody is subscribed', async () => {
+    await loadAllTabs();
+    listAllTabs.mockClear();
+    serverRevival();
+    unknown();
+    expect(listAllTabs).not.toHaveBeenCalled();
+    await loadAllTabs();
+    expect(row('revived')).toBeDefined();
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an unrequested corpus lazy and ignores historical or already-held updates', async () => {
+    unknown();
+    await advance(5000);
+    expect(listAllTabs).not.toHaveBeenCalled();
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    listAllTabs.mockClear();
+    unknown('t1');
+    emit({ type: 'tab.updated', tab: tab('history', { corpus_live: false }) } as MuxpadEvent);
+    await advance(5000);
+    expect(listAllTabs).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'queues one bounded read when an unknown revival overtakes an in-flight read (cache held: %s)',
+    async (held) => {
+      if (held) {
+        await loadAllTabs();
+        await advance(5000);
+      }
+      subscribeAllTabs(() => {});
+      listAllTabs.mockClear();
+      let release!: (v: { workspaces: WorkspaceTabs[] }) => void;
+      const old = structuredClone(SERVER);
+      listAllTabs.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      const loading = loadAllTabs();
+      serverRevival();
+      unknown();
+      release({ workspaces: old });
+      await loading;
+      expect(listAllTabs).toHaveBeenCalledTimes(1);
+      await advance(250);
+      expect(listAllTabs).toHaveBeenCalledTimes(2);
+      expect(row('revived')).toBeDefined();
+      await advance(5000);
+      expect(listAllTabs).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('anchors the request floor to a retry that was held behind a slow response', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    await advance(5000);
+    listAllTabs.mockClear();
+    let release!: (v: { workspaces: WorkspaceTabs[] }) => void;
+    const old = structuredClone(SERVER);
+    listAllTabs.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const loading = loadAllTabs();
+    unknown();
+    await advance(3000); // refresh timer joined the older read at 250ms
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    serverRevival();
+    release({ workspaces: old });
+    await loading;
+    await advance(0);
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+    expect(row('revived')).toBeDefined();
+    unknown('another-missing-row');
+    await advance(1999);
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(listAllTabs).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses optional row placement to insert and move directly without a read', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    listAllTabs.mockClear();
+    emit({
+      type: 'tab.updated',
+      tab: { ...tab('t1', { corpus_live: true }), workspace_id: 'w2' },
+    } as MuxpadEvent);
+    expect(
+      cachedAllTabs()
+        ?.find((g) => g.id === 'w1')
+        ?.tabs.some((t) => t.id === 't1'),
+    ).toBe(false);
+    expect(
+      cachedAllTabs()
+        ?.find((g) => g.id === 'w2')
+        ?.tabs.some((t) => t.id === 't1'),
+    ).toBe(true);
+    emit({
+      type: 'tab.updated',
+      tab: { ...tab('new', { corpus_live: true }), workspace_id: 'w2' },
+    } as MuxpadEvent);
+    expect(row('new')).toBeDefined();
+    await advance(5000);
+    expect(listAllTabs).not.toHaveBeenCalled();
+  });
+});
