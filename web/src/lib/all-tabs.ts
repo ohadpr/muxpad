@@ -163,12 +163,31 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
  * an explicitly live row re-enters using placement when provided, otherwise
  * a bounded refresh discovers it. Workspace metadata still comes from /all.
  */
+/**
+ * Workspaces `/all` has answered WITHOUT, so we stop asking it to explain them.
+ *
+ * `/all` excludes hidden workspaces — the system container holds muxpad's own
+ * app tabs — and a live app tab there emits `tab.updated` with its placement.
+ * The absent group read as "metadata we have not fetched yet", so every such
+ * update scheduled a refresh, and the answer never contained that workspace:
+ * one request per app-tab update, forever, at the 2 s floor. Found by review.
+ *
+ * Learned from the answers rather than assumed: a workspace later unhidden
+ * simply arrives in a response, and this set is rebuilt from what landed.
+ */
+const unplaceable = new Set<string>();
+
 function missingLivePlacement(groups: WorkspaceTabs[], event: RowEvent): boolean {
   if (event.type !== 'tab.updated' || event.tab.corpus_live !== true) return false;
   const workspaceId = upsertWorkspace(event);
-  return workspaceId
-    ? !groups.some((g) => g.id === workspaceId)
-    : !groups.some((g) => g.tabs.some((t) => t.id === event.tab.id));
+  if (workspaceId)
+    return !groups.some((g) => g.id === workspaceId) && !unplaceable.has(workspaceId);
+  return !groups.some((g) => g.tabs.some((t) => t.id === event.tab.id));
+}
+
+/** A landed corpus settles which workspaces it is willing to describe. */
+function notePlaced(groups: readonly WorkspaceTabs[]): void {
+  for (const g of groups) unplaceable.delete(g.id);
 }
 
 const unsubscribeLive = subscribe((e) => {
@@ -187,8 +206,15 @@ const unsubscribeLive = subscribe((e) => {
   const next = replayRow(cache, e);
   if (next !== cache) publish(next);
   else if (workspaceId && !cache.some((g) => g.id === workspaceId)) settledAt = 0;
-  if (missing) scheduleCorpusRefresh();
+  if (missing) {
+    pendingPlacement.add(workspaceId ?? '');
+    scheduleCorpusRefresh();
+  }
 });
+
+/** Workspace ids a refresh was asked for. A landing that still does not carry
+ *  one is the server saying it never will — see `unplaceable`. */
+const pendingPlacement = new Set<string>();
 
 /**
  * A workspace's rows, reduced to what its readers can actually SEE change.
@@ -263,6 +289,12 @@ function sameRows(a: unknown, b: unknown, key = ''): boolean {
  * enough; React compares by reference.
  */
 function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
+  // What this answer places, and what it has now refused to place twice over.
+  notePlaced(next);
+  for (const id of pendingPlacement) {
+    if (id && !next.some((g) => g.id === id)) unplaceable.add(id);
+  }
+  pendingPlacement.clear();
   const live = next.map((g) => ({ ...g, tabs: corpusTabs(g.tabs) }));
   if (cache && sameRows(cache, live)) return cache;
   publish(live);
@@ -573,5 +605,7 @@ export function resetAllTabsCache(): void {
     edgeTimer = null;
   }
   lastEdgeFetchAt = 0;
+  unplaceable.clear();
+  pendingPlacement.clear();
   listeners.clear();
 }

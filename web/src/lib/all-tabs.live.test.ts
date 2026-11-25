@@ -619,6 +619,75 @@ describe('live rows with unknown workspace placement', () => {
     expect(listAllTabs).toHaveBeenCalledTimes(2);
   });
 
+  // A HIDDEN WORKSPACE IS NOT MISSING METADATA. `/all` excludes hidden
+  // workspaces (the system container holds muxpad's own app tabs), and a live
+  // app tab there pushes `tab.updated` with its placement — which read as "a
+  // workspace we have not fetched yet", so every such update scheduled a
+  // refresh and the answer never carried that workspace. One request per app
+  // update, forever, at the 2 s floor. Found by review.
+  it('stops asking for a workspace the server has answered without', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    listAllTabs.mockClear();
+    const inHidden = () =>
+      emit({
+        type: 'tab.updated',
+        workspace_id: 'hidden-system',
+        tab: tab('app-tab', { corpus_live: true }),
+      } as MuxpadEvent);
+
+    // The first update is a fair question: we might simply not have it yet.
+    inHidden();
+    await advance(250);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+    expect(cachedAllTabs()?.some((g) => g.id === 'hidden-system')).toBe(false);
+
+    // Now we have been told. Twenty more updates must cost nothing.
+    for (let i = 0; i < 20; i++) {
+      inHidden();
+      await advance(2_500);
+    }
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again once that workspace does start arriving', async () => {
+    await loadAllTabs();
+    subscribeAllTabs(() => {});
+    const inHidden = () =>
+      emit({
+        type: 'tab.updated',
+        workspace_id: 'later-visible',
+        tab: tab('app-tab', { corpus_live: true }),
+      } as MuxpadEvent);
+    inHidden();
+    await advance(2_500);
+    listAllTabs.mockClear();
+    inHidden();
+    await advance(2_500);
+    expect(listAllTabs).not.toHaveBeenCalled();
+
+    // Unhidden: it lands in an ordinary answer, and the latch is released.
+    SERVER = [...SERVER, { id: 'later-visible', slug: 'lv', name: 'LV', tabs: [tab('other', {})] }];
+    await loadAllTabs();
+    await advance(5_000);
+    expect(cachedAllTabs()?.some((g) => g.id === 'later-visible')).toBe(true);
+    listAllTabs.mockClear();
+    emit({
+      type: 'tab.updated',
+      workspace_id: 'later-visible',
+      tab: tab('app-tab', { corpus_live: true }),
+    } as MuxpadEvent);
+    await advance(2_500);
+    // The group is here now, so the row is simply placed — and the latch does
+    // not turn that into a refusal to place it.
+    expect(
+      cachedAllTabs()
+        ?.find((g) => g.id === 'later-visible')
+        ?.tabs.some((t) => t.id === 'app-tab'),
+    ).toBe(true);
+    expect(listAllTabs).not.toHaveBeenCalled();
+  });
+
   it('invalidates a fresh cache without fetching when nobody is subscribed', async () => {
     await loadAllTabs();
     listAllTabs.mockClear();
