@@ -78,19 +78,51 @@ function toHex(colour: string): string {
   return `#${hex.join('')}`;
 }
 
-function tint(): string {
+function tint(): { colour: string; measured: boolean } {
   const bar = document.querySelector(TOP_BARS);
   for (let el: Element | null = bar; el; el = el.parentElement) {
     const c = getComputedStyle(el).backgroundColor;
-    if (PAINTED(c)) return toHex(c);
+    if (PAINTED(c)) return { colour: toHex(c), measured: true };
   }
   // No header mounted yet — first paint, or a fixture. Fall back to the
   // tokens, in the order of how close each sits to the bar.
   const cs = getComputedStyle(document.documentElement);
   const chrome = cs.getPropertyValue('--bg-chrome').trim();
-  if (chrome) return chrome;
+  if (chrome) return { colour: chrome, measured: false };
   const bg = cs.getPropertyValue('--bg').trim();
-  return bg || '#000000';
+  return { colour: bg || '#000000', measured: false };
+}
+
+/**
+ * THE FALLBACK HAS TO BE TEMPORARY, and it was not.
+ *
+ * This module's first call happens when settings.ts applies the theme — which
+ * is at IMPORT time, before React has mounted anything. So a cold start always
+ * took the `--bg-chrome` branch above, and nothing ever measured again: a
+ * boot theme that matches what is stored changes nothing, so no theme
+ * application follows. On a light theme that left exactly the pale strip this
+ * work existed to remove. Found by review.
+ *
+ * One shot, and it disarms itself: watch for the header appearing, measure it
+ * once, stop. Cheaper than a rAF loop and it cannot outlive its purpose.
+ */
+let waitingForBar: MutationObserver | null = null;
+
+function disarm(): void {
+  waitingForBar?.disconnect();
+  waitingForBar = null;
+}
+
+function remeasureWhenTheBarArrives(): void {
+  if (waitingForBar || typeof MutationObserver === 'undefined') return;
+  const target = document.body ?? document.documentElement;
+  if (!target) return;
+  waitingForBar = new MutationObserver(() => {
+    if (!document.querySelector(TOP_BARS)) return;
+    disarm();
+    syncStatusBarTint();
+  });
+  waitingForBar.observe(target, { childList: true, subtree: true });
 }
 
 /**
@@ -117,8 +149,15 @@ export function syncStatusBarTint(): void {
     meta.name = 'theme-color';
     document.head.appendChild(meta);
   }
-  const next = tint();
+  const { colour, measured } = tint();
   // A no-op write still invalidates the tag in some engines; this is called on
   // every theme application, including the ones that change nothing.
-  if (meta.content !== next) meta.content = next;
+  if (meta.content !== colour) meta.content = colour;
+  if (measured) disarm();
+  else remeasureWhenTheBarArrives();
+}
+
+/** Test seam — forget the one-shot observer. */
+export function __resetStatusBarTint(): void {
+  disarm();
 }

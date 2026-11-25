@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { syncStatusBarTint } from './status-bar-tint';
+import { __resetStatusBarTint, syncStatusBarTint } from './status-bar-tint';
 
 /**
  * The status bar is now OPAQUE and tinted by `theme-color` — that is the whole
@@ -18,6 +18,8 @@ const setVars = (vars: Record<string, string>) => {
 beforeEach(() => {
   document.head.innerHTML = '';
   document.documentElement.style.cssText = '';
+  document.body.innerHTML = '';
+  __resetStatusBarTint();
 });
 
 describe('the status bar tint', () => {
@@ -115,6 +117,46 @@ describe('the status bar tint', () => {
 });
 
 describe('the meta that must NOT come back', () => {
+  // THE COLD START IS THE REAL CASE, and it only ever took the fallback. This
+  // module's first call comes from settings.ts applying the theme — at IMPORT
+  // time, before React has mounted a header — and nothing measured again,
+  // because a boot theme equal to the stored one applies nothing. On a light
+  // theme that left exactly the pale strip the measuring was added to remove.
+  // Found by review.
+  it('measures the header once it appears, having started with the token', async () => {
+    setVars({ '--bg-chrome': '#e0e0e0', '--bg': '#f8f5e2' });
+    syncStatusBarTint();
+    const meta = () => document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.content;
+    expect(meta()).toBe('#e0e0e0');
+
+    // React mounts.
+    const bar = document.createElement('div');
+    bar.className = 'mcl-head';
+    bar.style.backgroundColor = 'rgb(0, 71, 71)';
+    document.body.appendChild(bar);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(meta()).toBe('#004747');
+  });
+
+  it('stops watching once it has measured a real bar', async () => {
+    const bar = document.createElement('div');
+    bar.className = 'mcl-head';
+    bar.style.backgroundColor = 'rgb(0, 71, 71)';
+    document.body.appendChild(bar);
+    syncStatusBarTint();
+    const meta = () => document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.content;
+    expect(meta()).toBe('#004747');
+
+    // Later DOM churn must not re-tint from some other element.
+    bar.remove();
+    const other = document.createElement('div');
+    other.className = 'mcl-head';
+    other.style.backgroundColor = 'rgb(1, 2, 3)';
+    document.body.appendChild(other);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(meta()).toBe('#004747');
+  });
+
   it('is documented in index.html rather than left to memory', async () => {
     // A regression here is invisible in every browser we can test with — the
     // blur only exists in the installed app on a real phone — so the guard is

@@ -185,6 +185,32 @@ describe('serving', () => {
     expect(m).not.toHaveProperty('theme_color');
     // The splash colour stays: it paints before a page exists to have a theme.
     expect(m).toHaveProperty('background_color');
+    // AND THE APP'S IDENTITY IS CONSTANT. With no `id` the manifest identity
+    // algorithm falls back to `start_url` — which carries the build stamp
+    // above, so every deploy would mint a new application identity and the
+    // installed app could be treated as a different one. Found by review.
+    expect(m.id).toBe('/');
+  });
+
+  it('keeps the same app identity across two builds that move start_url', async () => {
+    const first = JSON.parse(await (await get('/manifest.webmanifest')).text()) as {
+      id: string;
+      start_url: string;
+    };
+    // A new shell: a different validator, so a different stamp. Put the
+    // fixture back afterwards — the whole file shares one temp root.
+    const shell = '<!doctype html><title>muxpad</title>';
+    writeFileSync(join(root, 'index.html'), '<!doctype html><title>muxpad v2</title>');
+    try {
+      const second = JSON.parse(await (await get('/manifest.webmanifest')).text()) as {
+        id: string;
+        start_url: string;
+      };
+      expect(second.start_url).not.toBe(first.start_url);
+      expect(second.id).toBe(first.id);
+    } finally {
+      writeFileSync(join(root, 'index.html'), shell);
+    }
   });
 
   it('serves the no-store shell for SPA routes too', async () => {

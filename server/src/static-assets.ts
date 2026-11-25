@@ -245,7 +245,14 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
       // any page exists to have a theme, so a constant is the only thing it
       // could be.
       const { theme_color: _dropped, ...rest } = raw as Record<string, unknown>;
-      return c.body(JSON.stringify({ ...rest, start_url: `/?b=${stamp}` }));
+      // AN EXPLICIT, CONSTANT `id`, because `start_url` is not one. With no
+      // `id` the manifest identity algorithm falls back to `start_url`
+      // (w3.org/TR/appmanifest/#id-member) — and this one carries the build
+      // stamp, so every deploy minted a new application identity and an
+      // installed muxpad could be treated as a different app from the one
+      // already on the home screen. Found by review; not install-tested, but
+      // the spec is unambiguous and a stable id costs nothing.
+      return c.body(JSON.stringify({ ...rest, id: '/', start_url: `/?b=${stamp}` }));
     } catch {
       return c.text('not found', 404);
     }
