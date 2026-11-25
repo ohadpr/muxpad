@@ -107,7 +107,11 @@ export function decorateSelectedTabs(
   const clocks: ClockSnapshot = { now, index, childrenOf };
   const panesByTab = new PaneStore(db).byTabs([...index.keys()]);
   const manualUnread = new Set(
-    (db.prepare('SELECT id FROM tabs WHERE unread = 1').all() as { id: string }[]).map((r) => r.id),
+    (
+      db
+        .prepare(`SELECT id FROM tabs WHERE unread = 1 AND id IN (${placeholders})`)
+        .all(...ids) as { id: string }[]
+    ).map((r) => r.id),
   );
   const crons = cronsByTab(db);
   return sortSidebarTabs(
@@ -118,8 +122,8 @@ export function decorateSelectedTabs(
 }
 
 /** The hot corpus carries live work only. Retirement alone cannot decide it:
- * an automatically retired worker may still own an unparked running pane. */
+ * an automatically retired worker may still own an unparked pane. */
 export function liveCorpusTabs(db: Database.Database, cache: PtydCache, now = Date.now()): Tab[] {
-  const candidates = new TabStore(db).corpusCandidates(now - CHAT_DECAY_MS, cache.livePaneIds());
+  const candidates = new TabStore(db).corpusCandidates(now - CHAT_DECAY_MS);
   return decorateSelectedTabs(db, cache, candidates, now).filter((t) => t.corpus_live);
 }

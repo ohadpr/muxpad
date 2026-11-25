@@ -280,28 +280,7 @@ export function tabsRoutes(deps: {
    * NAME (it is a matchable field) and its SLUG (half the route a result
    * navigates to), and `Tab` carries neither.
    */
-  app.get('/all', async (c) => {
-    // Read actual runtime ids, not historical unparked flags. On a temporary
-    // transport failure retain the last inventory; unknown is not absent.
-    await deps.cache.refreshRuntimePanes(async () => {
-      const router = deps.ptyd as PaneOps & {
-        listPanesBestEffort?: () => Promise<{ value: string[]; unreachable: string[] }>;
-      };
-      if (!router.listPanesBestEffort) return router.listPanes();
-      const snapshot = await router.listPanesBestEffort();
-      const previous = deps.cache.livePaneIds();
-      if (!snapshot.unreachable.length || !previous.length) return snapshot.value;
-      // Update machines that answered while retaining evidence for offline
-      // machines. A local refresh must not erase a remote worker.
-      const unknown = deps.db
-        .prepare(`SELECT id FROM panes WHERE id IN
-        (${previous.map(() => '?').join(',')}) AND node_id IN
-        (${snapshot.unreachable.map(() => '?').join(',')})`)
-        .all(...previous, ...snapshot.unreachable) as { id: string }[];
-      return [...snapshot.value, ...unknown.map((p) => p.id)];
-    });
-    return c.json(grouped(liveCorpusTabs(deps.db, deps.cache)));
-  });
+  app.get('/all', (c) => c.json(grouped(liveCorpusTabs(deps.db, deps.cache))));
 
   // Finished unread chats belong to the inbox, not the live-work corpus.
   app.get('/unread', (c) =>

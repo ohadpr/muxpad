@@ -554,8 +554,8 @@ export const TabSchema = z.object({
   // unconditional. `.optional()` here is wire-compat with a server that
   // predates the column, where absent correctly reads as "not done".
   done: z.boolean().optional(),
-  // Membership of the live-work corpus: includes retired chats that still
-  // own a running, unparked pane. Published on lists/events for cache merges.
+  // Always emitted on decorated lists/events: !done OR owns an unparked pane.
+  // False ejects a cached corpus row; absent is older-server compatibility.
   corpus_live: z.boolean().optional(),
   // WHY it is done — each is visually distinct in the done group and in a
   // tooltip, and only the server can tell them apart. Absent while live.
@@ -736,6 +736,8 @@ export const TabAddedEventSchema = z.object({
 });
 export const TabUpdatedEventSchema = z.object({
   type: z.literal('tab.updated'),
+  // Optional only for compatibility with older servers. New servers always send it.
+  workspace_id: z.string().optional(),
   tab: TabSchema,
 });
 export const TabRemovedEventSchema = z.object({

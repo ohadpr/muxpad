@@ -275,10 +275,11 @@ export function panesTabScopedRoutes(deps: {
         // pane IS the whole layout. `split_from` / `direction` / `position`
         // are still accepted from an older CLI and mean nothing now.
         const nextLayout: LayoutNode = pane.id;
-        const updated = tabs.update(tabId, { layout: nextLayout });
-        if (updated)
-          deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
+        tabs.update(tabId, { layout: nextLayout });
       }
+      const updated = tabs.getById(tabId);
+      if (updated)
+        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
       return c.json(pane, 201);
     }
 
@@ -401,10 +402,12 @@ export function panesTabScopedRoutes(deps: {
     if (body.append_to_layout) {
       // Empty tab (see the refusal above): the new pane is the whole layout.
       const nextLayout: LayoutNode = pane.id;
-      const updated = tabs.update(tabId, { layout: nextLayout });
-      if (updated)
-        deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
+      tabs.update(tabId, { layout: nextLayout });
     }
+    // Even an off-layout pane changes ownership and therefore corpus membership.
+    const updated = tabs.getById(tabId);
+    if (updated)
+      deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, updated) });
     // Eager spawn: otherwise the PTY only starts when the frontend mounts
     // the XtermPane (i.e. when the user navigates to its tab). A CLI-created
     // pane with --cmd would sit idle until then. Same spec shape as ws.ts.

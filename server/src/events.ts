@@ -18,6 +18,13 @@ type Listener = (event: MuxpadEvent) => void;
 export class EventBus {
   private listeners = new Set<Listener>();
 
+  private tabWorkspace: ((tabId: string) => string | undefined) | undefined;
+
+  /** Resolve placement at emission time, including tabs absent from a client's corpus. */
+  setTabWorkspaceResolver(resolve: (tabId: string) => string | undefined): void {
+    this.tabWorkspace = resolve;
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -26,9 +33,16 @@ export class EventBus {
   }
 
   emit(event: MuxpadEvent): void {
+    let outgoing = event;
+    if (event.type === 'tab.updated' && this.tabWorkspace) {
+      const workspace_id = this.tabWorkspace(event.tab.id);
+      // A stale update after removal cannot be placed into any workspace.
+      if (workspace_id === undefined) return;
+      outgoing = { ...event, workspace_id };
+    }
     for (const l of this.listeners) {
       try {
-        l(event);
+        l(outgoing);
       } catch (err) {
         console.error('EventBus listener threw', err);
       }

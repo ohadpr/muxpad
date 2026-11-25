@@ -410,10 +410,8 @@ export class TabStore {
   }
 
   /** Indexed candidates only; no report TEXT crosses the SQLite/JS boundary. */
-  corpusCandidates(cutoff: number, livePaneIds: string[] = []): Tab[] {
-    const runtime = livePaneIds.length
-      ? `SELECT tab_id FROM panes WHERE parked_at IS NULL AND id IN (${livePaneIds.map(() => '?').join(',')})`
-      : 'SELECT NULL WHERE 0';
+  corpusCandidates(cutoff: number): Tab[] {
+    const unparked = 'SELECT tab_id FROM panes WHERE parked_at IS NULL';
     return this.selected(
       `id IN (
       SELECT id FROM tabs WHERE pinned = 1
@@ -426,11 +424,9 @@ export class TabStore {
         WHERE retired_at IS NULL AND spawned_by IS NOT NULL
       UNION SELECT spawned_by FROM tabs INDEXED BY tabs_corpus_pinned
         WHERE pinned = 1 AND spawned_by IS NOT NULL
-      UNION SELECT id FROM tabs WHERE unread = 1
-      UNION SELECT tab_id FROM panes WHERE unread = 1
-      UNION ${runtime}
-    ) AND (retired_at IS NULL OR pinned = 1 OR id IN (${runtime}))`,
-      [cutoff, ...livePaneIds, ...livePaneIds],
+      UNION ${unparked}
+    ) AND (retired_at IS NULL OR pinned = 1 OR id IN (${unparked}))`,
+      [cutoff],
     );
   }
 

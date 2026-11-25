@@ -92,6 +92,8 @@ export interface WsServerHandle {
    * that must not regress. Single-flight, same as the timer's call.
    */
   sweepDeadRunners(): Promise<void>;
+  /** Run parking deterministically without waiting for the production interval. */
+  sweepParkedPanes(): Promise<void>;
 }
 
 // Initial chat history window: only the last ~128 KB of the transcript ship on
@@ -621,6 +623,7 @@ export function attachWsServer(deps: {
    */
   const lifecycle = (): PaneOps => deps.paneOps ?? deps.ptyd;
   const tabs = new TabStore(deps.db);
+  deps.events.setTabWorkspaceResolver((id) => tabs.getWorkspaceId(id));
   // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
   // moments (turn done, user send), throttled for raw pty chatter.
   const activity = deps.tabActivity ?? new TabActivity(deps.db);
@@ -666,6 +669,12 @@ export function attachWsServer(deps: {
         pane: decoratePane(deps.cache, pane, deps.db),
       });
     }
+  };
+  // Parking changes corpus membership even when a retired tab remains in history.
+  const emitPaneTabUpdated = (paneId: string) => {
+    const pane = panes.getById(paneId);
+    const tab = pane && tabs.getById(pane.tab_id);
+    if (tab) deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tab) });
   };
   /**
    * Has this pane's chat already left the live list?
@@ -1593,6 +1602,7 @@ export function attachWsServer(deps: {
         // `unpark` answers "was it parked" and clears the flag in one statement,
         // so this cannot fire twice for one waking.
         if (panes.unpark(pane.id)) {
+          emitPaneTabUpdated(pane.id);
           bcastToPane(pane.id, { t: 'notice', message: 'waking this chat…' });
           emitPaneUpdated(pane.id);
           await spawnAgentPane(pane.id);
@@ -1694,6 +1704,7 @@ export function attachWsServer(deps: {
           // that wants it.
         }
         panes.park(c.pane.id, now);
+        emitPaneTabUpdated(c.pane.id);
         emitPaneUpdated(c.pane.id);
       }
     } catch (err) {
@@ -3875,6 +3886,7 @@ export function attachWsServer(deps: {
 
   return {
     sweepDeadRunners,
+    sweepParkedPanes,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);

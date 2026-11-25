@@ -18,6 +18,7 @@
 // through the attempt this test proves is never spent.
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { CHAT_DECAY_MS, DAY_MS, type MuxpadEvent } from '@muxpad/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { EventBus } from './events.js';
@@ -108,7 +109,17 @@ async function boot(
     await new Promise<void>((r) => http.close(() => r()));
   };
   const doneReason = () => resolveTabClock(clockIndex(db), tab.id, Date.now()).done_reason;
-  return { db, handle, ptyd, port, paneId: pane.id, tabId: tab.id, doneReason };
+  return {
+    db,
+    handle,
+    ptyd,
+    port,
+    events,
+    workspaceId: wsRow.id,
+    paneId: pane.id,
+    tabId: tab.id,
+    doneReason,
+  };
 }
 
 /** Open a chat socket and collect the frames the server broadcasts to it. */
@@ -200,19 +211,52 @@ describe('dead-runner sweep vs a ptyd outage', () => {
     chat.sock.close();
   });
 
+  it('parking publishes false membership for retired history', async () => {
+    const { db, handle, paneId, tabId, events, workspaceId } = await boot();
+    new TabStore(db).retire(tabId, 'delivered');
+    db.prepare('UPDATE tabs SET last_activity_at = ? WHERE id = ?').run(
+      Date.now() - CHAT_DECAY_MS - DAY_MS,
+      tabId,
+    );
+    db.prepare(
+      "INSERT INTO agent_sessions (id, pane_id, assistant, status, created_at, updated_at) VALUES ('park-session', ?, 'claude', 'idle', ?, ?)",
+    ).run(paneId, Date.now(), Date.now());
+    const received: MuxpadEvent[] = [];
+    events.subscribe((e) => received.push(e));
+    await handle.sweepParkedPanes();
+    expect(new PaneStore(db).isParked(paneId)).toBe(true);
+    expect(received).toContainEqual(
+      expect.objectContaining({
+        type: 'tab.updated',
+        workspace_id: workspaceId,
+        tab: expect.objectContaining({ id: tabId, done: true, corpus_live: false }),
+      }),
+    );
+  });
+
   it('a PARKED pane wakes — it does not "die"', async () => {
     // muxpad stopped this one on purpose (agent-park.ts). The sweep is still
     // what starts it again, but the two must not share a voice: telling a
     // reader "agent process died — restarting (attempt 1/3)" about a chat
     // muxpad itself put to sleep is a lie, and spending one of the three
     // attempts that exist to stop a crash loop is a real cost.
-    const { db, handle, port, paneId } = await boot();
+    const { db, handle, port, paneId, tabId, events, workspaceId } = await boot();
     const chat = await openChat(port, paneId);
+    new TabStore(db).resetClock(tabId, Date.now() - CHAT_DECAY_MS - DAY_MS);
     new PaneStore(db).park(paneId, Date.now());
+    const received: MuxpadEvent[] = [];
+    events.subscribe((e) => received.push(e));
 
     await handle.sweepDeadRunners();
     await settle();
 
+    expect(received).toContainEqual(
+      expect.objectContaining({
+        type: 'tab.updated',
+        workspace_id: workspaceId,
+        tab: expect.objectContaining({ id: tabId, done: true, corpus_live: true }),
+      }),
+    );
     expect(chat.restarts()).toHaveLength(0);
     const waking = chat.frames.filter(
       (f) => typeof f.message === 'string' && /waking/i.test(f.message),

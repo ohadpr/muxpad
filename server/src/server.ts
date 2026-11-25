@@ -50,6 +50,7 @@ import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
 import { PrefStore } from './store/PrefStore.js';
+import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import type { TabActivity } from './tab-activity.js';
 import { clockSnapshot } from './tab-clock.js';
@@ -268,6 +269,8 @@ export function createApp(deps: AppDeps): Hono {
     events: deps.events ?? new EventBus(),
     paneOps: deps.paneOps ?? deps.ptyd,
   };
+  const tabStore = new TabStore(deps.db);
+  resolved.events.setTabWorkspaceResolver((id) => tabStore.getWorkspaceId(id));
   // CSRF: refuse a state-changing request that a foreign page made on the
   // user's behalf. muxpad has no auth — reachability is authorization — so
   // without this, any web page open on a tailnet browser could POST

@@ -130,6 +130,7 @@ const tabStore = new TabStore(db);
 // /ws/events upgrade arm (server/src/ws.ts) which fans events out to
 // subscribed browsers.
 const events = new EventBus();
+events.setTabWorkspaceResolver((id) => tabStore.getWorkspaceId(id));
 
 // Connect to the (separately-managed) ptyd daemon. The main server no
 // longer owns PTYs — it issues control RPCs and bridges WSes through

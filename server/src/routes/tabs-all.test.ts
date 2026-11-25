@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { CHAT_DECAY_MS, DAY_MS, type Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NodeStore } from '../store/NodeStore.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -34,7 +33,6 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     tmp = mkdtempSync(join(tmpdir(), 'muxpad-tabs-all-'));
     db = openDb(':memory:');
     test = await createTestApp({ db, dataDir: tmp });
-    test.cache.runtimeInventoryTtlMs = 0;
   });
 
   afterEach(async () => {
@@ -293,6 +291,16 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
       }
       // Candidate enumeration itself is bounded, before JSON/decorateTab.
       expect(tabs.corpusCandidates(now - CHAT_DECAY_MS).map((t) => t.id)).toEqual([live.id]);
+      const prepare = db.prepare.bind(db);
+      const boundedReads = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        if (
+          /SELECT id FROM tabs WHERE unread = 1(?! AND id IN)/.test(sql) ||
+          /UNION SELECT tab_id FROM panes WHERE unread = 1/.test(sql)
+        ) {
+          throw new Error('whole-history unread enumeration');
+        }
+        return prepare(sql);
+      });
       const original = tabs.clockRows;
       TabStore.prototype.clockRows = () => {
         throw new Error('whole-history clock scan');
@@ -301,6 +309,7 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
         expect(await all()).toEqual(before);
       } finally {
         TabStore.prototype.clockRows = original;
+        boundedReads.mockRestore();
       }
     } finally {
       Date.now = realNow;
@@ -311,8 +320,6 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     const ws = await makeWorkspace('W');
     const chat = await makeChat(ws.id, 'still running');
     new TabStore(db).retire(chat.id, 'delivered');
-    const pane = new PaneStore(db).listByTab(chat.id)[0]!;
-    vi.spyOn(test.ptyd.client, 'listPanes').mockResolvedValue([pane.id]);
     const rows = (await all()).workspaces[0]?.tabs ?? [];
     expect(rows.map((t) => t.id)).toContain(chat.id);
     expect(rows.find((t) => t.id === chat.id)?.done).toBe(true);
@@ -410,65 +417,28 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     expect(row).toMatchObject({ done: false, status: 'working', agents: 1 });
   });
 
-  it('drops dead unparked history while retaining retired running work and offline evidence', async () => {
+  it('uses persisted unparked ownership without runtime or status inference', async () => {
     const ws = await makeWorkspace('W');
-    const tabs = new TabStore(db);
-    const old = await makeChat(ws.id, 'dead unparked history');
-    const running = await makeChat(ws.id, 'retired running work');
-    for (const t of [old, running]) tabs.retire(t.id, 'delivered');
-    const stalePane = new PaneStore(db).listByTab(old.id)[0]!;
-    const livePane = new PaneStore(db).listByTab(running.id)[0]!;
-    test.cache.seedCwds([{ id: stalePane.id, cwd: '/tmp' }]);
-    const inventory = vi.spyOn(test.ptyd.client, 'listPanes').mockResolvedValue([livePane.id]);
-    expect((await all()).workspaces[0]?.tabs.map((t) => t.id)).toEqual([running.id]);
-    inventory.mockRejectedValueOnce(new Error('transport unavailable'));
-    expect((await all()).workspaces[0]?.tabs.map((t) => t.id)).toEqual([running.id]);
-    inventory.mockResolvedValue([]);
+    const chat = await makeChat(ws.id, 'finished but unparked');
+    new TabStore(db).retire(chat.id, 'delivered');
+    const panes = new PaneStore(db);
+    const pane = panes.listByTab(chat.id)[0]!;
+    test.cache.setDead(pane.id, true);
+    const runtime = vi.spyOn(test.ptyd.client, 'listPanes').mockRejectedValue(new Error('offline'));
+    expect((await all()).workspaces[0]?.tabs[0]).toMatchObject({
+      id: chat.id,
+      done: true,
+      corpus_live: true,
+    });
+    panes.park(pane.id, Date.now());
     expect((await all()).workspaces[0]?.tabs).toEqual([]);
+    const full = (await (await test.app.request(`/api/tabs?workspaceId=${ws.id}`)).json()) as Tab[];
+    expect(full.find((t) => t.id === chat.id)).toMatchObject({ corpus_live: false });
+    panes.unpark(pane.id);
+    expect((await all()).workspaces[0]?.tabs[0]).toMatchObject({ corpus_live: true });
+    expect(runtime).not.toHaveBeenCalled();
   });
 
-  it('does not resurrect an exited process from an older runtime inventory', async () => {
-    const ws = await makeWorkspace('W');
-    const chat = await makeChat(ws.id, 'exiting');
-    new TabStore(db).retire(chat.id, 'delivered');
-    const pane = new PaneStore(db).listByTab(chat.id)[0]!;
-    test.cache.setRuntimePanes([pane.id]);
-    let finish!: (ids: string[]) => void;
-    const inventory = vi.spyOn(test.ptyd.client, 'listPanes').mockImplementation(
-      () =>
-        new Promise<string[]>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    const response = all();
-    await vi.waitFor(() => expect(inventory).toHaveBeenCalledTimes(1));
-    test.ptyd.client.emit('paneExit', { id: pane.id, code: 0, cause: 'natural' });
-    finish([pane.id]);
-    expect((await response).workspaces[0]?.tabs).toEqual([]);
-  });
-  it('refreshes reachable nodes while retaining work on an unavailable node', async () => {
-    const ws = await makeWorkspace('W');
-    new NodeStore(db).add({ id: 'remote', name: 'Remote', endpoint: 'wss://remote.invalid' });
-    const tabs = new TabStore(db);
-    const local = await makeChat(ws.id, 'gone local');
-    const remote = tabs.create({ name: 'remote work', workspace_id: ws.id, layout: '' });
-    const remotePane = new PaneStore(db).create({
-      tab_id: remote.id,
-      startup_cmd: 'muxpad agent',
-      node_id: 'remote',
-    });
-    const localPane = new PaneStore(db).listByTab(local.id)[0]!;
-    tabs.retire(local.id, 'delivered');
-    tabs.retire(remote.id, 'delivered');
-    test.cache.setRuntimePanes([localPane.id, remotePane.id]);
-    const read = vi
-      .fn()
-      .mockResolvedValueOnce({ value: [], unreachable: ['remote'] })
-      .mockResolvedValue({ value: [], unreachable: [] });
-    Object.assign(test.ptyd.client, { listPanesBestEffort: read });
-    expect((await all()).workspaces[0]?.tabs.map((t) => t.id)).toEqual([remote.id]);
-    expect((await all()).workspaces[0]?.tabs).toEqual([]);
-  });
   it('ranks historical name matches before a broad workspace match reaches the lookup cap', async () => {
     const ws = await makeWorkspace('Needle');
     const exact = await makeChat(ws.id, 'Needle');
