@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
+import { corpusTabs } from './corpus-tabs';
 import { type SearchableTab, toSearchableTabs } from './nav-search';
 
 /**
@@ -68,7 +69,7 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
     workspace: w,
     // The corpus if we have it, else whatever this workspace's own poll has
     // already cached — which for the workspace you are in is always something.
-    tabs: byId.get(w.id) ?? cachedTabsFor(w.id),
+    tabs: byId.get(w.id) ?? corpusTabs(cachedTabsFor(w.id)),
   }));
   return stableGroups(useRef<Groups | null>(null), groups);
 }

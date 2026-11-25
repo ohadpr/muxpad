@@ -1,6 +1,7 @@
 import { CHAT_DECAY_DAYS, type MuxpadEvent, type Tab } from '@muxpad/shared';
 import { api } from '../api';
 import { subscribe, subscribeResync } from '../events';
+import { corpusTabs, isCorpusLive } from './corpus-tabs';
 import type { WorkspaceTabs } from './nav-search';
 
 /**
@@ -93,20 +94,39 @@ function rememberChange(change: CorpusChange): void {
 }
 
 type RowEvent = Extract<MuxpadEvent, { type: 'tab.updated' | 'tab.added' | 'tab.removed' }>;
+function upsertWorkspace(event: RowEvent): string | undefined {
+  if (event.type === 'tab.removed' || !isCorpusLive(event.tab)) return undefined;
+  if (event.type === 'tab.added') return event.workspace_id;
+  // New servers always send placement for a row re-entering the live corpus.
+  // Optional for wire compatibility with servers that only patched held rows.
+  return event.tab.corpus_live === true
+    ? (event as { workspace_id?: string }).workspace_id
+    : undefined;
+}
+
 function replayRow(groups: WorkspaceTabs[], event: RowEvent): WorkspaceTabs[] {
-  return groups.map((g) => {
-    if (event.type === 'tab.removed')
-      return { ...g, tabs: g.tabs.filter((t) => t.id !== event.tab_id) };
-    const index = g.tabs.findIndex((t) => t.id === event.tab.id);
+  const id = event.type === 'tab.removed' ? event.tab_id : event.tab.id;
+  const row = event.type === 'tab.removed' || !isCorpusLive(event.tab) ? null : event.tab;
+  const workspaceId = upsertWorkspace(event);
+  let changed = false;
+  const next = groups.map((g) => {
+    const index = g.tabs.findIndex((t) => t.id === id);
     if (index >= 0) {
+      if (event.type === 'tab.added' && row) return g;
+      if (g.tabs[index] === row) return g;
+      changed = true;
       const tabs = [...g.tabs];
-      tabs[index] = event.tab;
+      if (row) tabs[index] = row;
+      else tabs.splice(index, 1);
       return { ...g, tabs };
     }
-    return event.type === 'tab.added' && g.id === event.workspace_id
-      ? { ...g, tabs: [...g.tabs, event.tab] }
-      : g;
+    if (row && g.id === workspaceId) {
+      changed = true;
+      return { ...g, tabs: [...g.tabs, row] };
+    }
+    return g;
   });
+  return changed ? next : groups;
 }
 
 const listeners = new Set<(groups: WorkspaceTabs[]) => void>();
@@ -133,69 +153,22 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
 /**
  * Splice a server-pushed row into the corpus, if we are holding one.
  *
- * Nothing is FETCHED here, by design: the corpus is lazy, and a `tab.updated`
- * for a workspace nobody has asked about must not turn into a request. A row we
- * do not hold is simply not our business yet — the next `loadAllTabs` gets it.
+ * Nothing is fetched here: historical pushes must not wake the corpus. An
+ * excluded row is ejected; an explicitly live row can re-enter using the
+ * event's workspace placement. Workspace metadata still comes from /all.
  */
 const unsubscribeLive = subscribe((e) => {
-  if (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed') {
-    rememberChange((groups) => {
-      // No workspace metadata to replay an add into: retain the retry backstop.
-      if (e.type === 'tab.added' && !groups.some((g) => g.id === e.workspace_id)) generation++;
-      return replayRow(groups, e);
-    });
-  }
+  if (e.type !== 'tab.updated' && e.type !== 'tab.added' && e.type !== 'tab.removed') return;
+  const workspaceId = upsertWorkspace(e);
+  rememberChange((groups) => {
+    // Placement without workspace metadata still needs the retry backstop.
+    if (workspaceId && !groups.some((g) => g.id === workspaceId)) generation++;
+    return replayRow(groups, e);
+  });
   if (!cache) return;
-  if (e.type === 'tab.updated') {
-    let hit = false;
-    const next = cache.map((g) => {
-      const i = g.tabs.findIndex((t) => t.id === e.tab.id);
-      if (i < 0) return g;
-      hit = true;
-      const tabs = [...g.tabs];
-      tabs[i] = e.tab;
-      return { ...g, tabs };
-    });
-    // Order is NOT touched. This corpus is ranked per query (rankMentions /
-    // rankTabs) rather than displayed in its stored order, so re-sorting it
-    // would be work with no reader — and `sortSidebarTabs` is the sidebar's
-    // business, applied to the sidebar's own cache.
-    if (hit) {
-      publish(next);
-    }
-    return;
-  }
-  if (e.type === 'tab.added') {
-    const has = cache.some((g) => g.tabs.some((t) => t.id === e.tab.id));
-    if (has) return;
-    let hit = false;
-    const next = cache.map((g) => {
-      if (g.id !== e.workspace_id) return g;
-      hit = true;
-      return { ...g, tabs: [...g.tabs, e.tab] };
-    });
-    // A workspace we are not holding: leave it to the next fetch rather than
-    // inventing a group out of an id and no name. But STOP CALLING THE CORPUS
-    // FRESH — we have just been told, by the server, about a chat that is not
-    // in it, so the next `loadAllTabs` must actually ask instead of being
-    // short-circuited by FRESH_MS. This costs no request of its own; it only
-    // declines to serve a known-incomplete answer as a current one. (Reachable
-    // whenever a workspace is created after the corpus was fetched.)
-    if (hit) publish(next);
-    else settledAt = 0;
-    return;
-  }
-  if (e.type === 'tab.removed') {
-    let hit = false;
-    const next = cache.map((g) => {
-      if (!g.tabs.some((t) => t.id === e.tab_id)) return g;
-      hit = true;
-      return { ...g, tabs: g.tabs.filter((t) => t.id !== e.tab_id) };
-    });
-    if (hit) {
-      publish(next);
-    }
-  }
+  const next = replayRow(cache, e);
+  if (next !== cache) publish(next);
+  else if (workspaceId && !cache.some((g) => g.id === workspaceId)) settledAt = 0;
 });
 
 /**
@@ -271,9 +244,10 @@ function sameRows(a: unknown, b: unknown, key = ''): boolean {
  * enough; React compares by reference.
  */
 function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
-  if (cache && sameRows(cache, next)) return cache;
-  publish(next);
-  return next;
+  const live = next.map((g) => ({ ...g, tabs: corpusTabs(g.tabs) }));
+  if (cache && sameRows(cache, live)) return cache;
+  publish(live);
+  return live;
 }
 
 /**
@@ -329,11 +303,14 @@ function keepReportText(fresh: Tab, heldById: Map<string, Tab>): Tab {
 }
 
 export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
+  // Workspace history is deliberately wider than /all. Filter BEFORE recording
+  // the snapshot too, or a first-load replay would refill the structural corpus.
+  const liveTabs = corpusTabs(tabs);
   rememberChange((groups) =>
     groups.map((g) => {
       if (g.id !== workspaceId) return g;
       const held = new Map(g.tabs.map((t) => [t.id, t]));
-      return { ...g, tabs: tabs.map((t) => keepReportText(t, held)) };
+      return { ...g, tabs: liveTabs.map((t) => keepReportText(t, held)) };
     }),
   );
   if (!cache) return;
@@ -352,7 +329,7 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // every time a workspace poll lands. The same mistake as the quadratic
   // child scan fixed in 0aff773b, written by me one commit after fixing it.
   const heldById = new Map(group.tabs.map((t) => [t.id, t]));
-  const merged = tabs.map((t) => keepReportText(t, heldById));
+  const merged = liveTabs.map((t) => keepReportText(t, heldById));
   if (sameRows(group.tabs, merged)) return;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
 }

@@ -465,3 +465,104 @@ describe('corpus equality without serialized signatures', () => {
     expect(cachedAllTabs()).not.toBe(held);
   });
 });
+
+describe('the structural corpus stays narrower than workspace history', () => {
+  it('filters workspace snapshots while retaining retired owners of live work', async () => {
+    await loadAllTabs();
+    mergeWorkspaceTabs('w1', [
+      tab('history', { done: true, corpus_live: false }),
+      tab('retired-owner', { done: true, status: 'idle', corpus_live: true }),
+      tab('live', { corpus_live: true }),
+      tab('excluded-working', { status: 'working', corpus_live: false }),
+    ]);
+    expect(
+      cachedAllTabs()
+        ?.find((g) => g.id === 'w1')
+        ?.tabs.map((t) => t.id),
+    ).toEqual(['retired-owner', 'live']);
+  });
+
+  it('ejects a row on an SSE false and restores a revived owner with explicit workspace placement', async () => {
+    await loadAllTabs();
+    const seen = vi.fn();
+    subscribeAllTabs(seen);
+    emit({ type: 'tab.updated', tab: tab('t2', { corpus_live: false }) } as MuxpadEvent);
+    expect(row('t2')).toBeUndefined();
+    emit({
+      type: 'tab.updated',
+      workspace_id: 'w1',
+      tab: tab('t2', { corpus_live: true, done: true, status: 'idle' }),
+    } as MuxpadEvent);
+    expect(row('t2')).toMatchObject({ corpus_live: true, done: true });
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish or refetch for historical adds and updates outside the corpus', async () => {
+    await loadAllTabs();
+    const held = cachedAllTabs();
+    const seen = vi.fn();
+    subscribeAllTabs(seen);
+    emit({
+      type: 'tab.added',
+      workspace_id: 'w1',
+      tab: tab('old', { corpus_live: false }),
+    } as MuxpadEvent);
+    emit({
+      type: 'tab.added',
+      workspace_id: 'unknown',
+      tab: tab('old2', { corpus_live: false }),
+    } as MuxpadEvent);
+    emit({ type: 'tab.updated', tab: tab('old', { corpus_live: false }) } as MuxpadEvent);
+    await loadAllTabs();
+    expect(cachedAllTabs()).toBe(held);
+    expect(seen).not.toHaveBeenCalled();
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters first-load replay and applies membership flips in arrival order without another fetch', async () => {
+    let release!: (v: { workspaces: WorkspaceTabs[] }) => void;
+    const snapshot = structuredClone(SERVER);
+    listAllTabs.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          release = r;
+        }),
+    );
+    const loading = loadAllTabs();
+    mergeWorkspaceTabs('w1', [
+      tab('t1', { corpus_live: true }),
+      tab('old', { done: true, corpus_live: false }),
+    ]);
+    emit({ type: 'tab.updated', tab: tab('t1', { corpus_live: false }) } as MuxpadEvent);
+    emit({
+      type: 'tab.added',
+      workspace_id: 'w1',
+      tab: tab('old', { corpus_live: false }),
+    } as MuxpadEvent);
+    emit({
+      type: 'tab.updated',
+      workspace_id: 'w1',
+      tab: tab('revived', { corpus_live: true, done: true }),
+    } as MuxpadEvent);
+    release({ workspaces: snapshot });
+    await loading;
+    expect(
+      cachedAllTabs()
+        ?.find((g) => g.id === 'w1')
+        ?.tabs.map((t) => t.id),
+    ).toEqual(['revived']);
+    expect(row('revived')?.done).toBe(true);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('also rejects explicitly excluded rows from a fetched snapshot', async () => {
+    SERVER[0]!.tabs = [
+      tab('old', { corpus_live: false }),
+      tab('owner', { done: true, corpus_live: true }),
+    ];
+    await loadAllTabs();
+    expect(row('old')).toBeUndefined();
+    expect(row('owner')).toBeDefined();
+  });
+});
