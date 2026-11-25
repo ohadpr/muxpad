@@ -118,13 +118,28 @@ test('parseHelpFlags reads the real binary’s help, not a shape we imagined', (
  * whole value of the review, and without them every refusal reads as
  * "msgvault is broken". So they are TAGGED, and only tagged errors repeat.
  */
-test('the review refuses through fail(), which marks the error safe to repeat', async () => {
+test('the review refuses through fail(), which marks the error safe to repeat', async (t) => {
   const { validateMsgvault } = await import('./msgvault.mjs');
-  for (const [args, expected] of [
-    [['search', '--deep'], /search has no --deep/],
-    [['add-account'], /administers the archive/],
-    [['search', '--home', '/tmp'], /not something an agent sets/],
-  ]) {
+  // WHICH OF THESE NEEDS THE INSTALLED BINARY, and why that matters here.
+  //
+  // reviewArgv refuses an unknown COMMAND before it looks at flags, so on a
+  // machine with no msgvault every flag case answers "msgvault has no command
+  // search" instead of its own sentence. CI has no msgvault, so asserting
+  // those two there made this a permanently red check — which is worse than
+  // useless: a red CI nobody can fix is a red CI nobody reads. The tagging
+  // this test exists for is proved by the admin case, which is decided before
+  // any help lookup and therefore holds everywhere.
+  const installed = existsSync('/usr/local/libexec/msgvault/msgvault');
+  const cases = [[['add-account'], /administers the archive/]];
+  if (installed) {
+    cases.push(
+      [['search', '--deep'], /search has no --deep/],
+      [['search', '--home', '/tmp'], /not something an agent sets/],
+    );
+  } else {
+    t.diagnostic('msgvault not installed: the help-derived refusals are covered by helpFor stubs');
+  }
+  for (const [args, expected] of cases) {
     try {
       validateMsgvault('msgvault.run', { args });
       assert.fail(`expected a refusal for ${args.join(' ')}`);

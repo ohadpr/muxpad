@@ -430,11 +430,13 @@ export class ReportDelivery {
       );
     }
     if (fresh.length === 0) return { delivered: 0, abandoned: repeats.length, held: 0 };
-    pending = fresh;
+    // `fresh` from here down, not a reassigned parameter: everything below is
+    // about the rounds being SENT, and the ones held back above are not.
+    const sending = fresh;
 
-    const entries = this.entriesFor(pending);
+    const entries = this.entriesFor(sending);
     const text = renderSpawnDelivery(entries);
-    const ids = pending.map((r) => r.id);
+    const ids = sending.map((r) => r.id);
 
     // STAMP FIRST, then send, and revert if it was refused. Of the two ways a
     // send that is not in the transaction can go wrong, a batch delivered twice
@@ -449,7 +451,7 @@ export class ReportDelivery {
     // worker, described two opposite ways, with the reassuring version on the
     // thing the user actually looks at.
     rounds.markStateIfSilent(
-      pending.filter((r) => !r.report_state && !r.report).map((r) => r.id),
+      sending.filter((r) => !r.report_state && !r.report).map((r) => r.id),
       'failed',
     );
     let res: SubmitSendResult;
@@ -458,7 +460,7 @@ export class ReportDelivery {
     } catch (err) {
       rounds.undeliver(ids, stampedAt);
       console.error('[report-delivery] send threw', err);
-      return { delivered: 0, abandoned: 0, held: pending.length };
+      return { delivered: 0, abandoned: 0, held: sending.length };
     }
     if (res.status === 'queued' && typeof res.id === 'string') {
       this.rememberQueued(res.id, ids, stampedAt);
@@ -473,15 +475,15 @@ export class ReportDelivery {
       if (!this.refusalLogged.has(parentTabId)) {
         this.refusalLogged.add(parentTabId);
         console.warn(
-          `[report-delivery] ${parentTabId} refused ${pending.length} report(s): ` +
+          `[report-delivery] ${parentTabId} refused ${sending.length} report(s): ` +
             `${res.reason ?? 'no reason given'} — will retry`,
         );
       }
-      return { delivered: 0, abandoned: 0, held: pending.length };
+      return { delivered: 0, abandoned: 0, held: sending.length };
     }
     // A parent that accepts again is worth hearing about next time it does not.
     this.refusalLogged.delete(parentTabId);
-    return { delivered: pending.length, abandoned: 0, held: 0 };
+    return { delivered: sending.length, abandoned: 0, held: 0 };
   }
 
   /**
@@ -539,8 +541,7 @@ export class ReportDelivery {
     }
     if (n > 0) {
       console.warn(
-        `[report-delivery] ${n} worker report(s) went back in the queue: ` +
-          'their send was dropped before the parent read it',
+        `[report-delivery] ${n} worker report(s) went back in the queue: their send was dropped before the parent read it`,
       );
     }
     return n;

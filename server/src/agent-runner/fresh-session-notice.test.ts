@@ -36,6 +36,11 @@ afterEach(async () => {
   const h = http;
   http = null;
   if (h) await new Promise<void>((r) => h.close(() => r()));
+  // `delete` on process.env is the only way to UNSET a variable (assigning
+  // undefined stores the string "undefined"), and restoring the environment
+  // this test found is the point — so the rule is suppressed here rather than
+  // the behaviour changed.
+  // biome-ignore lint/performance/noDelete: unsetting an env var has no other form
   if (prevDataDir === undefined) delete process.env.MUXPAD_DATA_DIR;
   else process.env.MUXPAD_DATA_DIR = prevDataDir;
   rmSync(dataDir, { recursive: true, force: true });

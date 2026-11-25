@@ -1430,7 +1430,6 @@ export const ChatPane = memo(function ChatPane({
   // event left behind — which on a phone is the value from before the
   // keyboard came up. One measure here costs a layout read on a keystroke
   // that was already going to re-render the list.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: measureRef is a stable ref; mentionOpen is the trigger.
   useEffect(() => {
     if (mentionOpen) measureRef.current();
   }, [mentionOpen]);

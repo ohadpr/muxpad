@@ -2561,7 +2561,8 @@
 
    NOT the row you are on: `data-working` is already false there (see
    NavTree.tsx), because bold means "come back to this". */
-.navtree-tab-row[data-working="true"] .navtree-name-text,
+  .navtree-tab-row[data-working="true"]
+  .navtree-name-text,
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
   /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
