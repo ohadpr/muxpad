@@ -409,12 +409,29 @@ export class TabStore {
       .map((r) => this.row(r) as Tab);
   }
 
-  /** Indexed candidates only; no report TEXT crosses the SQLite/JS boundary. */
+  /**
+   * Indexed candidates only; no report TEXT crosses the SQLite/JS boundary.
+   *
+   * THIS MUST BE A SUPERSET OF WHAT DECORATION CALLS `corpus_live`
+   * (ptyd-cache.ts decorateTab). The two are computed by different code in
+   * different languages, and when they disagree the client is told by the
+   * workspace poll that a row belongs in the corpus and by `/api/tabs/all`
+   * that it does not — so the row blinks in and out of instant search and the
+   * mention picker depending on which response landed last. The unread branch
+   * below is exactly that bug, found by review: `heldLive` holds an unread
+   * chat's lifecycle open however old its clock, and nothing here matched it.
+   * `tabs-all.test.ts` asserts the superset property directly.
+   */
   corpusCandidates(cutoff: number): Tab[] {
     const unparked = 'SELECT tab_id FROM panes WHERE parked_at IS NULL';
     return this.selected(
       `id IN (
       SELECT id FROM tabs WHERE pinned = 1
+      UNION SELECT id FROM tabs INDEXED BY tabs_corpus_unread
+        WHERE unread = 1 AND retired_at IS NULL
+      UNION SELECT p.tab_id FROM panes p INDEXED BY panes_corpus_unread
+        JOIN tabs t ON t.id = p.tab_id
+        WHERE p.unread = 1 AND t.retired_at IS NULL
       UNION SELECT id FROM tabs WHERE retired_at IS NULL AND clock_started_at >= ?
       UNION SELECT id FROM tabs WHERE retired_at IS NULL AND clock_started_at IS NULL
       UNION SELECT id FROM tabs INDEXED BY tabs_corpus_nonagent WHERE retired_at IS NULL AND corpus_has_agent = 0

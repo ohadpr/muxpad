@@ -439,6 +439,54 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     expect(runtime).not.toHaveBeenCalled();
   });
 
+  // THE TWO PATHS MUST AGREE, AND THEY ARE WRITTEN IN DIFFERENT LANGUAGES.
+  // `corpus_live` is decided in TS by decorateTab; membership is decided in
+  // SQL by corpusCandidates. A review found a row the first called live and
+  // the second dropped — an unread chat whose clock had expired and whose
+  // panes were all parked — so the workspace poll put it in the client's
+  // corpus and /all took it straight back out, and it appeared in instant
+  // search or not depending on which response landed last. Asserting the
+  // property, not the one example, is the only version of this test that
+  // keeps working as either side changes.
+  it('never calls a row corpus_live that the corpus query would drop', async () => {
+    const ws = await makeWorkspace('W');
+    const tabs = new TabStore(db);
+    const now = Date.now();
+    const stale = now - CHAT_DECAY_MS - DAY_MS;
+
+    const live = await makeChat(ws.id, 'live');
+    const unreadExpired = await makeChat(ws.id, 'unread but expired');
+    const paneUnreadExpired = await makeChat(ws.id, 'pane unread, expired');
+    const quietExpired = await makeChat(ws.id, 'nothing to see');
+    const retiredParked = await makeChat(ws.id, 'finished');
+    const retiredUnparked = await makeChat(ws.id, 'finished but still running');
+
+    for (const t of [unreadExpired, paneUnreadExpired, quietExpired]) {
+      tabs.resetClock(t.id, stale);
+      db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, t.id);
+    }
+    tabs.setUnread(unreadExpired.id, true);
+    db.prepare('UPDATE panes SET unread = 1 WHERE tab_id = ?').run(paneUnreadExpired.id);
+    for (const t of [retiredParked, retiredUnparked]) tabs.retire(t.id, 'delivered');
+    db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, retiredParked.id);
+
+    const full = (await (await test.app.request(`/api/tabs?workspaceId=${ws.id}`)).json()) as Tab[];
+    const claimedLive = full.filter((t) => t.corpus_live).map((t) => t.id);
+    const candidates = new Set(tabs.corpusCandidates(now - CHAT_DECAY_MS).map((t) => t.id));
+    const inAll = new Set((await all()).workspaces[0]?.tabs.map((t) => t.id));
+
+    // The fixture has to contain the hard cases or the property is vacuous.
+    expect(claimedLive).toContain(unreadExpired.id);
+    expect(claimedLive).toContain(paneUnreadExpired.id);
+    expect(claimedLive).toContain(live.id);
+    expect(claimedLive).toContain(retiredUnparked.id);
+    expect(claimedLive).not.toContain(quietExpired.id);
+    expect(claimedLive).not.toContain(retiredParked.id);
+
+    expect([...claimedLive].filter((id) => !candidates.has(id))).toEqual([]);
+    expect([...claimedLive].filter((id) => !inAll.has(id))).toEqual([]);
+  });
+
   it('ranks historical name matches before a broad workspace match reaches the lookup cap', async () => {
     const ws = await makeWorkspace('Needle');
     const exact = await makeChat(ws.id, 'Needle');
