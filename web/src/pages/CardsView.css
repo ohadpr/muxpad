@@ -162,8 +162,6 @@
   color: var(--fg);
 }
 
-}
-
 /* ─── The archive ────────────────────────────────────────────────────────
    Cards whose chat has left the live list. Quieter, and BELOW — but present,
    because the reason they pile up is that nobody can see them. */

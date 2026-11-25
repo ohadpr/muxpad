@@ -258,7 +258,15 @@ const SECTION_LABEL: Record<ChatSection, string> = {
 export function MobileChatSectionBar() {
   const navigate = useNavigate();
   const corpus = useUnreadCorpus();
-  const section = readSection();
+  const pathname = useRouterState({ select: (st) => st.location.pathname });
+  // NO SECTION IS CURRENT ON A PAGE. The bar marks the stored section so a
+  // chat still shows where you came from — but on /cards the Cards LINK is
+  // itself aria-current="page" via activeProps, and the stored section marked
+  // Home at the same time. Two entries claiming to be the current page is a
+  // lie to a screen reader and a confusion to everyone else; the page route
+  // owns the mark. Found by review, confirmed in the browser.
+  const onPage = /^\/(cards|unread|activity|artifacts|apps|hosted)(\/|$)/.test(pathname);
+  const section = onPage ? null : readSection();
   return (
     <SectionBar
       section={section}
@@ -279,7 +287,9 @@ function SectionBar({
   onPick,
   onChat = false,
 }: {
-  section: ChatSection;
+  /** Null when a destination PAGE owns the current mark — see
+   *  MobileChatSectionBar. */
+  section: ChatSection | null;
   unread: number;
   onPick: (s: ChatSection) => void;
   /** Rendered under a CHAT rather than under the list — see `.mcl-tabs.-onchat`.

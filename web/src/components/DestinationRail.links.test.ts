@@ -31,14 +31,16 @@ describe('the rail’s entries', () => {
   it('decides which entries NAVIGATE from one predicate, not a second list', () => {
     // A hand-written list here would be a second source of truth for "is this
     // a page", and the first thing to drift when a destination is added.
-    const fn = /const pageRoute[\s\S]*?\n {2}\};/.exec(src)?.[0] ?? '';
-    expect(fn).toContain('destinationAction(dest, pathname).to');
+    expect(src).toContain('navigatesOnClick(d)');
   });
 
-  it('never turns back-to-work into an href', () => {
-    // It is a view's return trip to the chat you came from, not a destination.
-    const fn = /const pageRoute[\s\S]*?\n {2}\};/.exec(src)?.[0] ?? '';
-    expect(fn).not.toContain('back-to-work');
+  it('keeps no dead route helper beside the live one', () => {
+    // There WAS one. `pageRoute` survived the move to destinationHref /
+    // navigatesOnClick, unreachable, and two tests here asserted on its
+    // SOURCE TEXT — so they passed while the function was dead and would
+    // have survived the whole feature being deleted. Found by review, not by
+    // the suite, which is exactly the weakness of asserting on source.
+    expect(src).not.toContain('pageRoute');
   });
 
   it('agrees with destinationAction about exactly which three are pages', () => {

@@ -34,15 +34,6 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
   // them, so its badge counts all of them (no sub-chats; see isUnreadChat).
   const unread = [...unreadByWorkspace(useUnreadCorpus()).values()].reduce((a, b) => a + b, 0);
 
-  /** The ROUTE an entry goes to, or null if it only switches the list's view.
-   *  Derived from destinationAction so the two cannot disagree about which
-   *  entries are places — `back-to-work` is a view's return trip, not a
-   *  destination of its own, and must not become an href. */
-  const pageRoute = (dest: Destination): '/cards' | '/artifacts' | '/apps' | null => {
-    const to = destinationAction(dest, pathname).to;
-    return to === '/cards' || to === '/artifacts' || to === '/apps' ? to : null;
-  };
-
   const go = (dest: Destination) => {
     const act = destinationAction(dest, pathname);
     if (act.view) setRailView(act.view);
