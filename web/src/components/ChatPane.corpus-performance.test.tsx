@@ -216,3 +216,31 @@ describe('corpus churn does not reprocess the transcript', () => {
     expect(voicePass).toHaveBeenCalledTimes(1);
   });
 });
+
+const paneRenders = vi.hoisted(() => vi.fn());
+vi.mock('../lib/chat-actions', async (original) => {
+  const real = await original<typeof import('../lib/chat-actions')>();
+  return {
+    ...real,
+    useChatActions: (...args: Parameters<typeof real.useChatActions>) => {
+      paneRenders();
+      return real.useChatActions(...args);
+    },
+  };
+});
+
+it('skips unchanged parent renders but responds to activation and corpus state while hidden', async () => {
+  await mount([tab(PARENT)]);
+  paneRenders.mockClear();
+  for (let i = 0; i < 20; i++)
+    await act(async () =>
+      root!.render(<ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} active agentNative />),
+    );
+  expect(paneRenders).not.toHaveBeenCalled();
+  await act(async () =>
+    root!.render(<ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} active={false} agentNative />),
+  );
+  expect(paneRenders).toHaveBeenCalledTimes(1);
+  await publish([tab(PARENT, { name: 'new name' })]);
+  expect(paneRenders.mock.calls.length).toBeGreaterThan(1);
+});

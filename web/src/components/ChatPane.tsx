@@ -877,7 +877,7 @@ export function spawnRoundsSignature(
  * is owned by the pane's Terminal/Chat toggle, so by the time chat is showing,
  * it is already the driver.
  */
-export function ChatPane({
+export const ChatPane = memo(function ChatPane({
   paneId,
   tabId,
   active,
@@ -6559,7 +6559,7 @@ export function ChatPane({
       </div>
     </ChatMentionContext.Provider>
   );
-}
+});
 
 // Everything that draws an ALREADY-ARRIVED message — rows, bubbles, mention
 // chips, media, modals — now lives in ChatTranscript.tsx. It holds no socket,
