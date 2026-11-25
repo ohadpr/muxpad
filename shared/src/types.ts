@@ -364,6 +364,8 @@ export const PaneSpecSchema = z.object({
   // rendered as a BOLD name (like unread mail), and cleared when you view the
   // pane. DB-persisted (survives restart), not a runtime cache flag.
   unread: z.boolean().optional(),
+  /** Persisted process parking state, independent of tab retirement. */
+  parked: z.boolean().optional(),
   // Runtime-only. Web apps muxpad detected this (shell) pane is serving,
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
@@ -552,6 +554,9 @@ export const TabSchema = z.object({
   // unconditional. `.optional()` here is wire-compat with a server that
   // predates the column, where absent correctly reads as "not done".
   done: z.boolean().optional(),
+  // Membership of the live-work corpus: includes retired chats that still
+  // own a running, unparked pane. Published on lists/events for cache merges.
+  corpus_live: z.boolean().optional(),
   // WHY it is done — each is visually distinct in the done group and in a
   // tooltip, and only the server can tell them apart. Absent while live.
   //   'decayed'   — four days with no message

@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SpawnRound } from '@muxpad/shared';
+import type { SpawnRound, Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SpawnRoundStore } from '../store/SpawnRoundStore.js';
@@ -46,7 +46,10 @@ describe('GET /api/tabs/:id/spawn-rounds', () => {
 
   const get = async (id: string) => {
     const res = await test.app.request(`/api/tabs/${id}/spawn-rounds`);
-    return (await res.json()) as { rounds: Record<string, SpawnRound[]> };
+    return (await res.json()) as {
+      rounds: Record<string, SpawnRound[]>;
+      children: Array<{ id: string; slug: string; name: string; tabs: Tab[] }>;
+    };
   };
 
   it('returns every round of every child, keyed by child', async () => {
@@ -63,7 +66,7 @@ describe('GET /api/tabs/:id/spawn-rounds', () => {
   });
 
   it('is empty for a chat that has spawned nothing', async () => {
-    expect(await get(child)).toEqual({ rounds: {} });
+    expect(await get(child)).toEqual({ rounds: {}, children: [] });
   });
 
   it('does not leak another parent’s children', async () => {
@@ -82,5 +85,64 @@ describe('GET /api/tabs/:id/spawn-rounds', () => {
 
     const body = await get(parent);
     expect(Object.keys(body.rounds)).toEqual([child]);
+  });
+
+  // ── THE CHILDREN, for a corpus that no longer carries finished work ─────────
+  describe('children', () => {
+    const childIds = (body: Awaited<ReturnType<typeof get>>) =>
+      body.children.flatMap((g) => g.tabs.map((t) => t.id));
+
+    it('lists a RETIRED child — the one the live corpus drops', async () => {
+      new TabStore(db).retire(child, 'delivered', 500);
+      const body = await get(parent);
+      const row = body.children[0]?.tabs[0] as Tab & { done?: boolean; done_reason?: string };
+      expect(row?.id).toBe(child);
+      expect(row?.name).toBe('card-summary');
+      expect(row?.done).toBe(true);
+      expect(row?.done_reason).toBe('delivered');
+    });
+
+    it('lists a child with NO rounds at all (legacy, never messaged)', async () => {
+      const body = await get(parent);
+      expect(body.rounds).toEqual({});
+      expect(childIds(body)).toEqual([child]);
+    });
+
+    it('is grouped like /all: the workspace id, slug and name ride with the rows', async () => {
+      const ws = new WorkspaceStore(db).list()[0];
+      const body = await get(parent);
+      expect(body.children.map((g) => [g.id, g.slug, g.name])).toEqual([[ws?.id, ws?.slug, 'W']]);
+    });
+
+    it('carries the WHOLE tab-level report, not the corpus excerpt', async () => {
+      const long = `${'x'.repeat(600)} the end.`;
+      new TabStore(db).setSpawnReport(child, { report: long, state: 'ok' }, 400);
+      const row = (await get(parent)).children[0]?.tabs[0];
+      expect(row?.spawn_report).toBe(long);
+      expect(row?.spawn_report_state).toBe('ok');
+    });
+
+    it('lists only DIRECT children of this parent, never itself or a grandchild', async () => {
+      const tabs = new TabStore(db);
+      const ws = new WorkspaceStore(db).list()[0]?.id as string;
+      const grandchild = tabs.create({
+        name: 'grandchild',
+        layout: '',
+        workspace_id: ws,
+        spawned_by: child,
+      }).id;
+      const other = tabs.create({ name: 'elsewhere', layout: '', workspace_id: ws }).id;
+      tabs.create({ name: 'not-mine', layout: '', workspace_id: ws, spawned_by: other });
+      db.prepare('UPDATE tabs SET spawned_by = id WHERE id = ?').run(parent);
+      const ids = childIds(await get(parent));
+      expect(ids).toEqual([child]);
+      expect(ids).not.toContain(grandchild);
+    });
+
+    it('drops a DELETED child along with its rounds', async () => {
+      new SpawnRoundStore(db).open(child, 100);
+      new TabStore(db).delete(child);
+      expect(await get(parent)).toEqual({ rounds: {}, children: [] });
+    });
   });
 });

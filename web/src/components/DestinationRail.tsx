@@ -10,7 +10,7 @@ import {
   navigatesOnClick,
 } from '../lib/desktop-destinations';
 import { setRailView, useRailView } from '../lib/rail-view';
-import { useChatCorpus } from '../lib/use-all-chats';
+import { useUnreadCorpus } from '../lib/use-unread';
 import { NavGlyph } from './NavGlyphs';
 import { SettingsMenu } from './SettingsMenu';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -32,7 +32,7 @@ export function DestinationRail({ lastWsSlug }: { lastWsSlug: string }) {
   const current = currentDestination(pathname, view);
   // Every workspace's unread conversations — Unread is a list across all of
   // them, so its badge counts all of them (no sub-chats; see isUnreadChat).
-  const unread = [...unreadByWorkspace(useChatCorpus()).values()].reduce((a, b) => a + b, 0);
+  const unread = [...unreadByWorkspace(useUnreadCorpus()).values()].reduce((a, b) => a + b, 0);
 
   /** The ROUTE an entry goes to, or null if it only switches the list's view.
    *  Derived from destinationAction so the two cannot disagree about which

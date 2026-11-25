@@ -11,7 +11,7 @@ const read = (f: string) => readFileSync(join(__dirname, f), 'utf8');
 
 describe('one glyph set, two surfaces', () => {
   it('both the ribbon and the phone bar draw with NavGlyph', () => {
-    expect(read('DestinationRail.tsx')).toMatch(/<NavGlyph name=\{d\}/);
+    expect(read('DestinationRail.tsx')).toMatch(/<NavGlyph\b[^>]*\bname=\{[^}]+\}/);
     expect(read('MobileNav.tsx')).toMatch(/<NavGlyph name=\{section\}/);
   });
 

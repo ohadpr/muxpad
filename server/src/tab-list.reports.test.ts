@@ -2,22 +2,9 @@ import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PtydCache } from './ptyd-cache.js';
 import { runMigrations } from './store/migrations.js';
-import { REPORT_EXCERPT_CHARS, orderedTabsForWorkspace } from './tab-list.js';
+import { orderedTabsForWorkspace } from './tab-list.js';
 
-/**
- * THE SIDEBAR'S LIST DOES NOT CARRY A WORKER'S PROSE.
- *
- * `spawn_report` is a finished worker's whole summary. Measured on the live
- * install: 479 KB of a 1.19 MB answer over 1,136 rows — 56.5% — on the route
- * the sidebar re-polls 250ms after every `pane.updated` edge, to each of 98
- * connections, while forty agents make those edges continuously.
- *
- * Nobody on that route reads it: it feeds row names, states and clocks. The
- * surface that renders report prose is the spawn card, whose corpus is
- * `/api/tabs/all`, which still carries it. These assertions hold both halves
- * of that, because dropping it from BOTH would silently turn every finished
- * worker's card into "Finished with nothing to report".
- */
+/** Bulk lists omit prose; parent-scoped detail owns complete reports. */
 let db: Database.Database;
 let cache: PtydCache;
 
@@ -35,11 +22,11 @@ beforeEach(() => {
   ).run('A long summary of everything the worker did.', 'ok', 1234);
 });
 
-const row = (opts?: { omitReportText?: boolean; excerptReportText?: boolean }) =>
+const row = (opts?: { omitReportText?: boolean }) =>
   orderedTabsForWorkspace(db, cache, 'w1', undefined, opts)[0] as Record<string, unknown>;
 
 describe('report text on the tab list', () => {
-  it('is present by default — the corpus route depends on it', () => {
+  it('is present by default for detail readers', () => {
     expect(row().spawn_report).toBe('A long summary of everything the worker did.');
   });
 
@@ -61,34 +48,6 @@ describe('report text on the tab list', () => {
     const keys = (o: Record<string, unknown>) => Object.keys(o).sort();
     expect(keys(full).filter((k) => k !== 'spawn_report')).toEqual(keys(slim));
     for (const k of keys(slim)) expect(slim[k]).toEqual(full[k]);
-  });
-
-  it('excerpts rather than drops, for the corpus', () => {
-    // The corpus is the one list that needs report text - it draws the card.
-    // It was carrying the WHOLE report for 1,628 rows: 712 KB of 1.76 MB,
-    // walking the answer into json-cache's 2 MB buffering cap, above which
-    // it ships raw and uncompressed two to four times per chat opened.
-    const long = 'x'.repeat(1000);
-    db.prepare('UPDATE tabs SET spawn_report = ? WHERE id = ?').run(long, 't1');
-    const r = row({ excerptReportText: true });
-    const text = r.spawn_report as string;
-    expect(text.length).toBe(REPORT_EXCERPT_CHARS + 1); // + the ellipsis
-    expect(text.endsWith('…')).toBe(true);
-  });
-
-  it('leaves a SHORT report exactly as it is, ellipsis included', () => {
-    // An ellipsis on a complete report would be a lie about there being more.
-    const r = row({ excerptReportText: true });
-    expect(r.spawn_report).toBe('A long summary of everything the worker did.');
-  });
-
-  it('never excerpts to nothing — an empty report is a different fact', () => {
-    // `spawnCardSummary` says "Finished with nothing to report" for a report
-    // with no text, so a list that dropped the text would make every finished
-    // worker look like it produced nothing until its rounds arrived.
-    const r = row({ excerptReportText: true });
-    expect(r.spawn_report).toBeTruthy();
-    expect(r.spawn_report_state).toBe('ok');
   });
 
   it('leaves a row that never had a report alone', () => {

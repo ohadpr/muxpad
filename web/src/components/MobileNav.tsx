@@ -13,7 +13,8 @@ import { flushSync } from 'react-dom';
 import { CHAT_SECTIONS, type ChatSection, activityChats, unreadChats } from '../lib/chat-sections';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
 import { toSearchableTabs } from '../lib/nav-search';
-import { useAllChats, useChatCorpus } from '../lib/use-all-chats';
+import { useAllChats } from '../lib/use-all-chats';
+import { useUnreadCorpus } from '../lib/use-unread';
 import { useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
@@ -70,7 +71,9 @@ export function MobileChatList({
       ),
     [groups],
   );
-  const unread = useMemo(() => unreadChats(corpus), [corpus]);
+  // Unread is the inbox (finished chats included), not the live corpus.
+  const unreadCorpus = useUnreadCorpus();
+  const unread = useMemo(() => unreadChats(unreadCorpus), [unreadCorpus]);
   const activity = useMemo(() => activityChats(corpus), [corpus]);
 
   const pick = (next: ChatSection) => {
@@ -254,7 +257,7 @@ const SECTION_LABEL: Record<ChatSection, string> = {
  */
 export function MobileChatSectionBar() {
   const navigate = useNavigate();
-  const corpus = useChatCorpus();
+  const corpus = useUnreadCorpus();
   const section = readSection();
   return (
     <SectionBar

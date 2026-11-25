@@ -2022,6 +2022,43 @@ const MIGRATIONS: Migration[] = [
       db.exec("CREATE INDEX IF NOT EXISTS tasks_open_by_tab ON tasks(tab_id) WHERE state = 'open'");
     },
   },
+  {
+    // Keep candidate selection independent of archived transcripts and expired
+    // root chats. SQLite cannot index an EXISTS over panes, so maintain this
+    // content marker at the same transaction boundary as pane mutations.
+    version: 61,
+    apply: (db) => {
+      const columns = db.pragma('table_info(tabs)') as { name: string }[];
+      if (!columns.some((c) => c.name === 'corpus_has_agent')) {
+        db.exec('ALTER TABLE tabs ADD COLUMN corpus_has_agent INTEGER NOT NULL DEFAULT 0');
+      }
+      db.exec(`UPDATE tabs SET corpus_has_agent = EXISTS (
+        SELECT 1 FROM panes WHERE tab_id = tabs.id AND startup_cmd LIKE 'muxpad agent%');
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_insert AFTER INSERT ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = NEW.tab_id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id = NEW.tab_id;
+      END;
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_delete AFTER DELETE ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = OLD.tab_id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id = OLD.tab_id;
+      END;
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_update AFTER UPDATE OF tab_id, startup_cmd ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = tabs.id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id IN (OLD.tab_id, NEW.tab_id);
+      END;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_pinned ON tabs(id) WHERE pinned = 1;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_clock ON tabs(clock_started_at) WHERE retired_at IS NULL;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_children ON tabs(spawned_by) WHERE retired_at IS NULL AND spawned_by IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_nonagent ON tabs(id) WHERE retired_at IS NULL AND corpus_has_agent = 0;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_unread ON tabs(id) WHERE unread = 1;
+      CREATE INDEX IF NOT EXISTS panes_corpus_unparked ON panes(tab_id) WHERE parked_at IS NULL;
+      CREATE INDEX IF NOT EXISTS panes_corpus_unread ON panes(tab_id) WHERE unread = 1;
+      CREATE INDEX IF NOT EXISTS spawn_rounds_corpus_owed ON spawn_rounds(tab_id) WHERE delivered_at IS NULL;`);
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

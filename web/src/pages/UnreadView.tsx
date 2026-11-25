@@ -1,6 +1,6 @@
 import { PreviewList } from '../components/ChatPreviewList';
 import { railUnreadRows } from '../lib/chat-sections';
-import { useChatCorpus } from '../lib/use-all-chats';
+import { useUnreadCorpus } from '../lib/use-unread';
 import { useDocumentTitle } from '../use-document-title';
 import './HostedView.css';
 import './ActivityView.css';
@@ -35,7 +35,7 @@ import './ActivityView.css';
  */
 export function UnreadView() {
   useDocumentTitle('Unread · muxpad');
-  const rows = railUnreadRows(useChatCorpus(), null);
+  const rows = railUnreadRows(useUnreadCorpus(), null);
   return (
     <div className="hosted activity-view">
       <div className="hosted-inner">

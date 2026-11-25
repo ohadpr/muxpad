@@ -173,7 +173,7 @@ describe('the spawn cards and the roster read ONE list', () => {
     // working child. `runningChildren` reads the pane status the sidebar spins
     // on. See ChatPane.liveset.test.tsx, which holds all three surfaces to one
     // answer; what THIS test still owns is that there is exactly one list.
-    expect(SRC).toContain('spawnCards(corpus, myChat?.tabId');
+    expect(SRC).toContain('spawnCards(corpus, spawnParent');
     // Still derived from the cards, and still `runningChildren` — but DEDUPED
     // by child first, because a worker now appears once per ROUND and the bar
     // counts chats, not cards.
@@ -316,7 +316,7 @@ describe('the spawn cards and the roster read ONE list', () => {
   it('DRAWS FROM ROUNDS when the conversation has them', () => {
     // A worker is handed successive jobs; both cards were anchored to tab
     // timestamps, which happen once. Five handovers left one pair of cards.
-    expect(SRC).toContain('spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds)');
+    expect(SRC).toContain('spawnCards(corpus, spawnParent, MAX_SPAWN_CARDS, spawnRounds)');
     // …fetched once per conversation, not once per card.
     expect(SRC).toContain('loadSpawnRounds(');
   });

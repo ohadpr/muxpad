@@ -400,6 +400,103 @@ export class TabStore {
     return rows.map((r) => this.row(r) as Tab);
   }
 
+  /** One parent's detail metadata, including legacy report fallback. */
+  listChildren(parentId: string): Tab[] {
+    return this.db
+      .prepare(`SELECT * FROM tabs WHERE spawned_by = ?
+      ORDER BY position, created_at, id`)
+      .all(parentId)
+      .map((r) => this.row(r) as Tab);
+  }
+
+  /** Indexed candidates only; no report TEXT crosses the SQLite/JS boundary. */
+  corpusCandidates(cutoff: number, livePaneIds: string[] = []): Tab[] {
+    const runtime = livePaneIds.length
+      ? `SELECT tab_id FROM panes WHERE parked_at IS NULL AND id IN (${livePaneIds.map(() => '?').join(',')})`
+      : 'SELECT NULL WHERE 0';
+    return this.selected(
+      `id IN (
+      SELECT id FROM tabs WHERE pinned = 1
+      UNION SELECT id FROM tabs WHERE retired_at IS NULL AND clock_started_at >= ?
+      UNION SELECT id FROM tabs WHERE retired_at IS NULL AND clock_started_at IS NULL
+      UNION SELECT id FROM tabs INDEXED BY tabs_corpus_nonagent WHERE retired_at IS NULL AND corpus_has_agent = 0
+      UNION SELECT id FROM tabs WHERE retired_at IS NULL AND spawned_by IS NOT NULL
+        AND EXISTS (SELECT 1 FROM tabs parent WHERE parent.id = tabs.spawned_by)
+      UNION SELECT spawned_by FROM tabs INDEXED BY tabs_corpus_children
+        WHERE retired_at IS NULL AND spawned_by IS NOT NULL
+      UNION SELECT spawned_by FROM tabs INDEXED BY tabs_corpus_pinned
+        WHERE pinned = 1 AND spawned_by IS NOT NULL
+      UNION SELECT id FROM tabs WHERE unread = 1
+      UNION SELECT tab_id FROM panes WHERE unread = 1
+      UNION ${runtime}
+    ) AND (retired_at IS NULL OR pinned = 1 OR id IN (${runtime}))`,
+      [cutoff, ...livePaneIds, ...livePaneIds],
+    );
+  }
+
+  unreadTabs(): Tab[] {
+    return this.selected(`id IN (SELECT id FROM tabs WHERE unread = 1
+      UNION SELECT tab_id FROM panes WHERE unread = 1)`);
+  }
+
+  /** Bounded historical metadata for name matches or archive-hit pane ids. */
+  lookup(query: string, paneIds: string[], limit = 60, tabIds: string[] = []): Tab[] {
+    if (tabIds.length)
+      return this.selected(`id IN (${tabIds.map(() => '?').join(',')})`, tabIds, limit);
+    if (paneIds.length) {
+      return this.selected(
+        `id IN (SELECT tab_id FROM panes WHERE id IN
+        (${paneIds.map(() => '?').join(',')}))`,
+        paneIds,
+        limit,
+      );
+    }
+    if (!query) return [];
+    // Rank BEFORE the cap: a workspace-name match can cover thousands of
+    // rows and must not crowd an exact historical chat-name match out of 60.
+    return this.selected(
+      `id IN (
+      SELECT t.id FROM tabs t JOIN workspaces w ON w.id = t.workspace_id
+      WHERE w.hidden = 0 AND (instr(lower(t.name), lower(?)) > 0
+        OR instr(lower(coalesce(t.headline, '')), lower(?)) > 0
+        OR instr(lower(w.name), lower(?)) > 0)
+      ORDER BY CASE
+        WHEN lower(t.name) = lower(?) THEN 0
+        WHEN instr(lower(t.name), lower(?)) = 1 THEN 1
+        WHEN instr(lower(t.name), lower(?)) > 0 THEN 2
+        WHEN instr(lower(coalesce(t.headline, '')), lower(?)) > 0 THEN 3
+        ELSE 4 END, t.last_user_at DESC, t.id
+      LIMIT ?
+    )`,
+      [query, query, query, query, query, query, query, limit],
+    );
+  }
+
+  private selected(where: string, params: unknown[] = [], limit?: number): Tab[] {
+    // Enumerate columns from schema metadata rather than duplicating TabRow.
+    // Exclude the large TEXT column in SQL, not after allocating it in JS.
+    const columns = (this.db.pragma('table_info(tabs)') as { name: string }[])
+      .filter((c) => c.name !== 'spawn_report')
+      .map((c) => `"${c.name}"`)
+      .join(', ');
+    const rows = this.db
+      .prepare(`SELECT ${columns} FROM tabs WHERE (${where})
+      AND workspace_id IN (SELECT id FROM workspaces WHERE hidden = 0)
+      ORDER BY position, created_at, id ${limit === undefined ? '' : 'LIMIT ?'}`)
+      .all(...params, ...(limit === undefined ? [] : [limit]));
+    return rows.map((r) => this.row(r) as Tab);
+  }
+
+  clockRowsFor(ids: string[]): TabClockRow[] {
+    if (!ids.length) return [];
+    return (
+      this.db
+        .prepare(`SELECT ${CLOCK_COLUMNS} FROM tabs WHERE id IN
+      (${ids.map(() => '?').join(',')})`)
+        .all(...ids) as RawClockRow[]
+    ).map(toClockRow);
+  }
+
   update(
     id: string,
     patch: {

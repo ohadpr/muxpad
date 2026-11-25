@@ -31,7 +31,7 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import type { TabActivity } from '../tab-activity.js';
 import { type ClockSnapshot, clockSnapshot, reviveChat, tabLifecycle } from '../tab-clock.js';
-import { orderedTabsForWorkspace } from '../tab-list.js';
+import { decorateSelectedTabs, liveCorpusTabs, orderedTabsForWorkspace } from '../tab-list.js';
 import { retireChat } from '../tab-retire.js';
 
 /**
@@ -262,11 +262,11 @@ export function tabsRoutes(deps: {
   const orderedForWorkspace = (
     workspaceId: string,
     shared?: ClockSnapshot,
-    opts?: { omitReportText?: boolean; excerptReportText?: boolean },
+    opts?: { omitReportText?: boolean },
   ): Tab[] => orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared, opts);
 
   /**
-   * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
+   * Every visible workspace's LIVE WORK in one request — the instant tier of the
    * sidebar's search box (web/src/components/NavSearch.tsx).
    *
    * The search has to match across workspaces the user has never expanded, and
@@ -280,20 +280,88 @@ export function tabsRoutes(deps: {
    * NAME (it is a matchable field) and its SLUG (half the route a result
    * navigates to), and `Tab` carries neither.
    */
-  app.get('/all', (c) => {
-    const clocks = clockSnapshot(deps.db);
-    const list = workspaces.list().map((w) => ({
-      id: w.id,
-      slug: w.slug,
-      name: w.name,
-      // EXCERPTED, not whole — see REPORT_EXCERPT_CHARS in ../tab-list.ts.
-      // This is the corpus, so it is the one list that needs report text at
-      // all; carrying the full prose for 1,600 chats was 56.5% of it and was
-      // walking this answer into json-cache's 2 MB buffering cap.
-      tabs: orderedForWorkspace(w.id, clocks, { excerptReportText: true }),
-    }));
-    return c.json({ workspaces: list });
+  app.get('/all', async (c) => {
+    // Read actual runtime ids, not historical unparked flags. On a temporary
+    // transport failure retain the last inventory; unknown is not absent.
+    await deps.cache.refreshRuntimePanes(async () => {
+      const router = deps.ptyd as PaneOps & {
+        listPanesBestEffort?: () => Promise<{ value: string[]; unreachable: string[] }>;
+      };
+      if (!router.listPanesBestEffort) return router.listPanes();
+      const snapshot = await router.listPanesBestEffort();
+      const previous = deps.cache.livePaneIds();
+      if (!snapshot.unreachable.length || !previous.length) return snapshot.value;
+      // Update machines that answered while retaining evidence for offline
+      // machines. A local refresh must not erase a remote worker.
+      const unknown = deps.db
+        .prepare(`SELECT id FROM panes WHERE id IN
+        (${previous.map(() => '?').join(',')}) AND node_id IN
+        (${snapshot.unreachable.map(() => '?').join(',')})`)
+        .all(...previous, ...snapshot.unreachable) as { id: string }[];
+      return [...snapshot.value, ...unknown.map((p) => p.id)];
+    });
+    return c.json(grouped(liveCorpusTabs(deps.db, deps.cache)));
   });
+
+  // Finished unread chats belong to the inbox, not the live-work corpus.
+  app.get('/unread', (c) =>
+    c.json(
+      grouped(decorateSelectedTabs(deps.db, deps.cache, tabs.unreadTabs()).filter((t) => t.unread)),
+    ),
+  );
+
+  // Search is on demand and bounded. Archive hits resolve only their named
+  // panes; a client never needs the whole history to navigate one result.
+  app.get('/lookup', (c) => {
+    const q = (c.req.query('q') ?? '').trim();
+    if (q.length > 256)
+      return c.json({ error: { code: 'bad_request', message: 'query too long' } }, 400);
+    const paneIds = [...new Set((c.req.query('paneIds') ?? '').split(',').filter(Boolean))].slice(
+      0,
+      60,
+    );
+    const tabIds = [...new Set((c.req.query('tabIds') ?? '').split(',').filter(Boolean))].slice(
+      0,
+      60,
+    );
+    return c.json(
+      grouped(decorateSelectedTabs(deps.db, deps.cache, tabs.lookup(q, paneIds, 60, tabIds))),
+    );
+  });
+
+  function grouped(rows: Tab[]) {
+    // Preserve both workspace order and the stored order inside each group.
+    const byWorkspace = new Map<string, Tab[]>();
+    const ids = rows.map((t) => t.id);
+    const owners = ids.length
+      ? (deps.db
+          .prepare(`SELECT id, workspace_id FROM tabs WHERE id IN
+      (${ids.map(() => '?').join(',')})`)
+          .all(...ids) as { id: string; workspace_id: string }[])
+      : [];
+    const ownerById = new Map(owners.map((r) => [r.id, r.workspace_id]));
+    for (const row of rows) {
+      const ws = ownerById.get(row.id);
+      if (!ws) continue;
+      const list = byWorkspace.get(ws) ?? [];
+      list.push(row);
+      byWorkspace.set(ws, list);
+    }
+    // Only metadata is needed. WorkspaceStore.list decorates tab_count by
+    // counting every historical tab, which would undo candidate selection.
+    const visible = deps.db
+      .prepare(`SELECT id, slug, name FROM workspaces
+      WHERE hidden = 0 ORDER BY position, created_at, id`)
+      .all() as { id: string; slug: string; name: string }[];
+    return {
+      workspaces: visible.map((w) => ({
+        id: w.id,
+        slug: w.slug,
+        name: w.name,
+        tabs: byWorkspace.get(w.id) ?? [],
+      })),
+    };
+  }
 
   /**
    * Every ROUND of every child of this chat, keyed by child tab id.
@@ -324,10 +392,32 @@ export function tabsRoutes(deps: {
     return c.json({ previews: lastMessagesForTabs(deps.db, ids) });
   });
 
+  /**
+   * …AND THE CHILDREN THEMSELVES, as the corpus would have shown them.
+   *
+   * The spawn cards used to take WHO from the corpus and only WHEN from here.
+   * The corpus now carries live work only, so a delivered worker's row — its
+   * name, task, link, report — is nowhere else the log can read it. Every
+   * DIRECT child is listed, read from `tabs` rather than the rounds join, so a
+   * child that never opened a round (it predates the table, or was never
+   * messaged) still has its card. Grouped exactly like `/all`, and decorated
+   * by the same function, so a card cannot describe a worker differently
+   * depending on which list it came from.
+   *
+   * The report TEXT is whole here, not stripped: this is one parent's
+   * children, and the tab-level report is the card's only text for a child
+   * with no rounds.
+   */
   app.get('/:id/spawn-rounds', (c) => {
     const id = c.req.param('id');
     const byChild = new SpawnRoundStore(deps.db).listByParent(id);
-    return c.json({ rounds: Object.fromEntries(byChild) });
+    const raw = tabs.listChildren(id).filter((r) => r.id !== id);
+    const text = new Map(raw.map((t) => [t.id, t.spawn_report]));
+    const decorated = decorateSelectedTabs(deps.db, deps.cache, raw).map((t) =>
+      text.get(t.id) ? ({ ...t, spawn_report: text.get(t.id) } as Tab) : t,
+    );
+    const children = grouped(decorated).workspaces.filter((g) => g.tabs.length > 0);
+    return c.json({ rounds: Object.fromEntries(byChild), children });
   });
 
   /**
@@ -356,10 +446,7 @@ export function tabsRoutes(deps: {
         400,
       );
     }
-    // WITHOUT THE REPORT PROSE — see stripReportText in ../tab-list.ts. This
-    // is the route the sidebar re-polls on every pane.updated edge, and the
-    // text was 56.5% of its 1.19 MB. The corpus that actually renders a
-    // report (`/all`, below) still carries it.
+    // Reports are fetched per parent through spawn-rounds, not on tab lists.
     return c.json(orderedForWorkspace(workspaceId, undefined, { omitReportText: true }));
   });
 

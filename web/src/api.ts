@@ -251,6 +251,27 @@ export const api = {
     }),
 
   listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
+  // Every unread chat, finished ones included — the inbox, not the live corpus
+  // (web/src/lib/unread-tabs). Report text stripped; stored order kept.
+  listUnreadTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/unread'),
+
+  /**
+   * BOUNDED lookup over every chat, finished history included — the
+   * historical half of ⌘K and the `@` picker, and how an archive hit whose
+   * pane is not in the live corpus finds its chat. Exactly one of `q` (name /
+   * headline / workspace), `paneIds`, or `tabIds` (exact references; both id
+   * forms capped at 60 by the server). Report prose is stripped. Client side: lib/tab-lookup.
+   */
+  lookupTabs: (
+    by: { q: string } | { paneIds: readonly string[] } | { tabIds: readonly string[] },
+  ) =>
+    req<{ workspaces: WorkspaceTabs[] }>(
+      'q' in by
+        ? `/api/tabs/lookup?q=${encodeURIComponent(by.q)}`
+        : 'paneIds' in by
+          ? `/api/tabs/lookup?paneIds=${by.paneIds.map(encodeURIComponent).join(',')}`
+          : `/api/tabs/lookup?tabIds=${by.tabIds.map(encodeURIComponent).join(',')}`,
+    ),
 
   /** Each chat's last message, for the phone's Activity list — its own request,
    *  never on the polled tab row (see server chat/last-message). */

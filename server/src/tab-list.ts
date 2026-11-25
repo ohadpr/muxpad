@@ -1,5 +1,5 @@
 import type { Tab } from '@muxpad/shared';
-import { sortSidebarTabs } from '@muxpad/shared';
+import { CHAT_DECAY_MS, sortSidebarTabs } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { type PtydCache, cronsByTab, decorateTab } from './ptyd-cache.js';
 import { PaneStore } from './store/PaneStore.js';
@@ -7,7 +7,7 @@ import { TabStore } from './store/TabStore.js';
 import { type ClockSnapshot, clockSnapshot } from './tab-clock.js';
 
 /**
- * ONE WORKSPACE'S TABS, IN THE ORDER EVERY SURFACE MUST SHOW THEM.
+ * One workspace's navigation rows, including its historical done group.
  *
  * Extracted from routes/tabs.ts so a second route can serve the identical
  * list: `GET /api/boot` hands the sidebar its first two rungs in one answer,
@@ -24,9 +24,8 @@ export function orderedTabsForWorkspace(
   cache: PtydCache,
   workspaceId: string,
   shared?: ClockSnapshot,
-  /** What to do with each row's `spawn_report` TEXT — see
-   *  {@link stripReportText} and {@link REPORT_EXCERPT_CHARS}. */
-  opts?: { omitReportText?: boolean; excerptReportText?: boolean },
+  /** Full reports belong to parent-scoped spawn-round reads. */
+  opts?: { omitReportText?: boolean },
 ): Tab[] {
   const tabs = new TabStore(db);
   const raw = tabs.listByWorkspace(workspaceId);
@@ -48,8 +47,8 @@ export function orderedTabsForWorkspace(
   // And one clock read for the whole list, for the same reason — plus one of
   // its own: a child chat's clock is its PARENT's, so resolving a row needs
   // rows the workspace-scoped read above may not contain.
-  // (`/all` builds it once and passes it down — the index is global, so
-  //  rebuilding it per workspace there would be the same scan N times.)
+  // The live corpus below uses a selected snapshot instead; this path also
+  // serves the workspace tree's historical done group.
   const clocks = shared ?? clockSnapshot(db);
   // …and one panes read for the whole workspace, which was the last per-row
   // query here: `decorateTab` needs a tab's panes for its status, attention
@@ -60,10 +59,7 @@ export function orderedTabsForWorkspace(
   const panesByTab = new PaneStore(db).byTabForWorkspace(workspaceId);
   const decorated = raw
     .map((t) => decorateTab(cache, db, t, manualUnreadIds, cronIds, clocks, panesByTab))
-    .map((t) => {
-      if (opts?.omitReportText) return stripReportText(t);
-      return opts?.excerptReportText ? excerptReportText(t) : t;
-    });
+    .map((t) => (opts?.omitReportText ? stripReportText(t) : t));
   // STORE ORDER, pinned block first. `listByWorkspace` already reads
   // `ORDER BY position, created_at, id`, which is the manual order a drag
   // writes and the place a new chat is appended to — so this adds nothing to
@@ -73,64 +69,57 @@ export function orderedTabsForWorkspace(
   return sortSidebarTabs(decorated);
 }
 
-/**
- * THE SAME ROW WITHOUT ITS REPORT'S PROSE.
- *
- * `spawn_report` is a finished worker's whole summary, and it was 56.5% of
- * this list — 479 KB of a 1.19 MB answer, measured on 1,136 rows — on a route
- * the sidebar re-polls 250ms after EVERY `pane.updated` edge, to each of 98
- * open connections, while forty agents make those edges continuously. The
- * server's main thread was spending its time turning those rows into JS
- * objects and then into JSON, and chat opens queued behind it.
- *
- * NOBODY ON THIS ROUTE READS IT. It feeds the sidebar rows, the mobile list,
- * the workspace layout and TabView — a name, a state, a clock. The surface
- * that DOES render report prose is the spawn card, and its corpus comes from
- * `/api/tabs/all` (web/src/lib/use-all-chats → chat-mention), which keeps the
- * text. So this is a narrowing of the hot route, not a feature change.
- *
- * `spawn_report_state` and `spawn_report_at` STAY. They are a word and a
- * number, they are what says a report exists at all, and a row that lost them
- * would be a row that claims a finished worker produced nothing.
- */
+/** Full report prose is loaded only for one parent's children, never globally. */
 function stripReportText(t: Tab): Tab {
   if (!t.spawn_report) return t;
   const { spawn_report: _dropped, ...rest } = t;
   return rest as Tab;
 }
 
-/**
- * HOW MUCH OF A REPORT A BULK LIST CARRIES.
- *
- * `/api/tabs/all` is the corpus, and it is the one list that genuinely needs
- * report text: it is what draws a finished worker's card. But it was carrying
- * the WHOLE report for every chat ever created — 712 KB of a 1.76 MB answer,
- * 56.5%, over 1,628 rows of which 1,605 are finished — and json-cache caps
- * the body it will buffer at 2 MB (json-cache.ts, MAX_BUFFER_BYTES). Above
- * that the answer is served raw: no ETag, no compression, 2 MB+ on the wire
- * instead of ~441 KB, two to four times per chat opened. Measured at
- * 1,693,590 bytes with ~1,067 bytes added per new chat, that cliff was about
- * 390 chats away — a week or two at 25 chats a day.
- *
- * So the corpus carries the FIRST 200 CHARACTERS. A card renders folded to
- * its first row anyway, so this is what is actually on screen until someone
- * opens the chat — and opening it loads that chat's ROUNDS
- * (web/src/lib/spawn-rounds), which carry the full text from
- * `spawn_rounds.report`. Nothing a reader can see is lost; what goes is the
- * 95% of prose that was being shipped to every device on every corpus fetch
- * so that it could be folded away.
- *
- * NOT ZERO, deliberately. An empty report and a missing one are different
- * facts — `spawnCardSummary` says "Finished with nothing to report" for the
- * first — and a bulk list that dropped the text entirely would make every
- * finished worker look like it produced nothing until its rounds arrived.
- */
-export const REPORT_EXCERPT_CHARS = 200;
+/** Decorate a selected set without a whole-history clock or pane snapshot. */
+export function decorateSelectedTabs(
+  db: Database.Database,
+  cache: PtydCache,
+  rows: Tab[],
+  now = Date.now(),
+): Tab[] {
+  const store = new TabStore(db);
+  const ids = rows.map((t) => t.id);
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const children = db
+    .prepare(`
+    SELECT id FROM tabs INDEXED BY tabs_corpus_children
+      WHERE spawned_by IS NOT NULL AND spawned_by IN (${placeholders}) AND retired_at IS NULL
+    UNION SELECT id FROM tabs INDEXED BY tabs_corpus_pinned
+      WHERE pinned = 1 AND spawned_by IN (${placeholders})`)
+    .all(...ids, ...ids) as { id: string }[];
+  const ownClocks = store.clockRowsFor([...new Set([...ids, ...children.map((c) => c.id)])]);
+  const parentIds = [...new Set(ownClocks.flatMap((r) => (r.spawned_by ? [r.spawned_by] : [])))];
+  const index = new Map([...store.clockRowsFor(parentIds), ...ownClocks].map((r) => [r.id, r]));
+  const childrenOf = new Map<string, string[]>();
+  for (const r of ownClocks) {
+    if (!r.spawned_by) continue;
+    const list = childrenOf.get(r.spawned_by) ?? [];
+    list.push(r.id);
+    childrenOf.set(r.spawned_by, list);
+  }
+  const clocks: ClockSnapshot = { now, index, childrenOf };
+  const panesByTab = new PaneStore(db).byTabs([...index.keys()]);
+  const manualUnread = new Set(
+    (db.prepare('SELECT id FROM tabs WHERE unread = 1').all() as { id: string }[]).map((r) => r.id),
+  );
+  const crons = cronsByTab(db);
+  return sortSidebarTabs(
+    rows.map((t) =>
+      stripReportText(decorateTab(cache, db, t, manualUnread, crons, clocks, panesByTab)),
+    ),
+  );
+}
 
-function excerptReportText(t: Tab): Tab {
-  const text = t.spawn_report;
-  if (!text || text.length <= REPORT_EXCERPT_CHARS) return t;
-  // The ellipsis is the honest part: it says the text continues, so a reader
-  // (and a card) can tell a short report from a trimmed one.
-  return { ...t, spawn_report: `${text.slice(0, REPORT_EXCERPT_CHARS).trimEnd()}…` } as Tab;
+/** The hot corpus carries live work only. Retirement alone cannot decide it:
+ * an automatically retired worker may still own an unparked running pane. */
+export function liveCorpusTabs(db: Database.Database, cache: PtydCache, now = Date.now()): Tab[] {
+  const candidates = new TabStore(db).corpusCandidates(now - CHAT_DECAY_MS, cache.livePaneIds());
+  return decorateSelectedTabs(db, cache, candidates, now).filter((t) => t.corpus_live);
 }

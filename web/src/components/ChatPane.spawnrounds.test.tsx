@@ -22,16 +22,36 @@ import { ChatPane, SPAWN_ROUNDS_NET_MS, spawnRoundsSignature } from './ChatPane'
  */
 
 const loads = vi.hoisted(() => [] as Array<{ tabId: string; changed: boolean }>);
+/** What the loader answers, per parent; a parent missing here gets an empty map,
+ *  and one mapped to `'pending'` never answers. */
+const answers = vi.hoisted(() => new Map<string, unknown>());
 const corpusFeed = vi.hoisted(() => ({
   current: [] as unknown[],
   listener: null as ((groups: unknown[]) => void) | null,
 }));
 
+/** Every card list ChatPane derived, newest last — what the log would draw. */
+const drawn = vi.hoisted(() => [] as Array<Array<{ chat: { tabId: string }; kind: string }>>);
+vi.mock('../lib/chat-mention', async (original) => {
+  const real = await original<typeof import('../lib/chat-mention')>();
+  return {
+    ...real,
+    spawnCards: (...args: Parameters<typeof real.spawnCards>) => {
+      const out = real.spawnCards(...args);
+      drawn.push(out);
+      return out;
+    },
+  };
+});
+const cardsNow = () => (drawn.at(-1) ?? []).map((c) => `${c.kind}:${c.chat.tabId}`);
+
 vi.mock('../lib/spawn-rounds', () => ({
   NO_ROUNDS: new Map(),
   loadSpawnRounds: vi.fn(async (tabId: string, changed = false) => {
     loads.push({ tabId, changed });
-    return new Map();
+    const a = answers.get(tabId);
+    if (a === 'pending') return new Promise(() => {});
+    return a ?? new Map();
   }),
 }));
 vi.mock('../lib/all-tabs', async (original) => ({
@@ -160,10 +180,12 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   loads.length = 0;
+  answers.clear();
+  drawn.length = 0;
   corpusFeed.listener = null;
 });
 
-async function mount(rows: Row[]) {
+async function mount(rows: Row[], parent = PARENT) {
   corpusFeed.current = groups(rows);
   vi.useFakeTimers();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -190,7 +212,13 @@ async function mount(rows: Row[]) {
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () =>
-    root!.render(<ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} active agentNative />),
+    root!.render(<ChatPane paneId={`${parent}-pane`} tabId={parent} active agentNative />),
+  );
+}
+
+async function show(parent: string) {
+  await act(async () =>
+    root!.render(<ChatPane paneId={`${parent}-pane`} tabId={parent} active agentNative />),
   );
 }
 
@@ -259,10 +287,114 @@ describe('the conversation reads its rounds only when its children move', () => 
     expect(mine()).toEqual([]);
   });
 
-  it('asks nothing at all — not even the net — for a chat that has spawned nothing', async () => {
+  it('asks ONCE, and runs no net, for a chat whose answer names no children', async () => {
+    // Once, because an empty corpus signature no longer means "spawned
+    // nothing": the corpus carries live work only.
     await mount([tab(PARENT), tab('stranger')]);
     await publish([tab(PARENT), tab('stranger', { status: 'working' })]);
     await advance(SPAWN_ROUNDS_NET_MS * 3);
-    expect(mine()).toEqual([]);
+    expect(mine()).toEqual([{ tabId: PARENT, changed: true }]);
+  });
+});
+
+// ── Finished children live in the rounds answer, not the corpus ──────────────
+
+/** A rounds answer carrying one finished child the corpus no longer has. */
+function finishedAnswer(
+  parent: string,
+  id: string,
+  task: string,
+  extra: Record<string, unknown> = {},
+) {
+  const row = tab(id, {
+    spawned_by: parent,
+    created_at: 2_000,
+    status: 'ready',
+    done: true,
+    done_reason: 'delivered',
+    done_at: 3_000,
+    spawn_task: task,
+    ...extra,
+  });
+  return Object.assign(new Map(), { children: chats([row]) });
+}
+
+describe('a conversation whose workers have all finished', () => {
+  it('asks for its rounds by its OWN tab id, even absent from the corpus', async () => {
+    // A finished parent: no row of its own in the live corpus, no children.
+    await mount([tab('stranger')]);
+    expect(mine()).toEqual([{ tabId: PARENT, changed: true }]);
+  });
+
+  it('draws the cards of children only the rounds answer knows', async () => {
+    answers.set(PARENT, finishedAnswer(PARENT, 'gone', 'Audit the card lane'));
+    await mount([tab(PARENT), tab('stranger')]);
+    expect(cardsNow()).toEqual(['launch:gone', 'completion:gone']);
+  });
+
+  it('keeps the net running for children only the answer names', async () => {
+    // A late report on a child already gone from the corpus moves no corpus
+    // row; the minute net is the only thing that will see it.
+    answers.set(PARENT, finishedAnswer(PARENT, 'gone', 'Audit the card lane'));
+    await mount([tab(PARENT), tab('stranger')]);
+    loads.length = 0;
+    await advance(SPAWN_ROUNDS_NET_MS);
+    expect(mine()).toHaveLength(1);
+  });
+
+  it('never shows the PREVIOUS conversation’s cards after a switch', async () => {
+    answers.set(PARENT, finishedAnswer(PARENT, 'gone', 'Audit the card lane'));
+    answers.set('other', 'pending');
+    await mount([tab(PARENT), tab('other'), tab('stranger')]);
+    expect(cardsNow()).toEqual(['launch:gone', 'completion:gone']);
+    await show('other');
+    expect(loads.at(-1)).toEqual({ tabId: 'other', changed: true });
+    expect(cardsNow()).toEqual([]);
+    // …nor keep acting on its answer: `other` has no children anywhere yet, so
+    // the previous parent's must not arm a minute net for it.
+    loads.length = 0;
+    await advance(SPAWN_ROUNDS_NET_MS * 2);
+    expect(loads).toEqual([]);
+  });
+});
+
+// ── The DRAWER reads the same children as the cards ──────────────────────────
+
+describe('the work drawer, once its workers have finished', () => {
+  const openDrawer = async () => {
+    const toggle = host?.querySelector<HTMLButtonElement>('.chat-drawer-open');
+    expect(toggle).toBeTruthy();
+    await act(async () => toggle?.click());
+  };
+  const drawerNames = () =>
+    [...(host?.querySelectorAll('.chat-drawer__row-name') ?? [])].map((n) => n.textContent);
+
+  it('lists a finished child only the rounds answer knows', async () => {
+    answers.set(PARENT, finishedAnswer(PARENT, 'gone', 'Audit the card lane'));
+    await mount([tab(PARENT), tab('stranger')]);
+    await openDrawer();
+    expect(drawerNames()).toEqual(['Audit the card lane']);
+  });
+
+  it('the closed toggle counts what the drawer counts — a worker still waiting on you', async () => {
+    // Decayed off the live list with a question outstanding: `awaiting`, so the
+    // drawer calls it open, and the toggle's badge has to say so too.
+    answers.set(
+      PARENT,
+      finishedAnswer(PARENT, 'asks', 'Ask about the cap', {
+        done_reason: 'decayed',
+        spawn_report_state: 'awaiting',
+        spawn_report_at: 3_000,
+      }),
+    );
+    await mount([tab(PARENT), tab('stranger')]);
+    expect(host?.querySelector('.chat-drawer-open')?.getAttribute('data-running')).toBe('true');
+  });
+
+  it('lists them for a FINISHED parent too, absent from the corpus itself', async () => {
+    answers.set(PARENT, finishedAnswer(PARENT, 'gone', 'Audit the card lane'));
+    await mount([tab('stranger')]);
+    await openDrawer();
+    expect(drawerNames()).toEqual(['Audit the card lane']);
   });
 });

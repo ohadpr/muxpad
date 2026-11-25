@@ -1,6 +1,7 @@
 import type { SpawnRound } from '@muxpad/shared';
 import { req } from '../api';
-import type { SpawnRoundsByChild } from './chat-mention';
+import { type SpawnRoundsByChild, toMentionChats } from './chat-mention';
+import type { WorkspaceTabs } from './nav-search';
 
 /**
  * THE ROUNDS of every child of one conversation.
@@ -31,6 +32,16 @@ const FRESH_MS = 4_000;
 
 interface RoundsResponse {
   rounds: Record<string, SpawnRound[]>;
+  /** Every direct child's row, grouped like `/api/tabs/all`. Absent from an
+   *  older server, which leaves the cards to the corpus alone. */
+  children?: WorkspaceTabs[];
+}
+
+/** One answer as the cards read it: the rounds map, carrying the children. */
+function toAnswer(res: RoundsResponse): SpawnRoundsByChild {
+  const rounds = new Map(Object.entries(res.rounds ?? {}));
+  if (!Array.isArray(res.children)) return rounds;
+  return Object.assign(rounds, { children: toMentionChats(res.children) });
 }
 
 interface Entry {
@@ -76,7 +87,7 @@ export async function loadSpawnRounds(
         const res = await req<RoundsResponse>(
           `/api/tabs/${encodeURIComponent(parentTabId)}/spawn-rounds`,
         );
-        rounds = new Map(Object.entries(res.rounds ?? {}));
+        rounds = toAnswer(res);
         cache.set(parentTabId, { at: Date.now(), rounds });
       } catch (err: unknown) {
         if ((err as { status?: number } | null)?.status === 404) unsupported = true;

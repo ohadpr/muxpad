@@ -98,4 +98,49 @@ describe('loadSpawnRounds', () => {
     expect(await loadSpawnRounds('other')).toEqual(NO_ROUNDS);
     expect(f).toHaveBeenCalledTimes(1);
   });
+
+  it('carries the CHILDREN on the map, as the corpus would have drawn them', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        rounds: {},
+        children: [
+          {
+            id: 'ws',
+            slug: 'ws',
+            name: 'Work',
+            tabs: [
+              {
+                id: 'kid',
+                slug: 'kid',
+                name: 'card-summary',
+                layout: '',
+                spawned_by: 'p',
+                done: true,
+                spawn_task: 'Audit the lane',
+                spawn_report: 'whole',
+                spawn_report_state: 'ok',
+                spawn_report_at: 9,
+              },
+            ],
+          },
+        ],
+      }),
+    }));
+    const answer = await loadSpawnRounds('p');
+    const kid = answer.children?.[0];
+    expect([kid?.tabId, kid?.parentId, kid?.task, kid?.done, kid?.report?.text]).toEqual([
+      'kid',
+      'p',
+      'Audit the lane',
+      true,
+      'whole',
+    ]);
+  });
+
+  it('an older server with no `children` leaves the cards to the corpus', async () => {
+    vi.stubGlobal('fetch', async () => ok({ kid: [] }));
+    expect((await loadSpawnRounds('p')).children).toBeUndefined();
+  });
 });

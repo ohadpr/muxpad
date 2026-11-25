@@ -91,6 +91,102 @@ export interface PaneState {
  */
 export class PtydCache extends EventEmitter {
   private state = new Map<string, PaneState>();
+  // Runtime inventory is separate from decorations: seedCwds restores history
+  // from SQLite, so a decoration entry alone is not evidence of a process.
+  private runtimePanes = new Set<string>();
+  private localRuntimePanes = new Set<string>();
+  private runtimeRead: Promise<void> | null = null;
+  private runtimeRacers: Map<string, boolean> | null = null;
+  private runtimeReadStartedAt = Number.NEGATIVE_INFINITY;
+  runtimeInventoryTtlMs = 4_000;
+  runtimeInventoryWaitMs = 300;
+
+  /** Coalesce reads, bound request latency, and preserve newer lifecycle events.
+   * A hung RPC remains the only in-flight read; it cannot spawn more hung RPCs
+   * or make every future corpus request wait. Late timed-out answers are ignored. */
+  refreshRuntimePanes(read: () => Promise<string[]>): Promise<void> {
+    const now = Date.now();
+    if (!this.runtimeRead) {
+      if (now - this.runtimeReadStartedAt < this.runtimeInventoryTtlMs) return Promise.resolve();
+      this.runtimeReadStartedAt = now;
+      const racers = new Map<string, boolean>();
+      this.runtimeRacers = racers;
+      this.runtimeRead = Promise.resolve()
+        .then(read)
+        .then((ids) => {
+          if (this.runtimeRacers !== racers) return;
+          const live = new Set(ids);
+          for (const [id, present] of racers) {
+            if (present) live.add(id);
+            else live.delete(id);
+          }
+          this.setRuntimePanes(live);
+        })
+        .catch(() => {
+          /* Unknown is not absent. Keep the last inventory. */
+        })
+        .finally(() => {
+          this.runtimeRead = null;
+          this.runtimeRacers = null;
+        });
+    }
+    const remaining = this.runtimeInventoryWaitMs - (now - this.runtimeReadStartedAt);
+    if (remaining <= 0) return Promise.resolve();
+    const pending = this.runtimeRead;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        // Stop recording races too: a permanently hung read must not collect
+        // every process ever created while it waits.
+        this.runtimeRacers = null;
+        resolve();
+      }, remaining);
+      void pending.then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  /** A local reconnect replaces only local evidence, preserving remote nodes. */
+  setLocalRuntimePanes(ids: Iterable<string>): void {
+    const next = new Set(ids);
+    for (const id of this.localRuntimePanes) if (!next.has(id)) this.noteRuntimePane(id, false);
+    for (const id of next) this.noteRuntimePane(id, true);
+  }
+
+  private noteRuntimePane(id: string, present: boolean): void {
+    this.runtimeRacers?.set(id, present);
+    if (present) {
+      this.localRuntimePanes.add(id);
+      this.runtimePanes.add(id);
+    } else {
+      this.localRuntimePanes.delete(id);
+      this.runtimePanes.delete(id);
+    }
+  }
+
+  setRuntimePanes(ids: Iterable<string>): void {
+    this.runtimePanes = new Set(ids);
+  }
+
+  livePaneIds(): string[] {
+    return [
+      ...new Set([
+        ...this.runtimePanes,
+        ...this.agentBusy,
+        ...this.subagentCounts.keys(),
+        ...this.backgroundCounts.keys(),
+        ...this.blocked,
+        ...this.awaitingPerson,
+      ]),
+    ].filter((id) => this.hasLivePane(id));
+  }
+
+  hasLivePane(id: string): boolean {
+    if (this.dead.has(id)) return false;
+    const status = this.getStatus(id, false);
+    return this.runtimePanes.has(id) || status === 'working' || status === 'blocked';
+  }
   // Non-null only while a `connected`-driven `flushCwds()` is inflight.
   // The paneCwd handler appends to it during that window; the connected
   // handler reads it after the snapshot resolves to skip ids that got a
@@ -234,22 +330,27 @@ export class PtydCache extends EventEmitter {
 
   attach(client: PtydClient): void {
     client.on('paneCwd', (e: { id: string; cwd: string }) => {
+      this.noteRuntimePane(e.id, true);
       this.cwdEventRacers?.add(e.id);
       this.update(e.id, { cwd: e.cwd });
     });
     client.on('paneFg', (e: { id: string; cmd: string | null }) => {
+      this.noteRuntimePane(e.id, true);
       this.noteDecoRacer(e.id, 'fg');
       this.update(e.id, { fg: e.cmd });
     });
     client.on('paneTitle', (e: { id: string; title: string | null }) => {
+      this.noteRuntimePane(e.id, true);
       this.noteDecoRacer(e.id, 'title');
       this.update(e.id, { title: e.title });
     });
     client.on('paneAttention', (e: { id: string; attention: boolean }) => {
+      this.noteRuntimePane(e.id, true);
       this.noteDecoRacer(e.id, 'attention');
       this.update(e.id, { attention: e.attention });
     });
     client.on('paneActivity', (e: { id: string }) => {
+      this.noteRuntimePane(e.id, true);
       this.markBusy(e.id);
     });
     client.on('paneUrlsSeen', (e: { id: string; urls: string[]; markers: AppUrlMarker[] }) => {
@@ -259,6 +360,7 @@ export class PtydCache extends EventEmitter {
       this.detector.ingest(e.id, e.urls, e.markers);
     });
     client.on('paneExit', (e: { id: string }) => {
+      this.noteRuntimePane(e.id, false);
       // Drop the entry on exit so a respawned pane (same id) starts with a
       // clean slate. If the row still exists (delete is a separate
       // operation) the next ensurePane will surface fresh events to
@@ -337,6 +439,9 @@ export class PtydCache extends EventEmitter {
         }
         if (decos) {
           const live = new Set(decos.map((d) => d.id));
+          this.setLocalRuntimePanes(
+            [...live, ...decoRacers.keys()].filter((id) => !exited.has(id)),
+          );
           for (const { id, title, fg, attention } of decos) {
             if (exited.has(id)) continue;
             // Per-field, because the three move independently: a `paneFg`
@@ -782,6 +887,7 @@ export class PtydCache extends EventEmitter {
   /** Drop the entry for `id`. Used by route handlers on DELETE /api/panes/:id. */
   forget(id: string): void {
     this.clearBusyTimer(id);
+    this.noteRuntimePane(id, false);
     this.agentBusy.delete(id);
     this.subagentCounts.delete(id);
     this.backgroundCounts.delete(id);
@@ -1060,6 +1166,7 @@ export function decorateTab(
     takes_panes: tabTakesPanes(tabPanes),
     ...(cron ? { crons: cron.count, next_cron: cron.next } : {}),
     done: lifecycle.done,
+    corpus_live: !lifecycle.done || tabPanes.some((p) => !p.parked && cache.hasLivePane(p.id)),
     ...(lifecycle.done_reason ? { done_reason: lifecycle.done_reason } : {}),
     // WHEN it finished. Unconditional (null while live) for the same coalescing
     // reason `done` is: a field omitted when absent would leave a stale stamp on

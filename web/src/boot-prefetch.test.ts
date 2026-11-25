@@ -17,7 +17,11 @@ vi.mock('./api', () => ({
   api: { listWorkspaces: () => listWorkspaces(), listTabs: () => listTabs() },
   req: vi.fn(),
 }));
-vi.mock('./events', () => ({ subscribe: () => () => {}, subscribeReconnect: () => () => {} }));
+vi.mock('./events', () => ({
+  subscribe: () => () => {},
+  subscribeReconnect: () => () => {},
+  subscribeResync: () => () => {},
+}));
 vi.mock('./lib/all-tabs', () => ({
   mergeWorkspaceTabs: () => {},
   refreshCorpusForTab: () => {},

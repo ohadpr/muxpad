@@ -76,7 +76,18 @@ export type { SpawnRound };
 
 /** Every round of every child of one conversation, keyed by child tab id —
  *  `GET /api/tabs/:id/spawn-rounds`, straight through. */
-export type SpawnRoundsByChild = ReadonlyMap<string, readonly SpawnRound[]>;
+export interface SpawnRoundsByChild extends ReadonlyMap<string, readonly SpawnRound[]> {
+  /**
+   * EVERY DIRECT CHILD of the conversation, as the corpus would have drawn it —
+   * the same answer's `children`, through `toMentionChats`.
+   *
+   * The corpus carries live work only, so a delivered worker is no longer in
+   * it, and a card needs a NAME, a link and a report, none of which a round
+   * has. This is where they come from once the child has finished. Absent from
+   * an older server (and before the first answer): the corpus alone is used.
+   */
+  readonly children?: readonly MentionChat[] | undefined;
+}
 
 /** A chat, as the picker and the chip need it. Superset of `SearchableTab`. */
 export interface MentionChat extends SearchableTab {
@@ -717,7 +728,7 @@ export function spawnCards(
   // finished — and a child's two entries are shed together, because half a pair
   // is worse than neither: a launch whose completion is missing reads as work
   // that vanished, and a completion with no launch as one that came from nowhere.
-  for (const chat of spawnedChildren(corpus, tabId, max)) {
+  for (const chat of spawnedChildren(withSpawnChildren(corpus, rounds), tabId, max)) {
     const mine = rounds?.get(chat.tabId);
     if (mine?.length) {
       // ONE PAIR PER ROUND. Every handover left a launch where it happened, and
@@ -796,6 +807,47 @@ export function spawnCards(
 }
 
 const KIND_ORDER: Record<SpawnCard['kind'], number> = { launch: 0, completion: 1 };
+
+/**
+ * THE CORPUS, WITH THIS CONVERSATION'S FINISHED CHILDREN PUT BACK.
+ *
+ * The live corpus answers "what is running"; the rounds answer carries every
+ * direct child of one parent. A child in BOTH is live, and the corpus row wins
+ * — it is patched by events, the snapshot only by the next fetch. One field is
+ * the exception: the corpus carries NO report prose at all (only its state and
+ * time), so when both rows describe the same report — same state, same time —
+ * the snapshot's text is kept. A different report is the corpus's, prose or not.
+ *
+ * Returns the corpus itself when there is nothing to add, so memoised readers
+ * downstream see the same reference.
+ */
+export function withSpawnChildren(
+  corpus: readonly MentionChat[],
+  rounds: SpawnRoundsByChild | undefined,
+): readonly MentionChat[] {
+  const snapshot = rounds?.children;
+  if (!snapshot?.length) return corpus;
+  const held = new Map(snapshot.map((c) => [c.tabId, c]));
+  const seen = new Set<string>();
+  const merged = corpus.map((c) => {
+    const snap = held.get(c.tabId);
+    if (!snap) return c;
+    seen.add(c.tabId);
+    const live = c.report;
+    const whole = snap.report;
+    if (
+      live &&
+      whole?.text &&
+      live.state === whole.state &&
+      live.at === whole.at &&
+      whole.text.length > (live.text?.length ?? 0)
+    )
+      return { ...c, report: { ...live, text: whole.text } };
+    return c;
+  });
+  const missing = snapshot.filter((c) => !seen.has(c.tabId));
+  return missing.length ? [...merged, ...missing] : merged;
+}
 
 /** The children still working — the number above the composer. */
 export function liveSpawnedChildren(

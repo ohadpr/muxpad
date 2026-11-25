@@ -641,6 +641,20 @@ describe("an @mention's handles are for the agent, not the reader", () => {
     expect(shown).not.toContain('P1');
   });
 
+  it('preserves exact references after display normalization on both input roads', () => {
+    const refs = [{ name: 'Investing', tabId: 'T1', paneIds: ['P1'] }];
+    const expanded = expandChatEvent({ kind: 'user', id: 'u1', ts: MS, text: sent });
+    const normalized = normalizeTranscriptLine({
+      type: 'user',
+      uuid: 'u1',
+      timestamp: new Date(MS).toISOString(),
+      message: { role: 'user', content: sent },
+    });
+    for (const out of [expanded, normalized]) {
+      expect(out[0]).toMatchObject({ kind: 'user', text: typed, mentions: refs });
+    }
+  });
+
   it('strips on the claude road too', () => {
     const out = normalizeTranscriptLine({
       type: 'user',

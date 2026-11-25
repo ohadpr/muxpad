@@ -4,7 +4,7 @@ import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
-import { activityChats, railUnreadRows, unreadByWorkspace } from '../lib/chat-sections';
+import { activityChats, unreadByWorkspace } from '../lib/chat-sections';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
@@ -24,6 +24,7 @@ import { tabRowActions } from '../lib/tab-row-actions';
 import { useAllChats } from '../lib/use-all-chats';
 import { useArmed } from '../lib/use-armed';
 import { useDismissable } from '../lib/use-dismissable';
+import { useRailUnreadRows } from '../lib/use-unread';
 import { applyTabOrder, insertTabRow, refreshTabs, useTabs } from '../tabs';
 import { useLongPress } from '../use-long-press';
 import {
@@ -351,14 +352,16 @@ function SidebarTree({
   const [editing, setEditing] = useState<Editing>(null);
   const [creatingWs, setCreatingWs] = useState(false);
   const view = useRailView();
+  // Activity reads the live corpus; Unread reads the inbox (lib/unread-tabs),
+  // which still holds finished chats nobody has looked at.
   const corpus = useChatCorpus();
-  // The chat you are on — the Unread list keeps that row while you read it.
-  const activeTabId =
-    corpus.find((t) => t.workspaceSlug === activeWorkspaceSlug && t.tabSlug === activeTabSlug)
-      ?.tabId ?? null;
+  // The chat you are on — resolved from its workspace's own list, so a
+  // finished one is found too — stays in the Unread list while you read it.
+  const unread = useRailUnreadRows(activeWorkspaceSlug, activeTabSlug);
+  const activeTabId = unread.activeTabId;
   // Per-workspace unread counts: the badge a COLLAPSED section carries for
   // the chats it is hiding. (The total is the destination rail's.)
-  const unreadByWs = unreadByWorkspace(corpus);
+  const unreadByWs = unreadByWorkspace(unread.corpus);
 
   // Drag-to-reorder workspaces (desktop sidebar). Persist the new order, then
   // refresh; on failure refresh anyway to snap back to the server's truth.
@@ -440,7 +443,7 @@ function SidebarTree({
         {view === 'unread' && (
           <div className="rail-view-list">
             <PreviewList
-              rows={railUnreadRows(corpus, activeTabId)}
+              rows={unread.rows}
               active={true}
               explainAbsent={true}
               activeTabId={activeTabId}
