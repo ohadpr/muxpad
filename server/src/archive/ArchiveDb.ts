@@ -26,6 +26,9 @@ export interface ArchiveFileRow {
   size: number;
   indexed_offset: number;
   version: number;
+  /** Ledger offset at which the mirror was last re-cloned from its source
+   *  (Reclone.ts); -1 = never. Equal to `offset` = nothing new to reclaim. */
+  cloned_offset: number;
 }
 
 export interface ArchiveSessionRow {
@@ -100,6 +103,14 @@ export class ArchiveDb {
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
+    // Additive column for the re-clone pass (Reclone.ts). Existing rows read
+    // -1 = "never re-cloned", so the first pass verifies every settled file.
+    const cols = this.db.prepare('PRAGMA table_info(archive_files)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'cloned_offset')) {
+      this.db.exec(
+        'ALTER TABLE archive_files ADD COLUMN cloned_offset INTEGER NOT NULL DEFAULT -1',
+      );
+    }
   }
 
   close(): void {
@@ -158,12 +169,19 @@ export class ArchiveDb {
       .run(Math.round(mtime), size, sourcePath);
   }
 
+  /** The mirror now shares its blocks with the source up to `offset`. */
+  setClonedOffset(sourcePath: string, clonedOffset: number): void {
+    this.db
+      .prepare('UPDATE archive_files SET cloned_offset = ? WHERE source_path = ?')
+      .run(clonedOffset, sourcePath);
+  }
+
   /** A compact/rewrite sealed the active copy: bump version, reset offsets. */
   sealFile(sourcePath: string, newVersion: number): void {
     this.db
       .prepare(
         `UPDATE archive_files
-           SET version = ?, "offset" = 0, indexed_offset = 0
+           SET version = ?, "offset" = 0, indexed_offset = 0, cloned_offset = -1
          WHERE source_path = ?`,
       )
       .run(newVersion, sourcePath);

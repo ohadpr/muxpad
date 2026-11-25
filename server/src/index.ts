@@ -434,6 +434,13 @@ const archiver = archiveDb
       muxpadTranscriptsDir: join(config.dataDir, 'agent-transcripts'),
       db,
       events,
+      // Re-clone settled mirrors so they share APFS blocks with their sources
+      // again (archive/Reclone.ts). macOS only; MUXPAD_ARCHIVE_RECLONE=0 is
+      // the off switch.
+      reclone:
+        process.platform === 'darwin' && process.env.MUXPAD_ARCHIVE_RECLONE !== '0'
+          ? { logPath: join(config.dataDir, 'archive-reclone.log') }
+          : false,
     })
   : undefined;
 
