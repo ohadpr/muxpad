@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import { appendFile, mkdir, open, readdir, rename, stat, truncate } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, rename, stat, truncate, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -232,9 +232,12 @@ export class Archiver {
     const o = this.recloneOpts;
     if (!o) return;
     const settleMs = o.settleMs ?? DEFAULT_SETTLE_MS;
+    await this.sweepRecloneTemps();
     const rows = this.archive
       .listFiles()
-      .filter((r) => r.offset > 0 && r.cloned_offset !== r.offset);
+      .filter(
+        (r) => r.offset > 0 && r.cloned_offset !== r.offset && r.reclone_settled_at !== r.offset,
+      );
     if (rows.length === 0) return;
     const targets: RecloneTarget[] = rows.map((r) => ({
       sourcePath: r.source_path,
@@ -261,6 +264,13 @@ export class Archiver {
         if (r.outcome === 'recloned' || r.outcome === 'raced-repaired') {
           this.archive.setClonedOffset(t.sourcePath, t.offset);
         }
+        // A VERDICT THIS OFFSET WILL KEEP. Without this the pass re-read every
+        // byte of every differing file every hour to be told the same thing,
+        // and logged it; a sealed or vanished source was re-examined forever.
+        // An append moves `offset` and the row comes back on its own.
+        if (r.outcome === 'differs' || r.outcome === 'sealed' || r.outcome === 'source-gone') {
+          this.archive.setRecloneSettledAt(t.sourcePath, t.offset);
+        }
         if (r.outcome === 'clone-unsupported') unsupported = true; // not APFS — stop asking
         if (r.outcome !== 'not-settled') {
           void log({ ts: Date.now(), path: t.archivedAbs, offset: t.offset, ...r });
@@ -275,6 +285,39 @@ export class Archiver {
     );
     console.log(`[archive] reclone pass: ${parts.join(' ')}`);
     await log({ ts: Date.now(), pass: tally.byOutcome });
+  }
+
+  /**
+   * Delete `.reclone-*` temp files older than an hour. recloneOne unlinks its
+   * own on every refusal, but a process killed mid-clone cannot, and nothing
+   * else ever would: the leftovers are full-size copies of a transcript, so
+   * one death during a pass could cost more disk than the pass reclaims. An
+   * hour is far longer than any single clone and shorter than the interval,
+   * so a live pass's own temp is never in range.
+   */
+  private async sweepRecloneTemps(): Promise<void> {
+    const cutoff = Date.now() - 3600_000;
+    const walk = async (dir: string): Promise<void> => {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const abs = join(dir, e.name);
+        if (e.isDirectory()) {
+          await walk(abs);
+        } else if (e.name.startsWith('.reclone-')) {
+          const st = await stat(abs).catch(() => null);
+          if (st && st.mtimeMs < cutoff) {
+            await unlink(abs).catch(() => {});
+            console.warn(`[archive] swept abandoned reclone temp ${abs}`);
+          }
+        }
+      }
+    };
+    await walk(this.archiveDir);
   }
 
   /** Queue one file (deduped by path) and make sure the drain loop is running. */

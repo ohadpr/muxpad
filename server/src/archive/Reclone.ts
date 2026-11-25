@@ -110,6 +110,21 @@ export function isSealedArchiveName(path: string): boolean {
 /**
  * Replace one settled mirror with an APFS clone of its source, verified
  * byte-identical first. Never throws; every refusal is an outcome.
+ *
+ * ── CALL THIS ONLY AS THE MIRROR'S SOLE WRITER ───────────────────────────
+ *
+ * Every check here is made before the `rename`, so they bound what can be
+ * true at that instant and nothing after it. A write already in flight on the
+ * old inode completes AFTER the swap and lands in a file no longer at this
+ * path: the mirror loses those bytes while the ledger still counts them, and
+ * a later pass sees source size == offset and never recopies. The
+ * `raced-repaired` arm below narrows that window; it cannot close it, because
+ * no sequence of stats can prove every other writer has finished.
+ *
+ * So the guarantee comes from exclusion, not detection: the only caller is
+ * Archiver.reclonePassNow, under the same per-path lock its own appends take
+ * (`around`), which makes an in-flight append impossible rather than
+ * unlikely.
  */
 export async function recloneOne(t: RecloneTarget, opts: RecloneOpts = {}): Promise<RecloneResult> {
   const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
@@ -163,6 +178,13 @@ export async function recloneOne(t: RecloneTarget, opts: RecloneOpts = {}): Prom
     // filesystems or on a filesystem without clones; per its man page those
     // are the only fallback cases, so both are ruled out first: APFS, and the
     // source on the same device as the mirror.
+    // THESE TWO FAILURES ARE NOT THE SAME FAILURE, and conflating them cost
+    // the pass dearly: the caller stops asking on `clone-unsupported` (right
+    // — the volume will not clone for any file), so routing a per-file `cp`
+    // error there turned ONE unreadable source into a permanent barrier that
+    // every later file sat behind, hour after hour. A volume verdict is
+    // `clone-unsupported`; anything about this one file is `error`, and the
+    // pass moves on to the next.
     try {
       const fs = await statfs(dirname(t.archivedAbs));
       if (process.platform !== 'darwin' || fs.type !== APFS_FTYPE || src.dev !== arch.dev) {
@@ -172,10 +194,14 @@ export async function recloneOne(t: RecloneTarget, opts: RecloneOpts = {}): Prom
           detail: `fstype=${fs.type} dev ${src.dev}/${arch.dev}`,
         };
       }
+    } catch (err) {
+      return { outcome: 'clone-unsupported', bytes: 0, detail: `statfs: ${String(err)}` };
+    }
+    try {
       tmpLive = true;
       await execFileP('/bin/cp', ['-c', t.sourcePath, tmp]);
     } catch (err) {
-      return { outcome: 'clone-unsupported', bytes: 0, detail: String(err) };
+      return { outcome: 'error', bytes: 0, detail: `cp -c: ${String(err)}` };
     }
     const cloned = await stat(tmp);
     const srcAfter = await stat(t.sourcePath);
@@ -270,6 +296,12 @@ export interface RecloneTally {
  * Run `recloneOne` over many targets in batches, pausing between batches so
  * the owner's machine stays responsive. `onResult` sees every outcome (the
  * caller logs; this function does not know where logs go).
+ *
+ * `around` IS REQUIRED, AND THAT IS THE POINT — see the single-writer note on
+ * `recloneOne`. An out-of-process pass used to exist (reclone-cli.ts, deleted
+ * 2026-11-25) that passed no lock; a review reproduced a lost append through
+ * it. A caller that genuinely owns the file alone passes `(_t, fn) => fn()`
+ * and has then said so deliberately, which is the whole difference.
  */
 export async function reclonePass(
   targets: Iterable<RecloneTarget>,
@@ -278,9 +310,9 @@ export async function reclonePass(
     pauseMs?: number;
     shouldStop?: () => boolean;
     onResult?: (t: RecloneTarget, r: RecloneResult) => void;
-    /** Wraps each file, e.g. the archiver's per-path lock. */
-    around?: <T>(t: RecloneTarget, fn: () => Promise<T>) => Promise<T>;
-  } = {},
+    /** Wraps each file in the writer's per-path lock. Required; see above. */
+    around: <T>(t: RecloneTarget, fn: () => Promise<T>) => Promise<T>;
+  },
 ): Promise<RecloneTally> {
   const tally: RecloneTally = { byOutcome: {}, recloned: [] };
   const batch = opts.batchFiles ?? 50;
@@ -288,8 +320,7 @@ export async function reclonePass(
   let i = 0;
   for (const t of targets) {
     if (opts.shouldStop?.()) break;
-    const run = () => recloneOne(t, opts);
-    const r = opts.around ? await opts.around(t, run) : await run();
+    const r = await opts.around(t, () => recloneOne(t, opts));
     const e = tally.byOutcome[r.outcome] ?? { files: 0, bytes: 0 };
     e.files += 1;
     e.bytes += r.outcome === 'recloned' || r.outcome === 'raced-repaired' ? r.bytes : t.offset;
