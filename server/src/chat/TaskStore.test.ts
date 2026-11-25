@@ -89,12 +89,60 @@ describe('the lifecycle', () => {
     expect(tasks.get(t.id)?.state).toBe('done');
   });
 
-  it('refuses to close a task twice — the first close is the one that counts', () => {
+  // DONE IS TERMINAL; BLOCKED IS NOT. This pair used to be one test asserting
+  // that blocked → done was a refused "second close", which read as caution
+  // and was a bug: `task done <blocked-id>` reported success, changed nothing,
+  // and the row stayed blocked — so a later human message reopened work the
+  // user had already settled. Blocked means it stopped to ASK, and one of the
+  // answers is "that is finished".
+  it('lets a blocked task be finished — stopping to ask is not a close', () => {
     const t = tasks.create('tab1', { request: 'r' });
-    tasks.block(t.id, 'first');
-    tasks.finish(t.id, 'second');
-    expect(tasks.get(t.id)?.state).toBe('blocked');
+    tasks.block(t.id, 'needs a decision');
+    expect(tasks.finish(t.id, 'settled in the meeting')).toBe(true);
+    expect(tasks.get(t.id)?.state).toBe('done');
+    expect(tasks.get(t.id)?.evidence).toBe('settled in the meeting');
+  });
+
+  it('refuses to reopen or rewrite a DONE task, and says it changed nothing', () => {
+    const t = tasks.create('tab1', { request: 'r' });
+    tasks.finish(t.id, 'first');
+    expect(tasks.finish(t.id, 'second')).toBe(false);
+    tasks.block(t.id, 'second');
+    tasks.reopen(t.id);
+    expect(tasks.get(t.id)?.state).toBe('done');
     expect(tasks.get(t.id)?.evidence).toBe('first');
+  });
+});
+
+/**
+ * WHAT A HUMAN SPEAKING BRINGS BACK. "Blocked" means the chat stopped to ask,
+ * so a human saying anything should resume it — but a review found the
+ * caller searching the last five rows for anything blocked, which resurrected
+ * work two tasks stale and let the next turn continue it automatically.
+ */
+describe('reopening what a human answered', () => {
+  it('brings back the blocked task when it is still the live one', () => {
+    const t = tasks.create('tab1', { request: 'r' });
+    tasks.block(t.id, 'which account?');
+    expect(tasks.reopenLatestBlocked('tab1')).toBe(true);
+    expect(tasks.get(t.id)?.state).toBe('open');
+  });
+
+  it('leaves a blocked task shut once newer work has come and gone', () => {
+    const stale = tasks.create('tab1', { request: 'the old job' });
+    tasks.block(stale.id, 'which account?');
+    now += 1000;
+    const newer = tasks.create('tab1', { request: 'something else' });
+    tasks.finish(newer.id, 'shipped');
+    expect(tasks.reopenLatestBlocked('tab1')).toBe(false);
+    expect(tasks.get(stale.id)?.state).toBe('blocked');
+  });
+
+  it('does nothing in a chat whose latest task is open, or which has none', () => {
+    expect(tasks.reopenLatestBlocked('tab-empty')).toBe(false);
+    const t = tasks.create('tab1', { request: 'r' });
+    expect(tasks.reopenLatestBlocked('tab1')).toBe(false);
+    expect(tasks.get(t.id)?.state).toBe('open');
   });
 });
 

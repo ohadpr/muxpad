@@ -138,13 +138,26 @@ export class TaskStore {
    *  by the schema: "done" with nothing to point at is the failure mode this
    *  whole thing exists for (11/09: a chat declared completion, six defects
    *  remained), but a row written by an older client must still be storable. */
-  finish(id: string, evidence: string | null): void {
+  /**
+   * A BLOCKED TASK CAN BE FINISHED, and it has to be: "blocked" means it
+   * stopped to ask, and one of the answers is "never mind, that is done" or
+   * "we settled it elsewhere". This matched `state = 'open'` only, so
+   * `task done <blocked-id>` reported success and changed nothing — the row
+   * stayed blocked, and a later human message reopened it. Found by review.
+   *
+   * Returns whether a row moved, so a caller can tell the difference between
+   * finishing a task and naming one that was already closed.
+   */
+  finish(id: string, evidence: string | null): boolean {
     const at = this.now();
-    this.db
-      .prepare(
-        "UPDATE tasks SET state = 'done', evidence = ?, updated_at = ?, closed_at = ? WHERE id = ? AND state = 'open'",
-      )
-      .run(evidence, at, at, id);
+    return (
+      this.db
+        .prepare(
+          `UPDATE tasks SET state = 'done', evidence = ?, updated_at = ?, closed_at = ?
+            WHERE id = ? AND state IN ('open', 'blocked')`,
+        )
+        .run(evidence, at, at, id).changes > 0
+    );
   }
 
   block(id: string, why: string): void {
@@ -165,6 +178,24 @@ export class TaskStore {
         "UPDATE tasks SET state = 'open', updated_at = ?, closed_at = NULL WHERE id = ? AND state = 'blocked'",
       )
       .run(this.now(), id);
+  }
+
+  /**
+   * A HUMAN SPOKE: bring this chat's task back, if the one that stopped to ask
+   * is still the live one.
+   *
+   * ONLY THE MOST RECENT TASK QUALIFIES. The caller used to search the last
+   * five rows for anything blocked, so: block task A, create and finish task
+   * B, say anything at all — and A came back, after which the next turn could
+   * receive an automatic continuation of work two tasks stale. A blocked task
+   * with newer work behind it has been superseded by events, whatever its row
+   * still says. Returns whether anything reopened.
+   */
+  reopenLatestBlocked(tabId: string): boolean {
+    const newest = this.listFor(tabId, 1)[0];
+    if (newest?.state !== 'blocked') return false;
+    this.reopen(newest.id);
+    return true;
   }
 
   /** Stamp a continuation as sent: one more spent, and remember the

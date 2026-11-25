@@ -1841,11 +1841,9 @@ export function attachWsServer(deps: {
       tasks.resetBudget(tabId);
       return;
     }
-    const blocked = tasks.listFor(tabId, 5).find((t) => t.state === 'blocked');
-    if (blocked) {
-      tasks.reopen(blocked.id);
-      tasks.resetBudget(tabId);
-    }
+    // Only the chat's MOST RECENT task may come back — see
+    // TaskStore.reopenLatestBlocked for what reopening an older one did.
+    if (tasks.reopenLatestBlocked(tabId)) tasks.resetBudget(tabId);
   };
 
   // Submit a user message. Idle + connected + nothing already waiting → start
