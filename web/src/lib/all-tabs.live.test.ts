@@ -208,7 +208,7 @@ describe('a response that predates a push', () => {
     listAllTabs.mockImplementation(async () => ({ workspaces: SERVER }));
   });
 
-  it('is not published over the push, and a fresh fetch follows', async () => {
+  it('replays the push over the response without another full fetch', async () => {
     await loadAllTabs();
     vi.advanceTimersByTime(10_000); // past FRESH_MS
     listAllTabs.mockClear();
@@ -228,8 +228,8 @@ describe('a response that predates a push', () => {
     await settle();
     await settle();
     expect(row('t2')?.name).toBe('renamed');
-    // …and it went back for an answer that is at least as new as the push.
-    expect(listAllTabs).toHaveBeenCalledTimes(2);
+    // The pushed row already is the newer answer.
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
   });
 
   it('applies on the FIRST fetch too, when the push had no corpus to patch', async () => {
@@ -246,6 +246,66 @@ describe('a response that predates a push', () => {
     await settle();
     await settle();
     expect(row('t2')?.done).toBe(true);
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays a sidebar list during first load and preserves fetched report text', async () => {
+    hold();
+    const old = snapshot();
+    old[0]!.tabs[0] = tab('t1', { spawn_report: 'held report', spawn_report_state: 'ok' });
+    const loading = loadAllTabs();
+    mergeWorkspaceTabs('w1', [tab('t1', { name: 'fresh sidebar', spawn_report_state: 'ok' })]);
+    pending.shift()?.({ workspaces: old });
+    await loading;
+    await settle();
+    expect(row('t1')).toMatchObject({ name: 'fresh sidebar', spawn_report: 'held report' });
+    expect(row('t2')).toBeUndefined();
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays adds, updates, removes and lists in arrival order', async () => {
+    hold();
+    const old = snapshot();
+    const loading = loadAllTabs();
+    emit({ type: 'tab.added', workspace_id: 'w1', tab: tab('new') } as MuxpadEvent);
+    emit({ type: 'tab.updated', tab: tab('new', { name: 'renamed new' }) } as MuxpadEvent);
+    mergeWorkspaceTabs('w1', [tab('new', { name: 'sidebar' }), tab('t1')]);
+    emit({ type: 'tab.updated', tab: tab('new', { name: 'latest' }) } as MuxpadEvent);
+    emit({ type: 'tab.removed', tab_id: 't1' } as MuxpadEvent);
+    pending.shift()?.({ workspaces: old });
+    await loading;
+    await settle();
+    expect(row('new')?.name).toBe('latest');
+    expect(row('t1')).toBeUndefined();
+    expect(row('t2')).toBeUndefined();
+    expect(row('t3')).toBeDefined();
+    expect(listAllTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries an add whose workspace metadata is missing from the response', async () => {
+    hold();
+    const old = snapshot();
+    const loading = loadAllTabs();
+    SERVER = [...SERVER, { id: 'w3', slug: 'new', name: 'New', tabs: [tab('new')] }];
+    emit({ type: 'tab.added', workspace_id: 'w3', tab: tab('new') } as MuxpadEvent);
+    pending.shift()?.({ workspaces: old });
+    await loading;
+    await settle();
+    expect(row('new')).toBeDefined();
+    expect(listAllTabs).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds the replay journal and falls back to one fresh request on overflow', async () => {
+    hold();
+    const old = snapshot();
+    const loading = loadAllTabs();
+    for (let i = 0; i < 4100; i++)
+      emit({ type: 'tab.updated', tab: tab('t2', { name: `push ${i}` }) } as MuxpadEvent);
+    SERVER[0]!.tabs[1] = tab('t2', { name: 'server latest' });
+    pending.shift()?.({ workspaces: old });
+    await loading;
+    await settle();
+    expect(row('t2')?.name).toBe('server latest');
     expect(listAllTabs).toHaveBeenCalledTimes(2);
   });
 

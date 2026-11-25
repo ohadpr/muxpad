@@ -1,4 +1,4 @@
-import { CHAT_DECAY_DAYS, type Tab } from '@muxpad/shared';
+import { CHAT_DECAY_DAYS, type MuxpadEvent, type Tab } from '@muxpad/shared';
 import { api } from '../api';
 import { subscribe, subscribeResync } from '../events';
 import type { WorkspaceTabs } from './nav-search';
@@ -75,22 +75,40 @@ import type { WorkspaceTabs } from './nav-search';
 let cache: WorkspaceTabs[] | null = null;
 let settledAt = 0;
 let inFlight: Promise<WorkspaceTabs[]> | null = null;
-/**
- * Bumped by everything that knows something NEWER than a request already in
- * flight: a push, a merged workspace list, a status edge. (A resync has its own
- * queue below and needs none of this.)
- *
- * ─── AN OLDER ANSWER MUST NOT OVERWRITE A NEWER ONE ──────────────────────────
- * `/tabs/all` issued before a push can land after it, carrying the pre-push row.
- * `loadAllTabs` used to publish it regardless and call the corpus fresh — the
- * renamed chat got its old name back, a retired one went back to `working`, on
- * every chip and card, and nothing healed it (no poll; and a status-edge fetch
- * fired meanwhile simply JOINED the stale request). The per-workspace cache in
- * `tabs.ts` guards its fetches with versions for exactly this; the corpus had no
- * equivalent. So a request remembers the generation it was issued at, and a
- * landing that finds it moved is not published — the next fetch is, instead.
- */
+/** Status edges cannot be replayed from a row and still require a fresh read.
+ * Row pushes and landed workspace lists are replayed instead: a boot measured
+ * two 2.82 MB responses because its own sidebar list invalidated the first. */
 let generation = 0;
+type CorpusChange = (groups: WorkspaceTabs[]) => WorkspaceTabs[];
+let inFlightChanges: CorpusChange[] | null = null;
+// A hung request must not retain an unlimited stream of pushed rows. On
+// overflow use the existing bounded supersession retry instead of replaying.
+const MAX_IN_FLIGHT_CHANGES = 4096;
+function rememberChange(change: CorpusChange): void {
+  if (!inFlightChanges) return;
+  if (inFlightChanges.length === MAX_IN_FLIGHT_CHANGES) {
+    generation++;
+    inFlightChanges = null;
+  } else inFlightChanges.push(change);
+}
+
+type RowEvent = Extract<MuxpadEvent, { type: 'tab.updated' | 'tab.added' | 'tab.removed' }>;
+function replayRow(groups: WorkspaceTabs[], event: RowEvent): WorkspaceTabs[] {
+  return groups.map((g) => {
+    if (event.type === 'tab.removed')
+      return { ...g, tabs: g.tabs.filter((t) => t.id !== event.tab_id) };
+    const index = g.tabs.findIndex((t) => t.id === event.tab.id);
+    if (index >= 0) {
+      const tabs = [...g.tabs];
+      tabs[index] = event.tab;
+      return { ...g, tabs };
+    }
+    return event.type === 'tab.added' && g.id === event.workspace_id
+      ? { ...g, tabs: [...g.tabs, event.tab] }
+      : g;
+  });
+}
+
 const listeners = new Set<(groups: WorkspaceTabs[]) => void>();
 
 function publish(next: WorkspaceTabs[]): void {
@@ -120,17 +138,14 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
  * do not hold is simply not our business yet — the next `loadAllTabs` gets it.
  */
 const unsubscribeLive = subscribe((e) => {
-  if (!cache) {
-    // Nothing to patch — but a FIRST fetch may be travelling, and it was asked
-    // before this event happened. Mark it superseded so its answer is not
-    // served as current (see `generation`). Still no fetch of our own.
-    if (
-      inFlight &&
-      (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed')
-    )
-      generation++;
-    return;
+  if (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed') {
+    rememberChange((groups) => {
+      // No workspace metadata to replay an add into: retain the retry backstop.
+      if (e.type === 'tab.added' && !groups.some((g) => g.id === e.workspace_id)) generation++;
+      return replayRow(groups, e);
+    });
   }
+  if (!cache) return;
   if (e.type === 'tab.updated') {
     let hit = false;
     const next = cache.map((g) => {
@@ -146,7 +161,6 @@ const unsubscribeLive = subscribe((e) => {
     // would be work with no reader — and `sortSidebarTabs` is the sidebar's
     // business, applied to the sidebar's own cache.
     if (hit) {
-      generation++;
       publish(next);
     }
     return;
@@ -167,7 +181,6 @@ const unsubscribeLive = subscribe((e) => {
     // short-circuited by FRESH_MS. This costs no request of its own; it only
     // declines to serve a known-incomplete answer as a current one. (Reachable
     // whenever a workspace is created after the corpus was fetched.)
-    generation++;
     if (hit) publish(next);
     else settledAt = 0;
     return;
@@ -180,7 +193,6 @@ const unsubscribeLive = subscribe((e) => {
       return { ...g, tabs: g.tabs.filter((t) => t.id !== e.tab_id) };
     });
     if (hit) {
-      generation++;
       publish(next);
     }
   }
@@ -317,11 +329,14 @@ function keepReportText(fresh: Tab, heldById: Map<string, Tab>): Tab {
 }
 
 export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
-  if (!cache) {
-    // A list that landed while the first corpus fetch travels is newer than it.
-    if (inFlight) generation++;
-    return;
-  }
+  rememberChange((groups) =>
+    groups.map((g) => {
+      if (g.id !== workspaceId) return g;
+      const held = new Map(g.tabs.map((t) => [t.id, t]));
+      return { ...g, tabs: tabs.map((t) => keepReportText(t, held)) };
+    }),
+  );
+  if (!cache) return;
   const group = cache.find((g) => g.id === workspaceId);
   // A workspace outside the corpus we hold — nothing to merge into. Same
   // reasoning as `tab.added` above: an id with no name is not a group.
@@ -339,7 +354,6 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   const heldById = new Map(group.tabs.map((t) => [t.id, t]));
   const merged = tabs.map((t) => keepReportText(t, heldById));
   if (sameRows(group.tabs, merged)) return;
-  generation++;
   publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
 }
 
@@ -495,23 +509,29 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
   if (cache && Date.now() - settledAt < FRESH_MS) return cache;
   if (inFlight) return inFlight;
   const issuedAt = generation;
+  const changes: CorpusChange[] = [];
+  inFlightChanges = changes;
   let superseded = false;
   inFlight = api
     .listAllTabs()
     .then((res) => {
+      let next = res.workspaces;
+      if (generation === issuedAt) {
+        for (const change of changes) next = change(next);
+      }
       if (generation !== issuedAt) {
         // Something newer than this answer arrived while it travelled (see
         // `generation`). Keep what we hold, do NOT mark it fresh, and go again
         // once this request has cleared. With nothing held (a first fetch), an
         // old answer beats none — the retry corrects it.
         superseded = true;
-        return cache ?? publishFetched(res.workspaces);
+        return cache ?? publishFetched(next);
       }
       supersededRetries = 0;
       settledAt = Date.now();
       // Landing is what makes the corpus fresh; publishing is only what tells
       // the readers, and an answer identical to the one they hold is not news.
-      return publishFetched(res.workspaces);
+      return publishFetched(next);
     })
     .catch((err: unknown) => {
       // 404 = the route isn't there (older server). Anything else is a blip
@@ -521,6 +541,7 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
     })
     .finally(() => {
       inFlight = null;
+      inFlightChanges = null;
       if (superseded && supersededRetries < MAX_SUPERSEDED_RETRIES) {
         supersededRetries++;
         void loadAllTabs();
@@ -534,6 +555,7 @@ export function resetAllTabsCache(): void {
   cache = null;
   settledAt = 0;
   inFlight = null;
+  inFlightChanges = null;
   unsupported = false;
   refetchQueued = false;
   generation = 0;
