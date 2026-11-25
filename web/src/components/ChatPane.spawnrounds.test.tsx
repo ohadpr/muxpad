@@ -286,7 +286,9 @@ describe('the conversation reads its rounds only when its children move', () => 
     await mount([tab(PARENT), child(), tab('stranger')]);
     loads.length = 0;
     await act(async () =>
-      root?.render(<ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} agentNative />),
+      root?.render(
+        <ChatPane paneId={`${PARENT}-pane`} tabId={PARENT} active={false} agentNative />,
+      ),
     );
     await advance(SPAWN_ROUNDS_NET_MS * 3);
     expect(mine()).toEqual([]);
