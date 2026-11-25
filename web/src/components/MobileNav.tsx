@@ -13,7 +13,7 @@ import { flushSync } from 'react-dom';
 import { CHAT_SECTIONS, type ChatSection, activityChats, unreadChats } from '../lib/chat-sections';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
 import { toSearchableTabs } from '../lib/nav-search';
-import { useAllChats } from '../lib/use-all-chats';
+import { useAllChats, useChatCorpus } from '../lib/use-all-chats';
 import { useTabs } from '../tabs';
 import { useDocumentTitle } from '../use-document-title';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
@@ -233,6 +233,40 @@ const SECTION_LABEL: Record<ChatSection, string> = {
   activity: 'Activity',
   search: 'Search',
 };
+
+/**
+ * THE SWITCHER, FOR A CHAT RATHER THAN THE LIST.
+ *
+ * "Maintain the bottom ribbon bar in chat windows as well, not just in the
+ * chat list." The bar lived inside MobileChatList, so stepping into a chat
+ * took the app's whole navigation off the screen and the only way anywhere
+ * was the back button — one destination, via a detour through the list.
+ *
+ * The section lives in sessionStorage (readSection/writeSection), which is
+ * what makes this possible without lifting state: this bar records the
+ * section and navigates to the list, and the list reads it on mount and opens
+ * there. One source of truth, two renderers, no prop drilling through
+ * AppLayout.
+ *
+ * The CURRENT section stays marked while you are in a chat — you came from
+ * somewhere and that is where Back goes, which is how Slack behaves when you
+ * open a conversation from a tab.
+ */
+export function MobileChatSectionBar() {
+  const navigate = useNavigate();
+  const corpus = useChatCorpus();
+  const section = readSection();
+  return (
+    <SectionBar
+      section={section}
+      unread={unreadChats(corpus).length}
+      onPick={(next) => {
+        writeSection(next);
+        void navigate({ to: CHAT_LIST_PATH });
+      }}
+    />
+  );
+}
 
 /** The switcher. Bottom of the screen, icon over label, as Slack's is. */
 function SectionBar({

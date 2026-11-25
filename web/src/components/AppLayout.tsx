@@ -13,7 +13,7 @@ import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { CommandPalette } from './CommandPalette';
 import { DestinationRail } from './DestinationRail';
-import { MobileChatHeader, MobileChatList, useBackToList } from './MobileNav';
+import { MobileChatHeader, MobileChatList, MobileChatSectionBar, useBackToList } from './MobileNav';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
@@ -289,6 +289,21 @@ export function AppLayout() {
                 </div>
               ))}
             </div>
+            {/* ─── THE RIBBON STAYS, INSIDE A CHAT ──────────────────────────
+                "Maintain the bottom ribbon bar in chat windows as well, not
+                just in the chat list." It lived inside MobileChatList, so
+                opening a chat took the whole of the app's navigation off the
+                screen and left exactly one way out — Back, into the list, and
+                only then anywhere else.
+                LAST CHILD, after the hosts: the hosts take `flex: 1` of this
+                column, so anything before them is pushed to the top — which
+                is where this first landed, measured at y=46 directly under
+                the header. Beside them rather than inside, because the hosts
+                are kept alive per workspace and the bar belongs to the phone.
+                Hidden on the list itself, which renders its own; the section
+                travels through sessionStorage rather than props (see
+                MobileChatSectionBar). */}
+            {chatList && !onChatList && <MobileChatSectionBar />}
           </div>
         </div>
       ) : (
