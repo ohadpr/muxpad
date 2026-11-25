@@ -1,0 +1,270 @@
+{
+  "date": "2026-11-25",
+  "scope": "Browser only. No server/broker changes, restarts or push.",
+  "method": {
+    "browser": "Existing muxpad Chromium connected over CDP; no launched browser.",
+    "live": "Shipping app on loopback; PerformanceObserver longtask/paint, Resource Timing, CDP heap/DOM counters and sampling CPU profiler.",
+    "functions": "Production Vite build in /tmp, minify=false, temporary transform wrapping selected functions with performance.now() counters; isolated loopback preview against the real backend.",
+    "switches": "Navigation to paint of the active mounted view, timed entirely in the page with requestAnimationFrame; excludes automation click/actionability latency. Does not require complete transcript history.",
+    "first_transcript": "HTTP cache disabled, new page, MutationObserver detects the first visible .chat-turn and records the next animation frame. Separate from first-contentful-paint.",
+    "controlled_publish": "30 flushSync corpus publishes with identical row values but new corpus array identities; four mounted chats; final restoration publish included in call counts.",
+    "race": "Intercept the real /api/tabs/all response, delay delivery 300ms, allow sidebar requests/pushes to land. Only the all-tabs implementation differs in before/after builds.",
+    "limits": "Live accounts and concurrent coding work changed during sampling. Whole-session timings and long-task totals are observations, not a controlled overall speedup. Function totals are inclusive and must not be added together."
+  },
+  "ranked_findings": [
+    {
+      "rank": 1,
+      "name": "Duplicate initial corpus requests",
+      "live_decoded_bytes": [1954867, 1954867],
+      "controlled_before": [
+        {
+          "bytes": 1958280
+        },
+        {
+          "bytes": 1958280
+        },
+        {
+          "bytes": 1958280
+        }
+      ],
+      "controlled_after": [
+        {
+          "bytes": 1958280
+        }
+      ],
+      "fix_commit": "eabbaecc",
+      "risk": "Medium: ordered replay must preserve newer rows, removals and report text. Status/gap/overflow backstops still refetch. Journal capped at 4096.",
+      "initial_probe_decoded_bytes": [2823072, 2823072]
+    },
+    {
+      "rank": 2,
+      "name": "Transcript/corpus render fanout",
+      "baseline_ChatPane": {
+        "calls": 388,
+        "ms": 1017.5,
+        "max": 45.7
+      },
+      "baseline_toMentionChats": {
+        "calls": 92,
+        "ms": 584.7,
+        "max": 38.4
+      },
+      "controlled_publish_before": {
+        "voice_passes": 124,
+        "median_ms": 9.899999618530273,
+        "total_ms": 494.19999980926514
+      },
+      "controlled_publish_after": {
+        "voice_passes": 0,
+        "median_ms": 6,
+        "total_ms": 213
+      },
+      "projection_40_readers": {
+        "rows": 2387,
+        "cold40": {
+          "median": 48.10000038146973,
+          "min": 39.09999942779541,
+          "max": 61.19999980926514
+        },
+        "shared40": {
+          "median": 0,
+          "min": 0,
+          "max": 0.8999996185302734
+        }
+      },
+      "fix_commits": ["53c1dba8", "c9a5ec1c"],
+      "risk": "Low with immutable published corpora. WeakMap does not retain dead corpus keys. Completion membership still invalidates voice processing; report/chip metadata remains reactive."
+    },
+    {
+      "rank": 3,
+      "name": "Serialized corpus equality on poll landings",
+      "paired": {
+        "rows": 2013,
+        "bytes": 1619248,
+        "serialized": {
+          "median": 6.199999809265137,
+          "min": 5.699999809265137,
+          "max": 10.199999809265137
+        },
+        "compared": {
+          "median": 3,
+          "min": 2.59999942779541,
+          "max": 3.700000762939453
+        },
+        "merge": {
+          "median": 2.8000001907348633,
+          "min": 2.6999998092651367,
+          "max": 5.5
+        }
+      },
+      "baseline_rowsSignature": {
+        "calls": 14,
+        "ms": 91.7,
+        "max": 12
+      },
+      "fix_commit": "2a02721f",
+      "risk": "Low: compares JSON wire values directly, retains fill quantization, ignores key insertion order and omitted undefined fields."
+    },
+    {
+      "rank": 4,
+      "name": "Hidden chats rerender during navigation",
+      "before": {
+        "renders": 171,
+        "render_ms": 25.599992752075195,
+        "median_switch_ms": 115.0499997138977
+      },
+      "after": {
+        "renders": 45,
+        "render_ms": 8.10000228881836,
+        "median_switch_ms": 112.4500002861023
+      },
+      "switches": 12,
+      "mounted_chats": 4,
+      "fix_commit": "b5f45a49",
+      "risk": "Low: default React.memo over primitive props. Props, local state and context remain reactive. No demonstrated improvement to overall switching latency."
+    }
+  ],
+  "stableGroups": {
+    "already_fixed": true,
+    "browser_hits": 44,
+    "browser_calls": 52,
+    "changed_tabs_and_workspace_objects_still_invalidate": true
+  },
+  "first_paint_live": [
+    {
+      "fcp_ms": 332,
+      "transcript_ms": 1268.3999996185303,
+      "long_tasks": [
+        {
+          "at": 52,
+          "ms": 97
+        }
+      ]
+    },
+    {
+      "fcp_ms": 108,
+      "transcript_ms": 586.2000007629395,
+      "long_tasks": []
+    },
+    {
+      "fcp_ms": 144,
+      "transcript_ms": 600.8000001907349,
+      "long_tasks": []
+    }
+  ],
+  "first_paint_instrumented_source": [
+    {
+      "fcp_ms": 216,
+      "transcript_ms": 5294.199999809265,
+      "long_tasks": []
+    },
+    {
+      "fcp_ms": 232,
+      "transcript_ms": 428.5,
+      "long_tasks": []
+    },
+    {
+      "fcp_ms": 260,
+      "transcript_ms": 1121.4000005722046,
+      "long_tasks": [
+        {
+          "at": 105.10000038146973,
+          "ms": 69
+        }
+      ]
+    }
+  ],
+  "slow_first_transcript": {
+    "transcript_ms": 5294.199999809265,
+    "long_tasks": 0,
+    "boot_request_ms": 2213,
+    "tab_detail_request_ms": 1152
+  },
+  "socket_trace": {
+    "transcript_ms": 843.8999996185303,
+    "frames": [
+      {
+        "at_ms": 759.5,
+        "handler_ms": 0.39999961853027344,
+        "chars": 1729,
+        "type": "session"
+      },
+      {
+        "at_ms": 794.8999996185303,
+        "handler_ms": 0.19999980926513672,
+        "chars": 11934,
+        "type": "events"
+      },
+      {
+        "at_ms": 827.5999994277954,
+        "handler_ms": 0.10000038146972656,
+        "chars": 13529,
+        "type": "events"
+      },
+      {
+        "at_ms": 828.0999994277954,
+        "handler_ms": 0,
+        "chars": 33,
+        "type": "older-done"
+      }
+    ]
+  },
+  "final_15s_live_update_window": {
+    "ChatPane_renders": 90,
+    "voice_passes": 0,
+    "long_tasks_in_whole_run": []
+  },
+  "retention_after_visits": {
+    "initial_post_gc_heap_bytes": 13193400,
+    "post_visit_post_gc_heap_bytes": 26594720,
+    "initial_dom": {
+      "documents": 1,
+      "nodes": 740,
+      "jsEventListeners": 369
+    },
+    "post_visit_dom": {
+      "documents": 3,
+      "nodes": 1869,
+      "jsEventListeners": 593
+    },
+    "interpretation": "Retained chats/terminals/embedded documents, not evidence of a GC leak. Visited workspace/tab sets have no eviction limit."
+  },
+  "remaining_hazards": [
+    "One non-passive document capture wheel handler per XtermPane; removed on cleanup, but dispatch fans out across mounted terminals.",
+    "Mounted visited workspace/tab hosts have no eviction policy; hidden chat sockets/state remain live.",
+    "SwipeRow has one module-store subscription per row, cleaned up on unmount. Its global scroll listener is installed only while that row is open.",
+    "CardsView 30s and ChatPane spawn-rounds 60s timers lack document-hidden gating.",
+    "tab-detail-prime Map removes entries only when taken; TTL does not evict never-opened creations.",
+    "No reproducible infinite effect loop or accumulating listener leak found in inspected paths."
+  ],
+  "validation": {
+    "sabotage": {
+      "equality": "3 tests fail when JSON signatures restored",
+      "projection": "2 tests fail when WeakMap lookup bypassed",
+      "replay": "5 tests fail when replay removed",
+      "voice_membership": "1 integration test fails with unstable Set restored",
+      "memo": "1 integration test fails with memo replaced by identity wrapper"
+    },
+    "restored_targeted_files": [
+      "all-tabs.live",
+      "sidebar-freshness",
+      "chat-mention",
+      "ChatPane.corpus-performance",
+      "ChatPane.spawnrounds",
+      "ChatPane.stream",
+      "ChatPane.launch",
+      "use-all-chats.stable"
+    ],
+    "typecheck": "pnpm -s typecheck passed after concurrent unread fixture was corrected",
+    "full_web_suite": "not run",
+    "push": "not performed"
+  },
+  "long_task_observations": {
+    "live_baseline_durations_ms": [68, 89, 121, 59, 50, 55, 62, 119, 80],
+    "instrumented_baseline_durations_ms": [
+      62, 51, 50, 82, 60, 58, 58, 78, 174, 61, 60, 59, 94, 145, 85, 95
+    ],
+    "final_sample_durations_ms": [],
+    "interpretation": "Different live-update windows; not a controlled reduction attributable solely to these fixes."
+  }
+}
