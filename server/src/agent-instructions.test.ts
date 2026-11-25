@@ -421,35 +421,43 @@ describe('the archive section teaches the shape of the data', () => {
 
 describe('the calendar account trap', () => {
   /**
-   * The owner tried to create a calendar event and got 403. Not a missing
-   * feature — calendar-create has existed since Nov 11 and had made seven
-   * events — and not the week-long daemon outage either. The agent passed a
-   * bare Gmail address to `--account`, which resolves to the mail source and
-   * is not a calendar, so msgvault refused it.
+   * Written wrongly TWICE in one day, and the second time was mine.
    *
-   * The instructions named the flag and never said what shape its value is,
-   * and they also say `list-accounts` does not exist — so an agent could not
-   * discover the answer either. That combination is what made it a trap
-   * rather than a mistake.
+   * v1 named the flag and not the shape, so agents guessed. v2 said the bare
+   * address "always comes back 403" and demanded an account/calendar form —
+   * then an audit of the archive found that every calendar call which has
+   * ever WORKED used the bare account, and every failure used a different
+   * address with no calendar control. Both versions were written from one
+   * failure each, by someone who had not looked at the successes.
+   *
+   * So what is pinned here is NOT a form. It is that the document must not
+   * teach one: the rule is "an account with calendar control", the agent
+   * cannot discover which that is, and the honest instruction is to ask.
    */
-  // The msgvault detail lives in the `msgvault` HELP TOPIC, not in the
-  // resident seed — it is paged in when an agent asks, which is why the
-  // resident document has a character ceiling and this does not.
   const doc = INSTRUCTION_TOPICS.msgvault ?? '';
 
-  it('shows the account/calendar form, not just the flag name', () => {
-    expect(doc).toMatch(/me@example\.com\/me@example\.com/);
-    expect(doc).toMatch(/group\.calendar\.google\.com/);
+  it('states the rule as CONTROL, not as a string shape', () => {
+    expect(doc).toMatch(/calendar control/i);
   });
 
-  it('names the exact error a bare address produces', () => {
-    // So the next agent recognises it instead of reading it as a permissions
-    // problem and giving up.
-    expect(doc).toMatch(/enabled calendar source is required/);
+  it('does not DEMAND a specific account form', () => {
+    // The v2 mistake. Either form may work; what decides it is the account's
+    // permissions, and this document has been wrong in both directions
+    // already. The phrase it got wrong still appears — in quotation marks,
+    // recounting the error — so this checks for the DEMAND, not the words.
+    expect(doc).not.toMatch(/Pass the bare|is not a calendar at all/);
+    expect(doc).toMatch(/do not infer the form/i);
   });
 
-  it('says to ASK, since there is no way to discover the string', () => {
-    expect(doc).toMatch(/list-accounts/);
-    expect(doc.toLowerCase()).toMatch(/if you do not know the right string, ask/);
+  it('says to ASK, since there is no way to discover it', () => {
+    expect(doc).toMatch(/ask the\s+owner/i);
+    expect(doc).toMatch(/no accounts listing/i);
+  });
+
+  it('explains what the 403 actually means', () => {
+    // So the next agent reads it as "this account cannot drive a calendar"
+    // rather than as a permissions failure to escalate or work around.
+    expect(doc).toMatch(/403 calendar operation denied/);
+    expect(doc).toMatch(/reads like a permissions problem and is not one/);
   });
 });

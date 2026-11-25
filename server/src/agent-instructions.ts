@@ -423,21 +423,26 @@ export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  CALENDAR — AND \`--account\` IS A CALENDAR, NOT A MAILBOX. This is the one
-  that wastes an afternoon: msgvault names a calendar as ACCOUNT SLASH
-  CALENDAR, and the bare address you would reach for is the Gmail source,
-  which is not a calendar at all.
+  CALENDAR — \`--account\` MUST NAME AN ACCOUNT THAT HAS CALENDAR CONTROL,
+  and that is the whole rule. A mail address that happens to exist is not one.
 
-      me@example.com/me@example.com                       the owner's own
-      me@example.com/work@example.com                     another of theirs
-      me@example.com/c_family@group.calendar.google.com   a shared one
+  Written here twice, wrongly, in one day. The first version said nothing
+  about the account's shape and agents guessed. The second said the bare
+  address "always comes back 403" and that a slash form was required — then
+  an audit of the archive found every calendar call that has ever WORKED used
+  the bare account, and every failure used a different address that has no
+  calendar control. Both versions were written from one failure each, by
+  someone who had not looked at the successes.
 
-  Pass the bare \`me@example.com\` and every call comes back \`403 calendar
-  operation denied: enabled calendar source is required\` — which reads like
-  a permissions problem and is not one. It cost the owner a real attempt at
-  creating an event. If you do not know the right string, ASK: there is no
-  \`list-accounts\` for you to discover it with, so guessing produces a 403
-  and a person wondering why their calendar is broken.
+  So: do not guess, and do not infer the form from this paragraph. ASK the
+  owner which account to use, or use the one muxpad is configured with.
+  There is no accounts listing for you to discover it with, and a wrong guess
+  returns \`403 calendar operation denied: enabled calendar source is
+  required\` — which reads like a permissions problem and is not one. It is
+  "that account cannot drive a calendar".
+
+  \`--calendar=<id>\` names WHICH calendar of that account, and defaults to
+  the primary one.
 
   \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
   is busy and what overlaps (\`--account --start --end --tz\`);
