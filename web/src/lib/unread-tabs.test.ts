@@ -188,6 +188,51 @@ describe('pushes', () => {
   });
 });
 
+// A FAILED FIRST REQUEST IS NOT AN EMPTY INBOX. Open the UI while the server
+// is restarting and the first /unread fails, leaving the cache null — which
+// every path in the store used to treat as "nothing mounted to patch" and
+// return on. The mounted rail then drew zero and "You're all caught up" for
+// the rest of the session, no matter what arrived. Reproduced by review.
+describe('recovering from a failed first request', () => {
+  beforeEach(() => {
+    listUnreadTabs.mockRejectedValueOnce(new Error('server restarting'));
+  });
+
+  it('asks again on reconnect, instead of holding a null cache forever', async () => {
+    const seen: WorkspaceTabs[][] = [];
+    subscribeUnreadTabs((g) => seen.push(g));
+    expect(await loadUnreadTabs()).toEqual([]);
+    expect(cachedUnreadTabs()).toBeNull();
+
+    for (const h of resyncs) h();
+    await vi.waitFor(() => expect(listUnreadTabs).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(ids()).toEqual([['old'], ['t3']]));
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('asks again when a push says something became unread', async () => {
+    vi.useFakeTimers();
+    subscribeUnreadTabs(() => {});
+    await loadUnreadTabs();
+    expect(cachedUnreadTabs()).toBeNull();
+
+    emit({ type: 'tab.updated', tab: tab('t3', { unread: true }) } as MuxpadEvent);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(listUnreadTabs).toHaveBeenCalledTimes(2);
+    expect(ids()).toEqual([['old'], ['t3']]);
+  });
+
+  it('asks again when a landed workspace list carries unread rows', async () => {
+    vi.useFakeTimers();
+    subscribeUnreadTabs(() => {});
+    await loadUnreadTabs();
+    mergeUnreadWorkspace('w2', [tab('t3', { unread: true })]);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(listUnreadTabs).toHaveBeenCalledTimes(2);
+    expect(ids()).toEqual([['old'], ['t3']]);
+  });
+});
+
 describe('the chat you are on stays in the list', () => {
   const s = (id: string, ws: string, over: Partial<SearchableTab> = {}): SearchableTab => ({
     tabId: id,

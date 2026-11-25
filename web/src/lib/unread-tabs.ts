@@ -108,6 +108,12 @@ function scheduleRefetch(): void {
       lastRefetchAt = Date.now();
       settledAt = 0;
       if (inFlight) generation++;
+      // NEWS RESTORES THE BUDGET. The retry cap exists to stop a request that
+      // keeps superseding itself from looping; it is not a verdict on the
+      // inbox. Left latched, an exhausted budget meant later genuinely new
+      // unread rows in an unpolled workspace were abandoned for the session.
+      // The 2 s floor above is what bounds the rate, not the counter.
+      supersededRetries = 0;
       void loadUnreadTabs();
     },
     Math.max(REFETCH_MS, REFETCH_MIN_GAP_MS - since),
@@ -121,6 +127,10 @@ function scheduleRefetch(): void {
 export function mergeUnreadWorkspace(workspaceId: string, tabs: readonly Tab[]): void {
   if (!cache) {
     if (inFlight) generation++;
+    // A workspace list in hand that HAS unread rows, and no answer of our own
+    // to put them in: ask for one. (We cannot publish from here — this is one
+    // workspace, and the inbox is every workspace in server order.)
+    else if (tabs.some((t) => t.unread === true)) scheduleRefetch();
     return;
   }
   const next = tabs.filter((t) => t.unread === true).map(stripReport);
@@ -157,8 +167,18 @@ const unsubscribeLive = subscribe((e) => {
     if (
       inFlight &&
       (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed')
-    )
+    ) {
       generation++;
+    } else if (!inFlight && e.type !== 'tab.removed') {
+      // NO CACHE IS NOT THE SAME AS AN EMPTY INBOX, and this is where that
+      // was conflated. A first request that failed (open the UI during a
+      // server restart) leaves `cache` null, and every path below returns
+      // early on that — so a mounted rail kept drawing zero and "You're all
+      // caught up" for the rest of the session, however much arrived.
+      // Anything that might mean unread news is now reason enough to ask
+      // again, under the same coalescing and 2 s floor as any other refetch.
+      scheduleRefetch();
+    }
     return;
   }
   if (e.type === 'tab.updated') {
@@ -208,7 +228,9 @@ const unsubscribeResync = subscribeResync(() => {
   // Pushes are not replayed: forget the edge memo so the next one counts.
   lastPaneUnread.clear();
   settledAt = 0;
-  if (!cache || listeners.size === 0) return;
+  // Not `!cache`: a reconnect is exactly when a failed first request should
+  // be retried. See the null-cache branch in the live handler.
+  if (listeners.size === 0) return;
   if (inFlight) generation++;
   void loadUnreadTabs();
 });
