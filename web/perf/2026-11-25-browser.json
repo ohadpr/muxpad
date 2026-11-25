@@ -266,5 +266,36 @@
     ],
     "final_sample_durations_ms": [],
     "interpretation": "Different live-update windows; not a controlled reduction attributable solely to these fixes."
+  },
+  "ranked_next_steps": [
+    {
+      "rank": 1,
+      "step": "Measure and shorten the critical path to the first visible transcript after the combined build is served.",
+      "why": "The 5.29s load had zero browser long tasks, with /api/boot waiting 2.21s and tab detail 1.15s. Repeat with fixed chat, workload and cache policy before claiming a user-visible improvement."
+    },
+    {
+      "rank": 2,
+      "step": "Measure and bound or pause retained hidden views; consolidate terminal wheel capture.",
+      "why": "Post-GC heap grew from 13.2 to 26.6 MB and JS event listeners from 369 to 593 after visits. Visited chats have no eviction policy. Each terminal installs a non-passive document capture wheel listener. Preserve drafts, scroll position and reconnect recovery; retention alone does not prove a leak."
+    },
+    {
+      "rank": 3,
+      "step": "Profile remaining transcript rendering and streaming before changing callbacks, context boundaries or per-event voice projections.",
+      "why": "The final 15-second update window still caused 90 ChatPane renders while voice-pipeline reruns were zero. Child-list callback identity, mention context and voice cloning on real transcript changes remain candidates."
+    },
+    {
+      "rank": 4,
+      "step": "Clean up hidden-document polling and expired, never-consumed primed tab details.",
+      "why": "CardsView and spawn-rounds timers lack document-hidden gating. tab-detail-prime removes entries on consumption rather than on expiry. These are lower-priority lifetime issues, without a demonstrated contribution to the switching complaint."
+    }
+  ],
+  "why_work_stopped": "The measured top fixes and structural-corpus integration were completed. Remaining work needs attribution after the combined deployment or changes deliberate keep-alive behavior. No comparable first-paint improvement was established; 115ms to 112ms warm-switch medians are within noise.",
+  "deployment": {
+    "five_performance_commits_require_rebuilt_web_bundle": true,
+    "browser_reload_required": true,
+    "server_restart_required_for_these_five_client_changes": false,
+    "verified_serving_behavior": "server/src/static-assets.ts reads index.html and /api/build fresh per request and serves assets from the web root. Rebuilding the served web bundle does not require remounting static routes.",
+    "live_bundle_replaced_during_this_work": false,
+    "scope": "Parallel server changes have their own restart requirements; this statement covers the five browser performance commits only."
   }
 }
