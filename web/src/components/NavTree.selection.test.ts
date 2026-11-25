@@ -990,8 +990,30 @@ describe('item 2 — the seams are WHITESPACE, not hairlines', () => {
     // of a bar starting at x=2.
     const left = Number.parseFloat(decl(edge, 'left'));
     expect(left).toBeGreaterThanOrEqual(2);
-    expect(Number.parseFloat(decl(edge, 'top'))).toBeGreaterThanOrEqual(5);
-    expect(Number.parseFloat(decl(edge, 'bottom'))).toBeGreaterThanOrEqual(5);
+    // ── AND IT RUNS THE ROW'S FULL HEIGHT, which reverses the inset above.
+    // The 5px inset made every pinned row its own capsule. The phone never
+    // did that (the sheet variant zeroes these), so on mobile the pinned
+    // rows' bars meet and the block reads as ONE line — "notice how on mobile
+    // the chat list shows the pinned chats indicator as one continuous line,
+    // I think that's nice", and the desktop now matches.
+    // What the inset bought was the bar sitting wholly inside the selected
+    // row's pill, clear of its 6px corner. That is given up deliberately: the
+    // selected row already carries the pill, and PINNED is a property of the
+    // BLOCK, so an unbroken rim says the true thing where eight capsules said
+    // "this row" eight times. Verified on screen, not inferred.
+    expect(Number.parseFloat(decl(edge, 'top'))).toBe(0);
+    expect(Number.parseFloat(decl(edge, 'bottom'))).toBe(0);
+    // Square, because a radius at each row boundary pinches the line back
+    // into segments at exactly the joins it has to cross.
+    expect(Number.parseFloat(decl(edge, 'border-radius'))).toBe(0);
+    // On the SIDEBAR the bar takes the rail's accent by name. The base rule
+    // keeps `--accent` so the mobile sheet — not an island — resolves the
+    // app's; but the selected ROW re-points --accent to the pane's, narrower
+    // than the island, and that turned one segment purple against the rail's
+    // yellow. Invisible while the mark was capsules; obvious once joined.
+    expect(NAV_CSS).toMatch(
+      /\.navtree\[data-variant="sidebar"\]\s+\.navtree-pin-edge\s*\{[^}]*background:\s*var\(--rail-accent\)/,
+    );
     expect(NAV_CSS).not.toMatch(/\.navtree-tab-row\[data-pinned='?"?true'?"?\]::(before|after)/);
 
     // IT SURVIVES EVERY OTHER STATE, which is the whole reason it moved off

@@ -1561,16 +1561,35 @@
      last attempt and survives this one. The pill's left corners are radius 6
      and the bar is inset 5px top and bottom, so it clears both curves. */
   left: 2px;
-  /* Short of the row's full height on purpose: a bar that runs edge to edge
-     reads as a divider between rows rather than as a mark on one. */
-  top: 5px;
-  bottom: 5px;
+  /* ── ONE LINE DOWN THE BLOCK, NOT A MARK PER ROW ──────────────────────
+     This read `top: 5px; bottom: 5px` with a 2px radius, and the note here
+     said why: "a bar that runs edge to edge reads as a divider between rows
+     rather than as a mark on one." That is true of ONE row and false of a
+     run of them. The phone has never done it — the sheet variant below zeroes
+     these insets — so on mobile the pinned rows' bars meet and the block
+     reads as a single unbroken rim. "Notice how on mobile the chat list shows
+     the pinned chats indicator as one continuous line. I think that's nice."
+     It is, and it says something truer than the capsules did. Pinned is a
+     property of the BLOCK: these chats sort above the divider together. One
+     line says "this region"; eight capsules say "this row, and this row, and
+     this row", which is a fact nobody needs per row.
+     Square ends for the same reason — a radius at each row boundary pinches
+     the line back into segments at exactly the joins it has to cross. The
+     rows carry no vertical margin, so zeroing the insets is all it takes.
+     The selected row's pill has radius 6 on its left corners and the bar sits
+     at x=2 beside it, so clearing that curve was never what the insets were
+     for; `left: 2px` is what does that, and it is unchanged. */
+  top: 0;
+  bottom: 0;
   width: 2px;
-  border-radius: 2px;
+  border-radius: 0;
   /* THE RAIL'S ACCENT EXPLICITLY, never the inherited one. The selected row
      re-points --accent to the PANE's, which is correct for everything painted
      ON the pill and wrong for this, which is painted beside it: a dark pane
-     accent on the dark rail is the "barely visible" half of the same bug. */
+     accent on the dark rail is the "barely visible" half of the same bug.
+     `--accent`, NOT the rail token by name: the island rebinds it, so the
+     rail gets the rail's value and the mobile sheet — which is not an island
+     — gets the app's. Naming --rail-accent here breaks the sheet. */
   background: var(--accent);
   z-index: 1;
 }
@@ -3807,4 +3826,17 @@ body.sidenav-resizing iframe {
    them through. */
 .navtree .navtree-tab-row[data-worker="true"] .navtree-name-text {
   color: var(--nt-ink-read);
+}
+
+/* ── …EXCEPT ON THE SELECTED ROW, WHICH REBINDS IT NARROWER THAN THE ISLAND
+   The rule above takes `--accent` so that the rail island and the mobile
+   sheet each resolve their own. But the SELECTED row re-points --accent to
+   the PANE's for everything painted on its pill, and the pin edge sits on
+   that row — so its segment came out rgb(94,82,232), the pane's purple,
+   against #fff0a0 for every other row in the block.
+   That was invisible while pinned was eight separate capsules and obvious
+   the moment they joined into one line, which is how it was found. Scoped to
+   the SIDEBAR only, so the sheet keeps resolving --accent for itself. */
+.navtree[data-variant="sidebar"] .navtree-pin-edge {
+  background: var(--rail-accent);
 }
