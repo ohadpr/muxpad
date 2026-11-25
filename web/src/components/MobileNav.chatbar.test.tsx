@@ -1,4 +1,4 @@
-import { act, type ReactNode } from 'react';
+import { type ReactNode, act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
