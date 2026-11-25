@@ -478,3 +478,31 @@
   /* The bar's own ground, so the ring reads as a cut-out, not a halo. */
   box-shadow: 0 0 0 2px var(--bg-elev);
 }
+
+/* ─── THE SAME BAR, IN A CHAT ────────────────────────────────────────────
+   "Bottom bar colour scheme in chat view is not good in some themes."
+
+   `.mcl-tabs` builds its ground out of the RAIL's tokens — `--rail-ink` over
+   `--rail-surface` — which is right on the chat LIST, because the list sits
+   on the rail island and the bar's labels inherit the rail's ink from it.
+
+   In a chat there is no island. The bar's labels inherit the APP's `--fg`,
+   while its background is still mixed from the rail's palette, so ink and
+   ground come from two different families: on the themes where those
+   families diverge most (wokintosh's teal rail under a cream page, the dark
+   rails under a light pane) the result is a dark plate wearing dark text, or
+   a slab that reads as a foreign object dropped on the page.
+
+   So the chat's bar mixes the SAME RECIPE from the surroundings it actually
+   has. Not a second design — the identical 8% lift and the identical upward
+   shadow — just computed from `--fg` over `--bg` instead of the rail's pair,
+   so it belongs to the page it is sitting on and its labels are guaranteed
+   to be the ink of that page. */
+.mcl-tabs.-onchat {
+  --bg-elev: color-mix(in srgb, var(--fg) 8%, var(--bg));
+  background: var(--bg-elev);
+  /* The rail version draws its top edge in --fg at 30%, where --fg IS the
+     rail's ink. Here --fg is the page's, and 30% of it on an 8% lift is a
+     hard line; 18% reads as the same edge at the same strength. */
+  border-top-color: color-mix(in srgb, var(--fg) 18%, transparent);
+}

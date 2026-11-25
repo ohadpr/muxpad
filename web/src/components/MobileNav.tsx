@@ -260,6 +260,7 @@ export function MobileChatSectionBar() {
     <SectionBar
       section={section}
       unread={unreadChats(corpus).length}
+      onChat={true}
       onPick={(next) => {
         writeSection(next);
         void navigate({ to: CHAT_LIST_PATH });
@@ -273,13 +274,18 @@ function SectionBar({
   section,
   unread,
   onPick,
+  onChat = false,
 }: {
   section: ChatSection;
   unread: number;
   onPick: (s: ChatSection) => void;
+  /** Rendered under a CHAT rather than under the list — see `.mcl-tabs.-onchat`.
+   *  The bar's ground is mixed from the rail on the list and from the page
+   *  here, because its labels inherit whichever ink surrounds it. */
+  onChat?: boolean;
 }) {
   return (
-    <nav className="mcl-tabs" aria-label="Sections">
+    <nav className={`mcl-tabs${onChat ? ' -onchat' : ''}`} aria-label="Sections">
       {CHAT_SECTIONS.map((s) => (
         <button
           key={s}
