@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import { CHAT_SECTIONS, type ChatSection, activityChats, unreadChats } from '../lib/chat-sections';
+import { trackKeyboardInset } from '../lib/keyboard-inset';
 import { CHAT_LIST_PATH, backToList, trackListEntry } from '../lib/mobile-nav';
 import { readSection, subscribeSection, writeSection } from '../lib/mobile-section';
 import { toSearchableTabs } from '../lib/nav-search';
@@ -57,6 +58,7 @@ export function MobileChatList({
   activeTabSlug: string | null;
 }) {
   const [section, setSection] = useState<ChatSection>(readSection);
+  const listRef = useRef<HTMLDivElement>(null);
   const [visited, setVisited] = useState<ReadonlySet<ChatSection>>(() => new Set([section]));
   const searchInput = useRef<HTMLInputElement>(null);
   const groups = useAllChats();
@@ -99,10 +101,35 @@ export function MobileChatList({
     if (next === 'search') searchInput.current?.focus();
   };
 
+  /**
+   * HOW FAR THE KEYBOARD REACHES INTO THE LIST — for the search results.
+   *
+   * The results scroller is sized in LAYOUT viewport units, and on iOS (and
+   * Chrome since 108) the layout viewport does not shrink when the keyboard
+   * opens — only `visualViewport` does. So the scroller's content fits inside
+   * its full-screen height, it has NO OVERFLOW, and the rows below the
+   * keyboard line are not merely off-screen: they are unreachable, because
+   * there is nothing to scroll. Measured on the OLD drop-down sheet at
+   * 390×844 with a one-character query: 5 of 12 results hidden,
+   * `scrollHeight === clientHeight`. The sheet capped itself by the visual
+   * viewport (lib/sheet-viewport, deleted with it); search moved into this
+   * full-height list and that sizing did not come with it. Found by review.
+   *
+   * The inset is reserved as padding under the results instead of capping the
+   * box, which restores the overflow and lets the scroller do the rest. The
+   * tracker is the chat composer's — same signal, same re-assert discipline,
+   * including the invariant that nothing focused means no keyboard.
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    if (!visible || !el) return;
+    return trackKeyboardInset(el, { viewport: window.visualViewport ?? null });
+  }, [visible]);
+
   const shown = (s: ChatSection) => visible && section === s;
 
   return (
-    <div className="mobile-chat-list" hidden={!visible} aria-hidden={!visible}>
+    <div className="mobile-chat-list" ref={listRef} hidden={!visible} aria-hidden={!visible}>
       {visible && <ListTitle />}
       <ListHeader />
       <div className="mcl-body">

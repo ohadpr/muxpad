@@ -388,6 +388,15 @@
   min-height: 0;
   max-height: none;
   overflow-y: auto;
+  /* THE KEYBOARD'S HEIGHT, RESERVED — so the results below its line can be
+     SCROLLED to. The layout viewport does not shrink for a software keyboard
+     (iOS, and Chrome since 108), so without this the scroller's content fits
+     its full-screen box, there is no overflow at all, and those rows are
+     unreachable rather than merely off-screen. Measured on the old sheet:
+     5 of 12 results hidden with `scrollHeight === clientHeight`. The variable
+     is written on `.mobile-chat-list` by trackKeyboardInset and is 0px
+     everywhere there is no keyboard. */
+  padding-bottom: var(--chat-keyboard-inset, 0px);
 }
 
 /* ─── The bottom tab bar ──────────────────────────────────────────────── */
