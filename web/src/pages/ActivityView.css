@@ -11,10 +11,19 @@
   padding-block: 0;
   border-top: 1px solid var(--border);
 }
+/* SAME IA AS THE PHONE'S LIST, re-scaled for a pointer — see the "A LIST,
+   NOT A BLOCK" note in MobileNav.css. A separator BETWEEN rows, inset to the
+   text column so the emoji is a margin; this had a border-bottom on every
+   row including the last, which draws a line under the list rather than
+   between its rows. */
 .activity-view .mcl-row {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 12px;
+  border-bottom: 0;
   border-radius: 0;
+}
+.activity-view .mcl-row + .mcl-row::before {
+  /* 12px of padding + 24px of emoji + 12px of gap on this surface. */
+  inset-inline-start: 48px;
 }
 .activity-view .mcl-row:hover {
   background: var(--bg-hover);
@@ -24,8 +33,11 @@
   font-size: 18px;
   line-height: 24px;
 }
+/* A STEP ABOVE THE PREVIEW. It was 0.9375rem over a 0.875rem preview - one
+   pixel apart, so the name and the message read as a single paragraph and
+   there was no layer to scan by. */
 .activity-view .mcl-row-name {
-  font-size: 0.9375rem;
+  font-size: 1rem;
 }
 .activity-view .mcl-row-meta {
   font-size: 0.75rem;

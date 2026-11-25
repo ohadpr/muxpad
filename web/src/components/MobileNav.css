@@ -219,14 +219,51 @@
 
 /* ─── A row in Unread / Activity: name over its last message ──────────── */
 
+/* ─── A LIST, NOT A BLOCK ────────────────────────────────────────────────
+   "It's a bit like a big block right now." It was: rows butted straight
+   against each other on one flat ground, with a 15px preview under a 17px
+   name in the SAME ink as the timestamp. Nothing receded, so there was no
+   layer to scan by and the eye had to read every line to find a row.
+   Three changes, none of them a new colour — the preview and the time are
+   both held at 4.5:1 by the theme sweep and dimming them further would fail
+   it on the tighter palettes:
+     · a hairline BETWEEN rows, inset to the text column so the emoji gutter
+       reads as a margin rather than a cell (the iOS/Slack convention);
+     · the preview a step down from the name, so name-then-preview is a
+       hierarchy rather than two sentences;
+     · more air between rows than inside one, which is what makes a row read
+       as a unit at a glance. */
 .mcl-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 10px 14px 10px 14px;
+  padding: 12px 14px;
   color: var(--fg);
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
+}
+/* Between rows only — never above the first or below the last, where it
+   would read as a border on the list itself. Mixed from the surrounding ink
+   so it follows every theme, and kept faint: this is a separator, not a
+   rule, and at full strength eleven of them become the loudest thing on a
+   screen whose content is text.
+   DRAWN AS A PSEUDO-ELEMENT so it can start at the TEXT column (14px of
+   padding + 28px of emoji gutter + 12px of gap = 54px) and leave the emoji
+   column reading as a margin, which is the iOS and Slack convention. The
+   first attempt insetted the row itself with a margin and pulled the emoji
+   back with a negative one; that moves the row, and a separator must never
+   be able to move anything. */
+.mcl-row {
+  position: relative;
+}
+.mcl-row + .mcl-row::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 54px;
+  inset-inline-end: 0;
+  top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+  pointer-events: none;
 }
 .mcl-row:active {
   background: var(--bg-hover);
@@ -242,7 +279,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .mcl-row-top {
   display: flex;
@@ -272,14 +309,20 @@
   flex: 0 0 auto;
   margin-inline-start: auto;
   padding-inline-start: 8px;
-  font-size: 0.8125rem;
+  /* Smaller than the preview, not fainter: it is held at 4.5:1 by the sweep,
+     so the recession has to come from size. Workspace and time are metadata
+     about the row; the preview is the row's content. */
+  font-size: 0.75rem;
   color: var(--fg-dim);
   white-space: nowrap;
 }
 .mcl-row-preview {
-  /* Up one step with the name it sits under, so the pair keeps its ratio. */
-  font-size: 0.9375rem;
-  line-height: 1.3;
+  /* A STEP BELOW THE NAME. It was 0.9375rem under a 1.0625rem name — close
+     enough that the two read as one paragraph, which is what made the list a
+     block. 0.875rem keeps it comfortably readable while letting the name be
+     the thing you scan. */
+  font-size: 0.875rem;
+  line-height: 1.35;
   color: var(--fg-dim);
   display: -webkit-box;
   -webkit-line-clamp: 2;
