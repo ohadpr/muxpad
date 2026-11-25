@@ -391,7 +391,10 @@ const SPEC = {
    */
   'msgvault.draft-reply': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the message id to reply to');
+      if (!ID.test(String(p.id ?? '')))
+        fail(
+          'Give the message id to reply to - the `id` on a row that a search, show-thread or show-message returned',
+        );
       if (!str(p.body, 20000)) fail('Give a body');
       // `--all` is reply-to-everyone. Opt IN, because the difference between
       // answering one person and answering a thread of nine is exactly the
@@ -569,7 +572,8 @@ const SPEC = {
   'msgvault.calendar-update': {
     validate: (p) => {
       const base = calendarAccount(p);
-      if (!str(p.event, 256)) fail('Give the event id to update');
+      if (!str(p.event, 256))
+        fail('Give the event id to update - the id a calendar read returns for that event');
       refuseGuests(p);
       const when = CAL_WHEN;
       if (p.start !== undefined && !when.test(String(p.start))) fail('Bad start time');
@@ -604,7 +608,8 @@ const SPEC = {
   'msgvault.calendar-delete': {
     validate: (p) => {
       const base = calendarAccount(p);
-      if (!str(p.event, 256)) fail('Give the event id to delete');
+      if (!str(p.event, 256))
+        fail('Give the event id to delete - the id a calendar read returns for that event');
       return { ...base, event: p.event };
     },
     argv: (p) => [
@@ -658,13 +663,16 @@ const SPEC = {
   },
   'msgvault.draft-get': {
     validate: (p) =>
-      ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to read'),
+      ID.test(String(p.id ?? ''))
+        ? { id: p.id }
+        : fail('Give the draft id to read - draft-reply returns it when it creates one'),
     argv: (p) => ['draft-get', '--json', '--', p.id],
     describe: (p) => `read draft ${p.id}`,
   },
   'msgvault.draft-edit': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to edit');
+      if (!ID.test(String(p.id ?? '')))
+        fail('Give the draft id to edit - draft-reply returns it when it creates one');
       if (!str(p.body, 20000)) fail('Give a body');
       return { id: p.id, body: p.body, revision: draftRevision(p) };
     },
@@ -682,7 +690,8 @@ const SPEC = {
   },
   'msgvault.draft-delete': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to delete');
+      if (!ID.test(String(p.id ?? '')))
+        fail('Give the draft id to delete - draft-reply returns it when it creates one');
       return { id: p.id, revision: draftRevision(p) };
     },
     argv: (p) => ['draft-delete', '--json', '--revision', String(p.revision), '--', p.id],

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { CAPABILITIES, MSGVAULT, capabilityOf } from './capabilities.mjs';
 import {
@@ -709,4 +710,29 @@ test('the configured calendar is used only when the agent named none', () => {
   // And with nothing configured and nothing named, the caller is told to go
   // and configure one.
   assert.deepEqual(resolveCalendarAccount(undefined, null), { error: 'unconfigured' });
+});
+
+test('a refusal that demands an identifier says where to get one', () => {
+  // THE PATTERN BEHIND A WEEK OF FAILURES. Calendar verbs demanded a source
+  // identifier the agent was structurally forbidden from discovering, and
+  // the refusal just repeated the demand - so the agent guessed, msgvault
+  // answered 403, and it read like a permissions problem. The account case
+  // is fixed by the broker owning the binding; the general case is fixed by
+  // never asking for an id without naming its source.
+  //
+  // Reads the source rather than driving every verb, because the property is
+  // about EVERY such message including ones not yet written.
+  const src = readFileSync(new URL('./msgvault.mjs', import.meta.url), 'utf8');
+  const demands = [...src.matchAll(/fail\(\s*'Give the ([^']*)'/g)].map((m) => m[1]);
+  assert.ok(demands.length >= 6, `expected several id refusals, saw ${demands.length}`);
+  for (const d of demands) {
+    // A title or a time is self-explanatory; an ID is not, and must say
+    // where it comes from.
+    if (!/\bid\b|revision/.test(d)) continue;
+    assert.match(
+      d,
+      / - |prints it|returns it/,
+      `"Give the ${d}" demands an identifier without saying where to get one`,
+    );
+  }
 });
