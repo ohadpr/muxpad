@@ -38,7 +38,9 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-const { PreviewList, resetPreviewCache } = await import('./ChatPreviewList');
+const { PreviewList, plainPreview, previewLine, resetPreviewCache } = await import(
+  './ChatPreviewList'
+);
 
 const row = (id: string, at: number): SearchableTab =>
   ({
@@ -255,5 +257,86 @@ describe('the second line has its room before it arrives', () => {
     // while the phone did not.
     const desktop = readFileSync(join(__dirname, '..', 'pages', 'ActivityView.css'), 'utf8');
     expect(desktop).not.toMatch(/\.mcl-row-preview[^}]*line-height/);
+  });
+});
+
+/**
+ * WHAT AGENTS SAY IS MARKDOWN, AND A ROW IS NOT A DOCUMENT.
+ *
+ * The list was showing the syntax: `**SimonMed** gives back the $300`,
+ * "``` Value Day Indices", `**$50,700** is correct`. Rendering it instead
+ * would be worse — bold and code spans fighting the row's own type scale in a
+ * line that is already clamped to two.
+ */
+describe('a last message, as one line of prose', () => {
+  it('keeps the words and drops the syntax', () => {
+    expect(plainPreview('**SimonMed** gives back the $300')).toBe('SimonMed gives back the $300');
+    expect(plainPreview('**$50,700** is correct')).toBe('$50,700 is correct');
+    expect(plainPreview('run `pnpm test` first')).toBe('run pnpm test first');
+    expect(plainPreview('see [the report](https://example.com/x)')).toBe('see the report');
+    expect(plainPreview('# Heading\nthen the body')).toBe('Heading then the body');
+    expect(plainPreview('- one\n- two')).toBe('one two');
+    expect(plainPreview('> quoted thing')).toBe('quoted thing');
+    expect(plainPreview('_quietly_ emphatic')).toBe('quietly emphatic');
+  });
+
+  it('survives a fence with no end, which a truncated tail usually is', () => {
+    // The measured case: "``` Value Day Indices $2.05M …" with no closer.
+    expect(plainPreview('``` Value Day Indices $2.05M')).toBe('Value Day Indices $2.05M');
+    expect(plainPreview('before ```const x = 1``` after')).toBe('before after');
+  });
+
+  it('collapses the newlines a clamped line cannot use', () => {
+    expect(plainPreview('one\n\n   two\tthree')).toBe('one two three');
+  });
+
+  it('leaves prose that merely contains punctuation alone', () => {
+    expect(plainPreview('2 * 3 = 6 and a_b_c stays')).toBe('2 * 3 = 6 and a_b_c stays');
+    expect(plainPreview('the file is /tmp/a.ts, line 3')).toBe('the file is /tmp/a.ts, line 3');
+  });
+
+  it('is applied to the message, under the "You:" the row adds', () => {
+    expect(previewLine({ text: '**done**', by: 'user' }, undefined, false)).toEqual({
+      kind: 'message',
+      text: 'You: done',
+    });
+    expect(previewLine({ text: '`ok`', by: 'assistant' }, undefined, false)).toEqual({
+      kind: 'message',
+      text: 'ok',
+    });
+  });
+
+  it('does not touch the headline fallback, which is already prose', () => {
+    expect(previewLine(null, 'the portfolio and its theses', false)).toEqual({
+      kind: 'fallback',
+      text: 'the portfolio and its theses',
+    });
+  });
+});
+
+/**
+ * "Text underline for everything on hover sucks." The row is an <a>, so the
+ * sheet's `a:hover { text-decoration: underline }` reached the name, the meta
+ * and both lines of the preview at once — three underlined paragraphs in a
+ * box. A row says "this one" by lighting up.
+ */
+describe('hovering a row', () => {
+  const css = readFileSync(join(__dirname, 'MobileNav.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const sheet = readFileSync(join(__dirname, '..', 'styles.css'), 'utf8');
+
+  it('lights the surface and underlines nothing', () => {
+    // The global rule this has to beat is still there — if it ever goes, this
+    // assertion should be read again rather than deleted.
+    expect(sheet).toMatch(/a:hover\s*\{\s*text-decoration:\s*underline/);
+    const hover = /\.mcl-row:hover,\s*\.mcl-row:focus-visible\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(hover).toMatch(/text-decoration:\s*none/);
+    expect(hover).toMatch(/background:\s*var\(--bg-hover\)/);
+  });
+
+  it('clears the separators that would cross the lit row', () => {
+    expect(css).toMatch(/\.mcl-row:hover::before,\s*\.mcl-row:hover \+ \.mcl-row::before/);
   });
 });

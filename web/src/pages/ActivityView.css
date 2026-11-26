@@ -25,8 +25,12 @@
   /* 12px of padding + 24px of emoji + 12px of gap on this surface. */
   inset-inline-start: 48px;
 }
+/* Hover is handled in MobileNav.css for both surfaces now — including taking
+   the underline off, which the sheet's `a:hover` was putting on every piece
+   of text in the row. This only adds the desktop's own rounding: a pointer
+   surface reads better as a soft block than as a full-bleed band. */
 .activity-view .mcl-row:hover {
-  background: var(--bg-hover);
+  border-radius: 10px;
 }
 .activity-view .mcl-row-emoji {
   flex-basis: 24px;
@@ -48,14 +52,16 @@
 }
 /* A chat on another machine: said as a fact, in the quiet ink, with a small
    monitor — not italic like a fallback, and not red like a failure.
+   `display: flex` here REPLACED the preview's clamp box, so this one row lost
+   the two-line height every other row reserves and sat at a different
+   rhythm — visible in the list as a short row with its text pushed down.
+   Inline-flex keeps the icon beside the words without taking the box away.
    QUIET IS --fg-dim: this line is the ONLY thing the row says about that chat
    (there is no preview to fall back to), and --fg-faint measures 2.76–4.69:1
    on the page ground — under 4.5:1 in ten of the eleven themes. Found by
    review; swept in themes.test.ts now. */
 .activity-view .mcl-row-preview[data-elsewhere="true"] {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
   font-style: normal;
   color: var(--fg-dim);
 }

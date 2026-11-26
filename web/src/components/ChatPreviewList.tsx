@@ -157,6 +157,42 @@ export function PreviewList({
 }
 
 /**
+ * A LAST MESSAGE AS ONE LINE OF PROSE — markdown taken off, not rendered.
+ *
+ * The preview is the raw text of whatever was said, and what agents say is
+ * markdown: the list was showing `**SimonMed** gives back the $300`,
+ * ``` ``` Value Day Indices```, `**$50,700** is correct`. Asterisks and
+ * backticks in a one-line summary read as noise, and RENDERING the markdown
+ * instead would be worse — bold and code spans fighting the row's own type
+ * scale, in a line that is already clamped.
+ *
+ * So the syntax is removed and the words kept. Whitespace collapses too: a
+ * message's newlines are meaningless at two clamped lines.
+ */
+export function plainPreview(text: string): string {
+  return (
+    text
+      .replace(/```[\s\S]*?```/g, ' ') // fenced code: nothing in it reads as prose
+      .replace(/```+/g, ' ') // …and an UNCLOSED fence, which a tail often is
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // an image is not a sentence
+      .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '$1') // a link reads as its text
+      .replace(/`([^`]*)`/g, '$1') // inline code: keep the code, drop the ticks
+      .replace(/(\*\*|__)(.*?)\1/g, '$2') // bold
+      // ITALIC, AND ONLY ITALIC. A loose pair of delimiters eats arithmetic and
+      // identifiers: `2 * 3 = 6` became `2 3 = 6`, `a_b_c` became `ab_c`. The
+      // delimiter has to open at a boundary, hug its words on both sides, and
+      // close at one — which is what markdown means by emphasis anyway.
+      .replace(/(^|[\s(])\*(?!\s)([^*\n]+?)(?<!\s)\*(?=$|[\s.,;:!?)])/g, '$1$2')
+      .replace(/(^|[\s(])_(?!\s)([^_\n]+?)(?<!\s)_(?=$|[\s.,;:!?)])/g, '$1$2')
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '') // headings
+      .replace(/^\s*[-*+]\s+/gm, '') // bullets
+      .replace(/^\s*>\s?/gm, '') // quotes
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+}
+
+/**
  * The second line a row shows, and how. Pure, so what an absent preview reads
  * as is decided in one place.
  *
@@ -171,7 +207,8 @@ export function previewLine(
   explainAbsent: boolean,
 ): { kind: 'message' | 'elsewhere' | 'fallback' | 'none'; text: string } {
   if (preview && 'text' in preview) {
-    return { kind: 'message', text: preview.by === 'user' ? `You: ${preview.text}` : preview.text };
+    const said = plainPreview(preview.text);
+    return { kind: 'message', text: preview.by === 'user' ? `You: ${said}` : said };
   }
   if (preview && explainAbsent) {
     return { kind: 'elsewhere', text: 'Runs on another machine — no preview here' };

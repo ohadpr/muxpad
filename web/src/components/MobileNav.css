@@ -265,6 +265,25 @@
   border-top: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
   pointer-events: none;
 }
+/* ─── HOVER IS A SURFACE, NEVER AN UNDERLINE ─────────────────────────────
+   The row is an <a>, so the sheet's `a:hover { text-decoration: underline }`
+   applied to everything inside it: the name, the "Personal · now" meta and
+   both lines of the preview all picked up a rule at once — "text underline
+   for everything on hover sucks", and the screenshot is three underlined
+   paragraphs in a box. A row is not a link in a sentence; what says "this
+   one" is the row lighting up.
+
+   The hovered row also drops the separator above it AND the one below, so
+   the lit surface has clean edges instead of a line crossing it. */
+.mcl-row:hover,
+.mcl-row:focus-visible {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.mcl-row:hover::before,
+.mcl-row:hover + .mcl-row::before {
+  border-top-color: transparent;
+}
 .mcl-row:active {
   background: var(--bg-hover);
 }
@@ -342,6 +361,13 @@
      preview, which is the cheap side of the trade: a list that does not jump
      is worth more than the 19px. */
   min-height: calc(2 * 1.35em);
+}
+/* The monitor sits ON the line, before the words — `vertical-align` rather
+   than a flex row, so the preview keeps the clamp box (and with it the height
+   every other row reserves). */
+.mcl-row-elsewhere-icon {
+  vertical-align: -2px;
+  margin-inline-end: 6px;
 }
 .mcl-row-preview[data-fallback="true"] {
   font-style: italic;
