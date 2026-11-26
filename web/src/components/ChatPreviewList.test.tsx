@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,7 +38,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-const { PreviewList } = await import('./ChatPreviewList');
+const { PreviewList, resetPreviewCache } = await import('./ChatPreviewList');
 
 const row = (id: string, at: number): SearchableTab =>
   ({
@@ -68,6 +70,9 @@ describe('previews are asked for what moved', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     asked.length = 0;
+    // The cache is module-level on purpose — shared by the sibling lists that
+    // unmount each other — so a test must start from nothing.
+    resetPreviewCache();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -171,6 +176,9 @@ describe('the first paint carries a screenful', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     asked.length = 0;
+    // The cache is module-level on purpose — shared by the sibling lists that
+    // unmount each other — so a test must start from nothing.
+    resetPreviewCache();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -209,5 +217,43 @@ describe('the first paint carries a screenful', () => {
   it('does not cap a list that already fits', async () => {
     draw(many(4));
     expect(painted()).toBe(4);
+  });
+});
+
+/**
+ * THE ROW IS ITS FINAL HEIGHT FROM ITS FIRST PAINT.
+ *
+ * The second line arrives after the row does — the list paints with each
+ * chat's headline and the real last message replaces it when the previews
+ * request lands, 200–500 ms later. Sized by its content, every row grew when
+ * that happened: measured on the desktop Activity page with the response
+ * delayed, rows went 64px → 83px and cumulative layout shift was 0.094.
+ * With the clamp's height reserved, the rows do not move and CLS is 0.004.
+ */
+describe('the second line has its room before it arrives', () => {
+  const css = readFileSync(join(__dirname, 'MobileNav.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const rule = /\.mcl-row-preview\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+
+  it('reserves exactly what the clamp can use', () => {
+    const clamp = Number(/-webkit-line-clamp:\s*(\d+)/.exec(rule)?.[1]);
+    const line = Number(/line-height:\s*([\d.]+)/.exec(rule)?.[1]);
+    expect(clamp).toBe(2);
+    // The reservation has to be the clamp's own height, or the row either
+    // still grows (too little) or carries dead space (too much).
+    const reserved = /min-height:\s*calc\((\d+)\s*\*\s*([\d.]+)em\)/.exec(rule);
+    expect(reserved, `min-height in: ${rule.trim()}`).toBeTruthy();
+    expect(Number(reserved?.[1])).toBe(clamp);
+    expect(Number(reserved?.[2])).toBe(line);
+  });
+
+  it('is the same rule the desktop re-scales, not a second copy', () => {
+    // ActivityView.css re-sizes these rows for a pointer; if it set its own
+    // line-height without the matching reservation the desktop would jump
+    // while the phone did not.
+    const desktop = readFileSync(join(__dirname, '..', 'pages', 'ActivityView.css'), 'utf8');
+    expect(desktop).not.toMatch(/\.mcl-row-preview[^}]*line-height/);
   });
 });

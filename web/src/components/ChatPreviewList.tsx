@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { type TabPreview, api } from '../api';
 import { shortAgo } from '../lib/chat-sections';
 import type { SearchableTab } from '../lib/nav-search';
@@ -42,6 +42,26 @@ const PREVIEW_SETTLE_MS = 250;
  */
 const FIRST_PAINT_ROWS = 10;
 
+/**
+ * EVERY PREVIEW THIS TAB HAS LEARNED, and the activity it learned it at.
+ *
+ * Module-level, not component state, because the lists showing these rows are
+ * SIBLINGS that unmount each other: the phone's Unread and Activity are two
+ * PreviewLists, and so are the desktop rail's. Held per component, every
+ * switch threw the text away, re-fetched it, and re-flowed every row when it
+ * came back — "when clicking icons and switching views on desktop the lists
+ * load and then like 200-500ms later they add text descriptions which make
+ * each chat taller". Shared, the second view already has the words.
+ */
+const PREVIEWS = new Map<string, TabPreview | null>();
+const FETCHED_AT = new Map<string, number>();
+
+/** Test seam — forget every held preview. */
+export function resetPreviewCache(): void {
+  PREVIEWS.clear();
+  FETCHED_AT.clear();
+}
+
 export function PreviewList({
   rows,
   active,
@@ -61,7 +81,9 @@ export function PreviewList({
   /** The chat you are on, marked as the rail marks it (the desktop rail). */
   activeTabId?: string | null;
 }) {
-  const [previews, setPreviews] = useState<Record<string, TabPreview | null>>({});
+  // The cache is module-level (see PREVIEWS); this is only how a landing
+  // reaches the screen.
+  const [, landed] = useState(0);
   /** Rows this render may paint. Reset on every activation — each switch pays
    *  for a screenful, not for the whole list. */
   const [budget, setBudget] = useState(FIRST_PAINT_ROWS);
@@ -79,8 +101,6 @@ export function PreviewList({
       (window.cancelIdleCallback ?? window.clearTimeout)(idle as number);
     };
   }, [active, rows.length]);
-  /** tabId → the `lastActivityAt` its held preview was fetched for. */
-  const fetchedFor = useRef(new Map<string, number>());
   const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
   // ─── ASK FOR WHAT MOVED, NOT FOR EVERYTHING, AND NOT ON EVERY EDGE ───────
   //
@@ -97,7 +117,7 @@ export function PreviewList({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `key` — the ids and their activity — not on the array's identity, which changes every corpus publish.
   useEffect(() => {
     if (!active || rows.length === 0) return;
-    const stale = rows.filter((r) => fetchedFor.current.get(r.tabId) !== (r.lastActivityAt ?? 0));
+    const stale = rows.filter((r) => FETCHED_AT.get(r.tabId) !== (r.lastActivityAt ?? 0));
     if (stale.length === 0) return;
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -105,8 +125,9 @@ export function PreviewList({
         .tabPreviews(stale.map((r) => r.tabId))
         .then((res) => {
           if (cancelled) return;
-          for (const r of stale) fetchedFor.current.set(r.tabId, r.lastActivityAt ?? 0);
-          setPreviews((p) => ({ ...p, ...res.previews }));
+          for (const r of stale) FETCHED_AT.set(r.tabId, r.lastActivityAt ?? 0);
+          for (const [id, p] of Object.entries(res.previews)) PREVIEWS.set(id, p);
+          landed((n) => n + 1);
         })
         // An older server has no such route: the rows keep their headline.
         .catch(() => {});
@@ -126,7 +147,7 @@ export function PreviewList({
               <ChatRow
                 key={t.tabId}
                 tab={t}
-                preview={previews[t.tabId] ?? null}
+                preview={PREVIEWS.get(t.tabId) ?? null}
                 explainAbsent={explainAbsent}
                 active={t.tabId === activeTabId}
               />

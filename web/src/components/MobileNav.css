@@ -329,6 +329,19 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
+  /* ─── TWO LINES' WORTH OF ROOM, WHETHER OR NOT THERE ARE TWO ────────────
+     The second line arrives after the row does: the list paints with each
+     chat's headline (one line, usually) and the real last message replaces it
+     when `/api/tabs/previews` lands. Clamped at two lines and sized by its
+     content, that re-flowed every row the moment the text arrived — "the
+     lists load and then like 200-500ms later they add text descriptions which
+     make each chat taller etc not good."
+     Reserving the clamp's own height makes the row a fixed size from its
+     first paint, so the text lands INTO the space already held for it and
+     nothing below it moves. The cost is an empty line under a one-line
+     preview, which is the cheap side of the trade: a list that does not jump
+     is worth more than the 19px. */
+  min-height: calc(2 * 1.35em);
 }
 .mcl-row-preview[data-fallback="true"] {
   font-style: italic;
