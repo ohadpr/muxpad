@@ -1,5 +1,5 @@
 import type { Tab, Workspace } from '@muxpad/shared';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTabs } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { railUnreadRows } from './chat-sections';
@@ -89,6 +89,37 @@ export function withActiveRow(
 }
 
 /**
+ * WHICH CHAT THE UNREAD LIST HOLDS OPEN A PLACE FOR — pure, because the rule
+ * is the whole subtlety and it is otherwise buried in a ref.
+ *
+ * `withActiveRow` exists so that clicking an unread row does not make it
+ * vanish from under the click: opening it reads it, and the inbox drops it.
+ * But it was implemented as "always show the chat you are on", which is a
+ * much bigger claim — so arriving at Unread from anywhere else put a chat in
+ * the list that had nothing unread in it. "When standing on a chat and
+ * clicking 'unread' it always shows that same chat as well, weird."
+ *
+ * The narrower rule is the one that was meant: a chat keeps its place only if
+ * it was unread AT SOME POINT WHILE IT WAS THE CHAT YOU ARE ON. So the row
+ * you just clicked stays; a chat you were already in when you opened Unread
+ * does not appear. Moving to another chat forgets it, so this holds one id
+ * rather than growing with everything ever read.
+ *
+ * @param held  what the previous call kept (null = nothing)
+ * @param activeTabId  the chat being looked at now
+ * @param unreadNow  whether the inbox currently lists that chat
+ */
+export function stickyUnreadRow(
+  held: string | null,
+  activeTabId: string | null,
+  unreadNow: boolean,
+): string | null {
+  if (!activeTabId) return null;
+  if (unreadNow) return activeTabId;
+  return held === activeTabId ? activeTabId : null;
+}
+
+/**
  * The rail's Unread view rows, with the chat you are on kept in place.
  * Returns the active tab's id too — it is resolved from the workspace's own
  * list, which (unlike the live corpus) still holds a finished chat.
@@ -103,9 +134,20 @@ export function useRailUnreadRows(
   const ws = visible.find((w) => w.slug === activeWorkspaceSlug);
   const { tabs } = useTabs(ws?.id ?? '');
   const activeTab = activeTabSlug ? tabs.find((t) => t.slug === activeTabSlug) : undefined;
+  // The one chat the list is holding a place for — see stickyUnreadRow. A ref
+  // rather than state: it is derived from what is already being rendered and
+  // must not cause a render of its own.
+  const held = useRef<string | null>(null);
+  const activeTabId = activeTab?.id ?? null;
+  held.current = stickyUnreadRow(
+    held.current,
+    activeTabId,
+    corpus.some((c) => c.tabId === activeTabId),
+  );
+  const kept = held.current;
   const rows = useMemo(() => {
     const active =
-      ws && activeTab
+      ws && activeTab && kept === activeTab.id
         ? (toSearchableTabs([{ id: ws.id, slug: ws.slug, name: ws.name, tabs: [activeTab] }])[0] ??
           null)
         : null;
@@ -116,6 +158,9 @@ export function useRailUnreadRows(
       visible.map((w) => w.id),
     );
     return railUnreadRows(merged, active?.tabId ?? null);
-  }, [corpus, ws, activeTab, tabs, visible]);
-  return { rows, activeTabId: activeTab?.id ?? null, corpus };
+  }, [corpus, ws, activeTab, tabs, visible, kept]);
+  // `activeTabId` still marks the row when it IS listed — that is the rail's
+  // "you are here" mark, which is a different question from whether the list
+  // holds a place for it.
+  return { rows, activeTabId, corpus };
 }

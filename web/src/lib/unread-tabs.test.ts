@@ -42,7 +42,7 @@ const {
   resetUnreadTabsCache,
   subscribeUnreadTabs,
 } = await import('./unread-tabs');
-const { withActiveRow, unreadCorpusFor } = await import('./use-unread');
+const { withActiveRow, unreadCorpusFor, stickyUnreadRow } = await import('./use-unread');
 
 const tab = (id: string, over: Partial<Tab> = {}): Tab =>
   ({ id, slug: id, name: id, layout: 'p', created_at: 1, updated_at: 1, ...over }) as Tab;
@@ -277,5 +277,50 @@ describe('the chat you are on stays in the list', () => {
       ['old', 'A'],
       ['t3', 'Renamed'],
     ]);
+  });
+});
+
+/**
+ * WHICH CHAT THE LIST HOLDS A PLACE FOR.
+ *
+ * `withActiveRow` exists for one reason: clicking an unread row reads it, the
+ * inbox drops it, and a row vanishing from under the click punishes using the
+ * list. It was wired as "always show the chat you are on", which is a much
+ * bigger claim — so arriving at Unread from anywhere else showed a chat with
+ * nothing unread in it: "when standing on a chat and clicking 'unread' it
+ * always shows that same chat as well, weird."
+ */
+describe('the place the Unread list holds open', () => {
+  it('holds the row you just clicked, once reading it drops it from the inbox', () => {
+    // It was unread when you clicked it…
+    let held = stickyUnreadRow(null, 't1', true);
+    expect(held).toBe('t1');
+    // …and reading it must not make it disappear under the pointer.
+    held = stickyUnreadRow(held, 't1', false);
+    expect(held).toBe('t1');
+  });
+
+  it('holds NOTHING for a chat that was already read when you arrived', () => {
+    // The whole complaint: standing on a read chat, open Unread, and there it
+    // is. It was never in the inbox, so the list has no place to hold for it.
+    expect(stickyUnreadRow(null, 't9', false)).toBe(null);
+  });
+
+  it('forgets as soon as you move to another chat', () => {
+    const held = stickyUnreadRow(stickyUnreadRow(null, 't1', true), 't1', false);
+    expect(held).toBe('t1');
+    // Moving on drops it — so this holds one id, not everything ever read.
+    expect(stickyUnreadRow(held, 't2', false)).toBe(null);
+    // …and coming back later does not resurrect it.
+    expect(stickyUnreadRow(null, 't1', false)).toBe(null);
+  });
+
+  it('holds nothing when you are on no chat at all', () => {
+    expect(stickyUnreadRow('t1', null, false)).toBe(null);
+  });
+
+  it('keeps holding a chat that is still unread — the ordinary case', () => {
+    expect(stickyUnreadRow(null, 't1', true)).toBe('t1');
+    expect(stickyUnreadRow('t1', 't1', true)).toBe('t1');
   });
 });
