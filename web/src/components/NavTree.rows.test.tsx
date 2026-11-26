@@ -36,6 +36,11 @@ vi.mock('@tanstack/react-router', () => ({
     <span className={className}>{children}</span>
   ),
   useNavigate: () => () => {},
+  // NavTree reads the path to decide whether a view PAGE owns the list's view
+  // (railViewFor). These suites render beside a chat, which is the path that
+  // leaves the stored view in charge.
+  useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
+    select({ location: { pathname: '/w/w1/t/a' } }),
 }));
 
 vi.mock('../tabs', () => ({

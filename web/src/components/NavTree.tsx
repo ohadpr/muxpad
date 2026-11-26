@@ -1,11 +1,12 @@
 import { type PaneStatus, type Tab, type Workspace, fallbackTabIcon } from '@muxpad/shared';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { HOUSE_CHAT_CREATE } from '../lib/agent-backend';
 import { activityChats, unreadByWorkspace } from '../lib/chat-sections';
 import { openCommandPalette, paletteChordLabel } from '../lib/command-palette';
+import { railViewFor } from '../lib/desktop-destinations';
 import { createDragOrigin } from '../lib/drag-origin';
 import { clearFollowTarget, setFollowTarget } from '../lib/follow-tab';
 import { pushUndo } from '../lib/move-undo-store';
@@ -351,7 +352,11 @@ function SidebarTree({
   // across the whole tree.
   const [editing, setEditing] = useState<Editing>(null);
   const [creatingWs, setCreatingWs] = useState(false);
-  const view = useRailView();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // The ROUTE owns the view while you stand on /unread or /activity — see
+  // railViewFor. Without that the rail marked one entry current and showed
+  // another entry's list beside it.
+  const view = railViewFor(pathname, useRailView());
   // Activity reads the live corpus; Unread reads the inbox (lib/unread-tabs),
   // which still holds finished chats nobody has looked at.
   const corpus = useChatCorpus();

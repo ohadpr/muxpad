@@ -6,6 +6,7 @@ import {
   DESTINATION_LABEL,
   currentDestination,
   destinationAction,
+  railViewFor,
 } from './desktop-destinations';
 
 describe('the destination rail', () => {
@@ -55,6 +56,51 @@ describe('which entry is current', () => {
     expect(currentDestination('/apps/', 'home')).toBe('apps');
     expect(currentDestination('/hosted/a/notes', 'home')).toBe('apps');
     expect(currentDestination('/activity', 'home')).toBe('activity');
+  });
+});
+
+/**
+ * THE MARK AND THE LIST HAVE TO AGREE.
+ *
+ * Reported as "clicking the unread icon once looks like it loads the activity
+ * view, because it's a full list; second tap shows just history" — and
+ * confirmed in the browser: standing on /unread, the rail marked Unread
+ * current (from the path) while the list beside it was still the stored view,
+ * the full Home tree. 14 chat rows next to a page showing one unread chat.
+ */
+describe('which view the LIST shows', () => {
+  it('is the page you are standing on, when that page is a view', () => {
+    expect(railViewFor('/unread', 'home')).toBe('unread');
+    expect(railViewFor('/activity', 'home')).toBe('activity');
+    expect(railViewFor('/unread/', 'activity')).toBe('unread');
+  });
+
+  it('agrees with the entry the rail marks current — on every path', () => {
+    // The property, rather than the two examples: wherever the rail says you
+    // are on a VIEW, the list must be showing that view.
+    for (const path of [
+      '/unread',
+      '/activity',
+      '/cards',
+      '/artifacts',
+      '/apps',
+      '/hosted/a/notes',
+      '/w/personal/t/main',
+      '/',
+    ])
+      for (const stored of ['home', 'unread', 'activity'] as const) {
+        const current = currentDestination(path, stored);
+        const view = railViewFor(path, stored);
+        if (current === 'home' || current === 'unread' || current === 'activity')
+          expect(view, `${path} · stored ${stored}`).toBe(current);
+      }
+  });
+
+  it('leaves the stored choice alone everywhere else, including the page routes', () => {
+    // A visit to Cards must not rewrite which view the list goes back to.
+    expect(railViewFor('/cards', 'unread')).toBe('unread');
+    expect(railViewFor('/apps', 'activity')).toBe('activity');
+    expect(railViewFor('/w/personal/t/main', 'home')).toBe('home');
   });
 });
 

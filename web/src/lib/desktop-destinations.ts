@@ -46,6 +46,29 @@ export const DESTINATION_LABEL: Record<Destination, string> = {
 };
 
 /**
+ * WHICH VIEW THE RAIL'S LIST SHOWS — the route first, then the stored choice.
+ *
+ * `/unread` and `/activity` are PAGES of the same rows the rail's views show,
+ * and the rail marks their entry current while you stand on one
+ * (`currentDestination`, from the path). The list beside it read only the
+ * STORED view, so the two contradicted each other: standing on /unread with
+ * the stored view at Home, the Unread entry was marked current and the list
+ * next to it was the full Home tree of every chat. Reported as "clicking the
+ * unread icon looks like it loads the activity view, because it's a full
+ * list", and confirmed in the browser — 14 tree rows beside a page showing
+ * one unread chat.
+ *
+ * Derived, not stored: leaving the page returns the list to whatever the
+ * owner last chose, which is the behaviour a page visit should not overwrite.
+ */
+export function railViewFor(pathname: string, stored: RailView): RailView {
+  const p = pathname.replace(/\/+$/, '') || '/';
+  if (p === '/unread') return 'unread';
+  if (p === '/activity') return 'activity';
+  return stored;
+}
+
+/**
  * Which entry is CURRENT. A page route wins — standing on Artifacts you are on
  * Artifacts, whatever the list beside it is showing. `/activity` (the page,
  * kept for deep links) is Activity. Anywhere else — a chat — it is the list's

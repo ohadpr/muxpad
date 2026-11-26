@@ -68,6 +68,8 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, className }: { children?: ReactNode; className?: string }) => (
     <span className={className}>{children}</span>
   ),
+  useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
+    select({ location: { pathname: '/w/w1/t/a' } }),
   useNavigate: () => (opts: { params: { wsSlug: string; tabSlug: string } }) => {
     WENT.push(opts.params);
   },
