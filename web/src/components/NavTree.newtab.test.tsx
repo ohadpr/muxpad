@@ -61,16 +61,33 @@ const WORKSPACES = CORPUS.map(
 
 /** Every `api.createTab` this render made, in order. */
 let CREATED: { workspaceId: string; body: Record<string, unknown> }[] = [];
+/** How many workspaces were created. */
+let MADE_WORKSPACES = 0;
 /** Every route the surface navigated to. */
-let WENT: { wsSlug: string; tabSlug: string }[] = [];
+let WENT: { wsSlug: string; tabSlug?: string }[] = [];
 
 vi.mock('@tanstack/react-router', () => ({
-  Link: ({ children, className }: { children?: ReactNode; className?: string }) => (
-    <span className={className}>{children}</span>
+  // `title` and `onDoubleClick` are forwarded because the rename affordance
+  // lives on them: a stub that drops them makes a missing rename look exactly
+  // like a present one.
+  Link: ({
+    children,
+    className,
+    title,
+    onDoubleClick,
+  }: {
+    children?: ReactNode;
+    className?: string;
+    title?: string;
+    onDoubleClick?: (e: unknown) => void;
+  }) => (
+    <span className={className} title={title} onDoubleClick={onDoubleClick}>
+      {children}
+    </span>
   ),
   useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
     select({ location: { pathname: '/w/w1/t/a' } }),
-  useNavigate: () => (opts: { params: { wsSlug: string; tabSlug: string } }) => {
+  useNavigate: () => (opts: { params: { wsSlug: string; tabSlug?: string } }) => {
     WENT.push(opts.params);
   },
 }));
@@ -81,7 +98,10 @@ vi.mock('../api', () => ({
       CREATED.push({ workspaceId, body });
       return { ...tab('new'), slug: 'new-chat' };
     },
-    createWorkspace: async () => WORKSPACES[0],
+    createWorkspace: async () => {
+      MADE_WORKSPACES += 1;
+      return WORKSPACES[0];
+    },
     patchWorkspace: async () => {},
     deleteWorkspace: async () => {},
     reorderWorkspaces: async () => {},
@@ -151,6 +171,7 @@ function pickerRow(box: HTMLElement, name: string): Element | undefined {
 beforeEach(() => {
   CREATED = [];
   WENT = [];
+  MADE_WORKSPACES = 0;
 });
 
 afterEach(() => {
@@ -247,5 +268,85 @@ describe('the sheet creates from a workspace header, like the rail', () => {
     await click(bots?.querySelector('.navtree-ws-add'));
     expect(CREATED).toEqual([{ workspaceId: 'w-bots', body: { ...HOUSE_CHAT_CREATE } }]);
     expect(WENT).toEqual([{ wsSlug: 'bots', tabSlug: 'new-chat' }]);
+  });
+});
+
+/**
+ * A NEW WORKSPACE IS A WORKSPACE, not a workspace and a chat.
+ *
+ * "Creating new workspace extremely slow and force creates new chat not needed
+ * ideally" — and both halves of that were the same line. It created a HOUSE
+ * CHAT: a tab, a pane, and an agent runner spawning a process. Measured
+ * against the live server, 92 ms to create the workspace and 422 ms to create
+ * the chat — four fifths of the wait, for something nobody asked for.
+ *
+ * The empty workspace is a real destination: `/w/$wsSlug` draws "… has no tabs
+ * yet" with "+ New tab" and "or close this workspace", so it offers both the
+ * next step and the undo.
+ */
+describe('+ New workspace', () => {
+  it('creates the workspace and nothing else', async () => {
+    const box = mount('sidebar');
+    await click(box.querySelector('.navtree-new-workspace'));
+    expect(MADE_WORKSPACES).toBe(1);
+    // The expensive half, and the one that was never asked for.
+    expect(CREATED).toEqual([]);
+  });
+
+  it('lands you in it, not in a chat it invented', async () => {
+    const box = mount('sidebar');
+    await click(box.querySelector('.navtree-new-workspace'));
+    expect(WENT).toEqual([{ wsSlug: WORKSPACES[0]?.slug }]);
+    expect(WENT[0]).not.toHaveProperty('tabSlug');
+  });
+
+  it('leaves the workspace header’s own “+” making a chat, which is where that belongs', async () => {
+    const box = mount('sidebar');
+    await click(box.querySelector('.navtree-ws-add'));
+    expect(CREATED).toEqual([{ workspaceId: 'w-personal', body: { ...HOUSE_CHAT_CREATE } }]);
+  });
+});
+
+/**
+ * "There's no way to rename workspaces." There was — double-click — but only
+ * on the ACTIVE row, so you had to already be inside the workspace you wanted
+ * to rename, and the only hint was a tooltip. The restriction existed to avoid
+ * "navigate then edit" on an inactive row, and a plain left-click stopped
+ * navigating when it became the collapse gesture.
+ */
+describe('renaming a workspace', () => {
+  const dblclick = async (el: Element | null | undefined) => {
+    expect(el).toBeTruthy();
+    await act(async () => {
+      el?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+  };
+  const editorIn = (box: HTMLElement) => box.querySelector('.navtree-ws-row input');
+
+  it('opens on the active workspace', async () => {
+    const box = mount('sidebar');
+    const active = [...box.querySelectorAll('.navtree-ws-row')].find((r) =>
+      (r.textContent ?? '').includes('Personal'),
+    );
+    await dblclick(active?.querySelector('.navtree-ws-name'));
+    expect(editorIn(box)).toBeTruthy();
+  });
+
+  it('opens on a workspace you are NOT in — the whole complaint', async () => {
+    const box = mount('sidebar');
+    const other = [...box.querySelectorAll('.navtree-ws-row')].find((r) =>
+      (r.textContent ?? '').includes('Acmebot'),
+    );
+    await dblclick(other?.querySelector('.navtree-ws-name'));
+    expect(editorIn(box)).toBeTruthy();
+  });
+
+  it('says so in the row’s own tooltip, on every row', () => {
+    const box = mount('sidebar');
+    const titles = [...box.querySelectorAll('.navtree-ws-name')].map((e) =>
+      e.getAttribute('title'),
+    );
+    expect(titles.length).toBeGreaterThan(1);
+    expect(titles.every((t) => t === 'Double-click to rename')).toBe(true);
   });
 });

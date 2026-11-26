@@ -484,21 +484,31 @@ function SidebarTree({
   );
 }
 
-/** Make a workspace (and its first chat) and go there — the rail's
- *  "+ New workspace" row. */
+/**
+ * Make a workspace and go there — the rail's "+ New workspace" row.
+ *
+ * IT NO LONGER MAKES A CHAT. "Creating new workspace extremely slow and force
+ * creates new chat not needed ideally." Both halves of that are the same
+ * line: it created a HOUSE CHAT, which is a tab, a pane and an agent runner
+ * spawning a process. Measured against the live server: 92 ms to create the
+ * workspace, 422 ms to create the chat — four fifths of the wait, spent on
+ * something the person had not asked for and might not want here.
+ *
+ * An empty workspace is a destination that already works: `/w/$wsSlug` draws
+ * "… has no tabs yet" with "+ New tab" and "or close this workspace", so
+ * landing there offers both the thing they came to do and the undo. The
+ * workspace header's "+" still makes a house chat, which is where that
+ * decision belongs.
+ */
 export async function createWorkspaceAndGo(
   navigate: ReturnType<typeof useNavigate>,
 ): Promise<void> {
-  // Bootstrap workspace + first tab-with-pane in one go so the user lands
-  // somewhere usable (the server creates the pane atomically). The first tab
-  // is the HOUSE CHAT — identical to what a workspace header's "+" creates.
   const w = await api.createWorkspace();
-  const t = await api.createTab(w.id, { ...HOUSE_CHAT_CREATE });
   // THIS await STAYS: the route we are about to navigate to resolves `wsSlug`
   // out of the workspaces cache, and a workspace created this instant is in
   // no cache anywhere, so the list has to land first.
   await refreshWorkspaces();
-  void navigate({ to: '/w/$wsSlug/t/$tabSlug', params: { wsSlug: w.slug, tabSlug: t.slug } });
+  void navigate({ to: '/w/$wsSlug', params: { wsSlug: w.slug } });
 }
 
 /**
@@ -1234,14 +1244,18 @@ function WorkspaceNode({
             // The row owns drag-to-reorder; stop the anchor's native
             // drag-the-URL from hijacking it.
             draggable={false}
-            title={variant === 'sidebar' && isActive ? 'Double-click to rename' : workspace.name}
+            title={variant === 'sidebar' ? 'Double-click to rename' : workspace.name}
             onDoubleClick={
-              // Desktop rename mirrors the old chrome's affordance: the
-              // ACTIVE workspace only (avoids navigate-then-edit
-              // weirdness on inactive rows). Touch renames any row via
-              // long-press, which never navigates.
-              variant === 'sidebar' && isActive
-                ? (e) => {
+              // ANY workspace row, not just the active one. The restriction
+              // was there to avoid "navigate then edit" on an inactive row —
+              // and a plain left-click stopped navigating when it became the
+              // collapse/expand gesture (see onClick below), so the hazard it
+              // guarded against no longer exists. What remained was a rename
+              // you could only reach from inside the workspace being renamed,
+              // which reads as no rename at all: "there's no way to rename
+              // workspaces". Touch still renames any row via long-press.
+              variant === 'sidebar'
+                ? (e: React.MouseEvent) => {
                     e.preventDefault();
                     setEditing({ kind: 'workspace', id: workspace.id });
                   }
