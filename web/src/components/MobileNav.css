@@ -471,7 +471,14 @@
    of the bar's own ground, which is the cheap side of the trade. */
 @media (display-mode: standalone) {
   .mcl-tabs {
-    padding-bottom: max(14px, calc(var(--mcl-inset) - 20px));
+    /* 8px, not 14. 14 was what the inset formula produced at the 34px it was
+       tuned against, and with the tab's own padding it put 20px of the bar's
+       ground under the labels — "too much of a margin at the bottom. It's too
+       tall." 8px keeps the labels off the home-indicator pill (which the
+       system draws about 8px up from the edge) and takes 6px off the bar.
+       Below about 6px the pill starts to cross the labels, which is the
+       complaint this floor was added for in the first place. */
+    padding-bottom: max(8px, calc(var(--mcl-inset) - 20px));
   }
 }
 /* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
@@ -485,7 +492,13 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 7px 0 6px;
+  /* 6/4, not 7/6. "The bottom bar has too much of a margin at the bottom,
+     it's too tall." Measured: 54px of bar in a browser and 68px in the
+     installed app, where the floor below adds 14 more. Three px come out of
+     the tab's own box here and six out of that floor; the tab is still 47px
+     tall, which clears the 44pt target without the bar carrying a band of
+     empty ground under the labels. */
+  padding: 6px 0 4px;
   background: transparent;
   border: 0;
   color: var(--fg-dim);

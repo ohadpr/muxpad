@@ -91,14 +91,27 @@ export function MobileChatList({
   );
 
   const pick = (next: ChatSection) => {
-    // flushSync for Search: iOS raises the keyboard only for a focus() made
-    // inside the tap that asked for it — the palette's button does the same.
-    flushSync(() => {
+    const show = () => {
       setSection(next);
       setVisited((v) => (v.has(next) ? v : new Set([...v, next])));
-    });
+    };
+    // flushSync ONLY FOR SEARCH, and only because iOS raises the keyboard for
+    // a focus() made inside the tap that asked for it — the palette's button
+    // does the same. Every tap used to take it, which is a synchronous flush
+    // of the WHOLE pending render queue before the browser may paint: on this
+    // machine 27–35 ms, but the phone also has a kept-mounted chat pane, a
+    // live socket and whatever a working agent is streaming in it, and none of
+    // that can yield while the flush runs. Reported as "clicking activity in
+    // unread can take multiple seconds until it responds, at least on mobile".
+    // The other three taps have nothing to focus, so they are ordinary state:
+    // React batches them and can yield.
+    if (next === 'search') {
+      flushSync(show);
+      searchInput.current?.focus();
+    } else {
+      show();
+    }
     writeSection(next);
-    if (next === 'search') searchInput.current?.focus();
   };
 
   /**

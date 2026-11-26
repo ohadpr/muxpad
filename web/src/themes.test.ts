@@ -870,14 +870,26 @@ describe('every theme’s tree reads, rail and phone', () => {
     // bottom — so the base formula yields 0 and the bar sits flush against an
     // edge the home indicator still crosses: "bottom bar still too clipped".
     //
-    // The standalone floor is 14px because that is what the base formula
-    // produces at the 34px inset it was tuned against: a phone that reports
-    // its inset and one that does not now look the same. A browser tab keeps
-    // 0 — there the page is under nothing.
+    // The standalone floor was 14px — what the base formula produces at the
+    // 34px inset it was tuned against — and that made the bar 68px on the
+    // phone with 20px of its own ground under the labels: "the bottom bar has
+    // too much of a margin at the bottom. It's too tall." 8px now, measured
+    // at 59px of bar, with the labels still clear of the home-indicator pill
+    // the system draws about 8px up from the edge. A browser tab keeps 0 —
+    // there the page is under nothing.
     expect(occurrences(MOBILE, '.mcl-tabs', 'padding-bottom')).toEqual([
       'max(0px, calc(var(--mcl-inset) - 20px))',
-      'max(14px, calc(var(--mcl-inset) - 20px))',
+      'max(8px, calc(var(--mcl-inset) - 20px))',
     ]);
+    // AND THE TAP TARGET SURVIVED THE TRIM. Apple's floor is 44pt and the
+    // bar's height came out of the tab's own padding as well as the floor, so
+    // this is the assertion that stops the next trim going too far.
+    const tab = rulesFor(MOBILE, '.mcl-tab').reduce((a, r) => Object.assign(a, r), {} as Ctx);
+    const pad = /^(\d+)px 0 (\d+)px$/.exec(tab.padding ?? '');
+    expect(pad, `.mcl-tab padding: ${tab.padding}`).toBeTruthy();
+    const [top, bottom] = [Number(pad?.[1]), Number(pad?.[2])];
+    // 24px glyph + 2px gap + a ~14px label line, plus the padding.
+    expect(top + bottom + 40).toBeGreaterThanOrEqual(44);
     expect(MOBILE).toMatch(/@media \(display-mode: standalone\)\s*\{\s*\.mcl-tabs/);
     expect(decl(NAV, '.navtree[data-variant="sheet"]', '--nt-surface')).toBe('var(--rail-surface)');
     // And the selected row turns back to the rail: the base active rule hands

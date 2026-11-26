@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { type TabPreview, api } from '../api';
 import { shortAgo } from '../lib/chat-sections';
 import type { SearchableTab } from '../lib/nav-search';
@@ -18,6 +18,12 @@ import './MobileNav.css';
  * fetched for these rows only, only while the list is showing, and again only
  * when one of them moves (the key is ids + last activity).
  */
+/**
+ * How long the rows must stop moving before their previews are asked for. A
+ * burst of pushes (a fan-out reporting, an agent streaming) is one request.
+ */
+const PREVIEW_SETTLE_MS = 250;
+
 export function PreviewList({
   rows,
   active,
@@ -38,20 +44,41 @@ export function PreviewList({
   activeTabId?: string | null;
 }) {
   const [previews, setPreviews] = useState<Record<string, TabPreview | null>>({});
+  /** tabId → the `lastActivityAt` its held preview was fetched for. */
+  const fetchedFor = useRef(new Map<string, number>());
   const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
+  // ─── ASK FOR WHAT MOVED, NOT FOR EVERYTHING, AND NOT ON EVERY EDGE ───────
+  //
+  // This re-fetched EVERY row's preview whenever ANY row's activity changed,
+  // because the key carries all of them. Activity is the whole corpus by
+  // recency, so on a phone watching a working agent that is one request for
+  // ~18 chats every time a single one of them says anything — the rows are
+  // already on screen and only one of them has new words.
+  //
+  // Now: only the rows whose activity has moved since their held preview (or
+  // that have none), and after a short quiet period, so a burst of pushes
+  // costs one request rather than one each. A row still renders immediately
+  // with its headline; this only decides when the second line arrives.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `key` — the ids and their activity — not on the array's identity, which changes every corpus publish.
   useEffect(() => {
     if (!active || rows.length === 0) return;
+    const stale = rows.filter((r) => fetchedFor.current.get(r.tabId) !== (r.lastActivityAt ?? 0));
+    if (stale.length === 0) return;
     let cancelled = false;
-    api
-      .tabPreviews(rows.map((r) => r.tabId))
-      .then((r) => {
-        if (!cancelled) setPreviews((p) => ({ ...p, ...r.previews }));
-      })
-      // An older server has no such route: the rows keep their headline.
-      .catch(() => {});
+    const timer = setTimeout(() => {
+      api
+        .tabPreviews(stale.map((r) => r.tabId))
+        .then((res) => {
+          if (cancelled) return;
+          for (const r of stale) fetchedFor.current.set(r.tabId, r.lastActivityAt ?? 0);
+          setPreviews((p) => ({ ...p, ...res.previews }));
+        })
+        // An older server has no such route: the rows keep their headline.
+        .catch(() => {});
+    }, PREVIEW_SETTLE_MS);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [key, active]);
   return (
