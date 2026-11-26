@@ -134,6 +134,26 @@ export function chromeArgv(opts: BrowserLaunchOptions): string[] {
     '--disable-background-networking',
     '--disable-component-update',
 
+    // ─── A CAP ON THE DISK CACHE, because Chrome's default is a fraction of
+    // the FREE DISK and this machine has a lot of it. Measured on one session
+    // browser (the "Hedai Afaim Recipe Library Build" chat, stopped):
+    //
+    //     Default/Cache          1.2 GB
+    //     Default/Code Cache      79 MB
+    //     Default/Service Worker  55 MB
+    //     everything else        ~10 MB
+    //
+    // 1.3 GB for one chat's browser, out of 1.7 GB across every profile on the
+    // machine. A DRIVEN browser earns almost nothing from a large cache: it
+    // visits a handful of pages per session and never comes back to most of
+    // them, so the cache is pure cost. 128 MB is generous for that and still
+    // an order of magnitude under what one profile had taken.
+    //
+    // The cap applies on the NEXT start of each browser; it does not shrink a
+    // cache already on disk (Chrome trims to the limit as it writes).
+    '--disk-cache-size=134217728',
+    '--media-cache-size=67108864',
+
     `--window-size=${win.width},${win.height}`,
     '--no-first-run',
     '--no-default-browser-check',
