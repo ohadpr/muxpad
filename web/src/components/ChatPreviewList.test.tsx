@@ -261,6 +261,94 @@ describe('the second line has its room before it arrives', () => {
 });
 
 /**
+ * ONE ROW, THREE SURFACES — "unread and activity chat lists should look the
+ * same structure / layout wise".
+ *
+ * They do read from one component, and Unread and Activity never differed
+ * from each other. What differed was WHERE those rows were drawn: the phone's
+ * list, the desktop rail's, and the destination page's each re-scale them,
+ * and the rail had quietly kept the phone's numbers. Measured: its text
+ * column starts at 38px while its separators started at 54 — the phone's
+ * figure — so the line began sixteen pixels inside the text it was
+ * separating, and the rail's list read as a different object from the page's.
+ *
+ * So this asserts the RELATIONSHIPS rather than the numbers, for every
+ * surface at once. A fourth one added later is one line here.
+ */
+describe('every surface draws the same row', () => {
+  const read = (...rel: string[]) =>
+    readFileSync(join(__dirname, ...rel), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const PHONE = read('MobileNav.css');
+  const SURFACES = [
+    { name: 'phone (the list it was drawn for)', css: PHONE, at: '' },
+    { name: 'desktop rail', css: read('RailViews.css'), at: '.rail-view-list ' },
+    {
+      name: 'destination page',
+      css: read('..', 'pages', 'ActivityView.css'),
+      at: '.activity-view ',
+    },
+  ];
+  /** The last declaration of `prop` for `sel`, as the browser would take it. */
+  const decl = (css: string, sel: string, prop: string): string | undefined =>
+    [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => (m[1] as string).split(',').some((x) => x.trim().replace(/\s+/g, ' ') === sel))
+      .flatMap((m) => [...(m[2] as string).matchAll(/([\w-]+)\s*:\s*([^;]+);/g)])
+      .filter((d) => d[1] === prop)
+      .map((d) => (d[2] as string).trim())
+      .pop();
+  const px = (v: string | undefined) => Number(/(-?[\d.]+)px/.exec(v ?? '')?.[1]);
+
+  it.each(SURFACES)('$name: the separator starts at the text column', ({ css, at }) => {
+    // padding-left + the emoji gutter + the gap. Below that the line crosses
+    // the emoji; above it, it starts inside the words.
+    const pad = px(
+      (decl(css, `${at}.mcl-row`, 'padding') ?? decl(PHONE, '.mcl-row', 'padding'))
+        ?.split(/\s+/)
+        .pop(),
+    );
+    const gap = px(decl(css, `${at}.mcl-row`, 'gap') ?? decl(PHONE, '.mcl-row', 'gap'));
+    // The gutter is `flex-basis` where a surface re-scales it and the `flex`
+    // shorthand where the phone declares it.
+    const basis = (sheet: string, sel: string) =>
+      decl(sheet, sel, 'flex-basis') ?? decl(sheet, sel, 'flex')?.split(/\s+/).pop();
+    const emoji = px(basis(css, `${at}.mcl-row-emoji`) ?? basis(PHONE, '.mcl-row-emoji'));
+    const divider = px(
+      decl(css, `${at}.mcl-row + .mcl-row::before`, 'inset-inline-start') ??
+        decl(PHONE, '.mcl-row + .mcl-row::before', 'inset-inline-start'),
+    );
+    expect(
+      [pad, gap, emoji, divider].every(Number.isFinite),
+      `${at}: ${[pad, gap, emoji, divider]}`,
+    ).toBe(true);
+    expect(divider).toBe(pad + emoji + gap);
+  });
+
+  it.each(SURFACES)('$name: reserves exactly the lines it clamps', ({ css, at }) => {
+    // A surface may re-scale the preview; if it changes the line-height it
+    // owes a matching reservation, or its rows jump when the text lands while
+    // another surface's do not.
+    const line = Number(decl(css, `${at}.mcl-row-preview`, 'line-height'));
+    if (!Number.isFinite(line)) return; // this surface keeps the phone's
+    const reserved = /calc\((\d+)\s*\*\s*([\d.]+)em\)/.exec(
+      decl(css, `${at}.mcl-row-preview`, 'min-height') ??
+        (decl(PHONE, '.mcl-row-preview', 'min-height') as string),
+    );
+    expect(Number(reserved?.[2]), `${at} line-height ${line}`).toBe(line);
+  });
+
+  it.each(SURFACES)(
+    '$name: the elsewhere line keeps the box and the readable ink',
+    ({ css, at }) => {
+      const rule = `${at}.mcl-row-preview[data-elsewhere="true"]`;
+      const display = decl(css, rule, 'display');
+      // `display: flex` replaces the clamp box, and with it the reserved height.
+      expect(display === undefined || display === 'block', `${at} display: ${display}`).toBe(true);
+      expect(decl(css, rule, 'color') ?? 'var(--fg-dim)').not.toBe('var(--fg-faint)');
+    },
+  );
+});
+
+/**
  * WHAT AGENTS SAY IS MARKDOWN, AND A ROW IS NOT A DOCUMENT.
  *
  * The list was showing the syntax: `**SimonMed** gives back the $300`,
