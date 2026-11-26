@@ -142,3 +142,72 @@ describe('previews are asked for what moved', () => {
     expect(asked).toEqual([]);
   });
 });
+
+/**
+ * A SCREENFUL FIRST. "It still takes between 500 and 900 ms."
+ *
+ * Measured at 10× CPU throttling: switching into the 17-row Activity list
+ * cost 124–168 ms, and the reveal MECHANISM barely mattered (visibility
+ * instead of display saved a quarter). What costs is laying out and painting
+ * every row, and ten of them fit a 390×844 screen. With a screenful first the
+ * same switch measures 21–26 ms, and the rest of the list arrives on the next
+ * idle callback.
+ */
+describe('the first paint carries a screenful', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const many = (n: number) => Array.from({ length: n }, (_, i) => row(`t${i}`, 1));
+  const draw = (rows: SearchableTab[], active = true) =>
+    act(() => {
+      root.render(<PreviewList rows={rows} active={active} empty={<p>none</p>} />);
+    });
+  const idle = async () => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+  };
+  const painted = () => host.querySelectorAll('.mcl-row').length;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    asked.length = 0;
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  it('paints ten rows, then the whole list', async () => {
+    draw(many(17));
+    expect(painted()).toBe(10);
+    await idle();
+    expect(painted()).toBe(17);
+  });
+
+  it('is NOT windowing — every row is in the DOM a moment later', async () => {
+    draw(many(40));
+    await idle();
+    expect(painted()).toBe(40);
+    // So find-in-page, the scroll height and a screen reader see all of it.
+    expect([...host.querySelectorAll('.mcl-row-name')].at(-1)?.textContent).toBe('t39');
+  });
+
+  it('pays a screenful again on the next switch in, not the whole list', async () => {
+    draw(many(17));
+    await idle();
+    expect(painted()).toBe(17);
+    draw(many(17), false); // switched away
+    await idle();
+    draw(many(17), true); // and back
+    expect(painted()).toBe(10);
+  });
+
+  it('does not cap a list that already fits', async () => {
+    draw(many(4));
+    expect(painted()).toBe(4);
+  });
+});

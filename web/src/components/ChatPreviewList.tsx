@@ -24,6 +24,24 @@ import './MobileNav.css';
  */
 const PREVIEW_SETTLE_MS = 250;
 
+/**
+ * HOW MANY ROWS THE FIRST PAINT CARRIES — a screenful, then the rest.
+ *
+ * "Clicking activity in unread can take multiple seconds… it still takes
+ * between 500 and 900 ms." Measured at 10× CPU throttling, a switch into a
+ * 17-row Activity list costs 124–168 ms HERE, and the mechanism barely
+ * matters: revealing the section with `visibility` instead of `display` saved
+ * a quarter of it. What costs is laying out and painting every row, and a
+ * 390×844 screen shows ten of them (measured: rows are 85–87 px tall).
+ *
+ * So the first paint gets a screenful and the remainder arrives on the next
+ * idle callback. Nothing is hidden from the reader — the rows below the fold
+ * are, by definition, below the fold — and scrolling to them is a frame away.
+ * This is NOT windowing: every row is in the DOM a moment later, so find-in-
+ * page, the scroll height and the screen reader see the whole list.
+ */
+const FIRST_PAINT_ROWS = 10;
+
 export function PreviewList({
   rows,
   active,
@@ -44,6 +62,23 @@ export function PreviewList({
   activeTabId?: string | null;
 }) {
   const [previews, setPreviews] = useState<Record<string, TabPreview | null>>({});
+  /** Rows this render may paint. Reset on every activation — each switch pays
+   *  for a screenful, not for the whole list. */
+  const [budget, setBudget] = useState(FIRST_PAINT_ROWS);
+  useEffect(() => {
+    if (!active) {
+      setBudget(FIRST_PAINT_ROWS);
+      return;
+    }
+    if (rows.length <= FIRST_PAINT_ROWS) return;
+    // After the paint the reader is waiting for, not during it.
+    const idle = (window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 32)))(
+      () => setBudget(Number.POSITIVE_INFINITY),
+    );
+    return () => {
+      (window.cancelIdleCallback ?? window.clearTimeout)(idle as number);
+    };
+  }, [active, rows.length]);
   /** tabId → the `lastActivityAt` its held preview was fetched for. */
   const fetchedFor = useRef(new Map<string, number>());
   const key = rows.map((r) => `${r.tabId}:${r.lastActivityAt ?? ''}`).join(',');
@@ -85,15 +120,17 @@ export function PreviewList({
     <div className="mcl-scroll">
       {rows.length === 0
         ? empty
-        : rows.map((t) => (
-            <ChatRow
-              key={t.tabId}
-              tab={t}
-              preview={previews[t.tabId] ?? null}
-              explainAbsent={explainAbsent}
-              active={t.tabId === activeTabId}
-            />
-          ))}
+        : rows
+            .slice(0, budget)
+            .map((t) => (
+              <ChatRow
+                key={t.tabId}
+                tab={t}
+                preview={previews[t.tabId] ?? null}
+                explainAbsent={explainAbsent}
+                active={t.tabId === activeTabId}
+              />
+            ))}
     </div>
   );
 }

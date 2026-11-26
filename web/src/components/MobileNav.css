@@ -510,15 +510,55 @@
 .mcl-tab[aria-current="page"] {
   color: var(--fg);
 }
+/* ─── WHICH TAB YOU ARE ON, IN COLOUR ────────────────────────────────────
+   "The active indicator on that icon is really too subtle. We need some
+   color there or something." It was the label's ink stepping --fg-dim → --fg
+   and the glyph's stroke 2.0 → 2.6: true to the line-art set and far too
+   quiet on a bar you glance at.
+
+   A PILL TINTED WITH THE ACCENT, AND THE INK LEFT ALONE. Two stronger
+   versions were measured across all eleven themes and both break somewhere:
+
+     glyph in `--accent-fg` on a FILLED accent pill — fails in six themes
+     (1.15:1 in wokintosh, 1.41 in memphis), because the list rebinds
+     --accent to --rail-accent and nothing rebinds the ink that pairs with it;
+
+     glyph in the bar's own ground punched out of a filled pill — fails in
+     riso (2.49:1) and wokintosh (1.15:1), whose rail accents are pale enough
+     that the bar's ground is no darker than they are.
+
+   Every theme's rail accent is a LIGHT colour, so no single ink works on a
+   full fill. A 30% tint of the accent over the bar's own ground does: the
+   glyph keeps the ink the theme already guarantees, and the worst case over
+   the eleven is 3.26:1 (wokintosh) — above the 3:1 a meaningful glyph owes.
+   40% drops wokintosh to 2.77, so 30 is the ceiling, not a preference.
+
+   Plus a 1px inset ring mixed from the bar's ink, so the pill has an edge
+   even where the tint is close to the chrome, and the label goes bold. Three
+   signals, none of which depends on a theme getting its accent right. */
 .mcl-tab-icon {
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Wider than the 24px glyph so the pill reads as a pill, and the same
+     HEIGHT, so marking a tab cannot make the bar taller. */
+  width: 38px;
+  height: 24px;
+  border-radius: 999px;
 }
-/* The glyph carries FULL ink at rest; the label keeps the tab's quieter ink.
-   A glyph is not text — its thin, anti-aliased stroke at the label's colour
-   read fainter than the word under it — and the current tab is told apart by
-   its label's ink and its glyph's weight (SectionIcon), not by dimming the
-   others' icons. */
+.mcl-tab[aria-current="page"] .mcl-tab-icon {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-elev));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 22%, transparent);
+}
+.mcl-tab[aria-current="page"] .mcl-tab-label {
+  font-weight: 700;
+}
+/* The glyph carries FULL ink at rest AND on the current tab — see the pill
+   above for why its ink is the one thing that does not change. A glyph is not
+   text: its thin, anti-aliased stroke at the label's colour read fainter than
+   the word under it, so the others' icons are never dimmed to make the
+   current one stand out either. */
 .mcl-tab-glyph {
   color: var(--fg);
 }

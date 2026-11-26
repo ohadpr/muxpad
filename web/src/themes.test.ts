@@ -599,6 +599,9 @@ describe('every theme’s tree reads, rail and phone', () => {
     base: string;
     phone?: string;
     fill?: string;
+    /** Where the `fill` is declared, when that is not the role's own
+     *  selector — a glyph inked on a pill its PARENT paints. */
+    fillSel?: string;
     /** A rule whose custom properties re-point tokens for this role, and
      *  whose background-color is laid over the ground. */
     scope?: string;
@@ -660,6 +663,25 @@ describe('every theme’s tree reads, rail and phone', () => {
       scope: '.mcl-tabs',
       only: 'phone',
       bar: 4.5,
+    },
+    // THE CURRENT TAB'S GLYPH, ON THE ACCENT PILL THAT MARKS IT — "the active
+    // indicator on that icon is really too subtle, we need some color there".
+    // The pill is a 30% tint of the accent over the bar's own ground, which
+    // is what lets the glyph keep the ink every theme already guarantees: a
+    // FILLED accent pill has no ink that works everywhere (--accent-fg pairs
+    // with the PAGE accent and fails in six themes; the bar's ground punched
+    // out fails in riso and wokintosh, whose rail accents are pale). This is
+    // the assertion that stops the tint being turned up past what the ink can
+    // take — at 40% wokintosh measures 2.77:1. A meaningful glyph owes 3:1.
+    {
+      role: 'tab bar glyph (current)',
+      base: '.mcl-tab-glyph',
+      css: 'mobile',
+      scope: '.mcl-tabs',
+      fill: 'background',
+      fillSel: '.mcl-tab[aria-current="page"] .mcl-tab-icon',
+      only: 'phone',
+      bar: 3,
     },
     // The header too may be its own island (wokintosh's title bar: pane ink
     // on grey), so it is measured on its own ground.
@@ -819,7 +841,7 @@ describe('every theme’s tree reads, rail and phone', () => {
         scoped.background;
       if (wash) ground = over(resolve(wash, ctx), ground);
     }
-    const fillExpr = r.fill ? decl(src, r.base, r.fill) : undefined;
+    const fillExpr = r.fill ? decl(src, r.fillSel ?? r.base, r.fill) : undefined;
     if (fillExpr) ground = over(resolve(fillExpr, ctx), ground);
     const opacity = Number(decl(src, r.base, 'opacity') ?? 1);
     const fg = resolve(ink as string, ctx);
