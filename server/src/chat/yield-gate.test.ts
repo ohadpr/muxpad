@@ -1,0 +1,178 @@
+import { describe, expect, it } from 'vitest';
+import type { Task } from './TaskStore.js';
+import { CONTINUATION_LIMIT } from './task-continue.js';
+import { YIELD_SPEAKER, hardStop, parseVerdict, yieldPrompt } from './yield-gate.js';
+
+/**
+ * THE ANTI-YIELD GATE.
+ *
+ * "The main chat is too fragile — all it takes is the harness deciding it's
+ * done and bam, work is halted until I approve or answer a stupid question."
+ *
+ * The machinery to continue a chat already existed and was gated behind an
+ * opt-in nobody took: six tasks declared across 2,434 chats, eighteen
+ * continuations across ~27,500 turns. These tests are about the replacement
+ * being SAFE in the one direction that matters — it may make the cockpit less
+ * likely to stop, and must never be able to trap work inside a chat.
+ */
+const task = (over: Partial<Task> = {}): Task =>
+  ({
+    id: 't1',
+    tab_id: 'tab1',
+    state: 'open',
+    request: 'ship it',
+    continuations: 0,
+    continued_from: null,
+    updated_at: 1000,
+    created_at: 1,
+    ...over,
+  }) as Task;
+
+const ctx = (over: Partial<Parameters<typeof hardStop>[0]> = {}) => ({
+  queued: 0,
+  blocked: false,
+  stopped: false,
+  turnFailed: false,
+  task: null,
+  spawned: false,
+  ...over,
+});
+
+describe('the handovers no judgement may overrule', () => {
+  it('lets a chat that is WAITING ON THE OWNER through, every way it can wait', () => {
+    // Each of these means the chat is waiting for something only a person can
+    // supply — a passkey approval, an answer to a question it asked, a human
+    // who pressed Stop. Prodding there is muxpad talking over its own request.
+    expect(hardStop(ctx({ blocked: true }))).toMatch(/question it asked/);
+    expect(hardStop(ctx({ stopped: true }))).toMatch(/stopped/);
+    expect(hardStop(ctx({ turnFailed: true }))).toMatch(/failure/);
+    expect(hardStop(ctx({ queued: 1 }))).toMatch(/already queued/);
+  });
+
+  it('leaves sub-chats alone — their reader is the parent, not the owner', () => {
+    expect(hardStop(ctx({ spawned: true }))).toMatch(/sub-chat/);
+  });
+
+  it('stops when the budget is spent', () => {
+    expect(hardStop(ctx({ task: task({ continuations: CONTINUATION_LIMIT }) }))).toMatch(/budget/);
+    expect(hardStop(ctx({ task: task({ continuations: CONTINUATION_LIMIT - 1 }) }))).toBe(null);
+  });
+
+  it('stops a chat going round the same loop, on the SECOND lap', () => {
+    // A prod is earned by progress: `continued_from` is the `updated_at` the
+    // last one was spent against. Unchanged means nothing moved.
+    expect(hardStop(ctx({ task: task({ continued_from: 1000, updated_at: 1000 }) }))).toMatch(
+      /nothing moved/,
+    );
+    // …and movement earns the next one.
+    expect(hardStop(ctx({ task: task({ continued_from: 1000, updated_at: 1001 }) }))).toBe(null);
+  });
+
+  it('has no opinion to overrule on an ordinary yield', () => {
+    expect(hardStop(ctx())).toBe(null);
+    expect(hardStop(ctx({ task: task() }))).toBe(null);
+  });
+});
+
+describe('the question the gate asks itself', () => {
+  const prompt = yieldPrompt({ ask: 'make the bar shorter', closing: 'Done, 59px now.' });
+
+  it('asks for the GOAL, not the words — which is the whole idea', () => {
+    expect(prompt).toMatch(/GOAL/);
+    expect(prompt).toMatch(/not the literal words/);
+    expect(prompt).toMatch(/would he consider that goal DONE/i);
+  });
+
+  it('tells it to answer the dumb questions rather than pass them on', () => {
+    expect(prompt).toMatch(/what would HE answer/);
+    expect(prompt).toMatch(/reversible/);
+    expect(prompt).toMatch(/rather you\s+decided and told him/);
+  });
+
+  it('asks for the follow-up he would have asked for', () => {
+    // "what follow up clarification/proof/scale/capability would he ask for"
+    expect(prompt).toMatch(/clarification, proof it works, scale/);
+  });
+
+  it('names the handovers it must not take', () => {
+    expect(prompt).toMatch(/irreversible/);
+    expect(prompt).toMatch(/costs real money/);
+    expect(prompt).toMatch(/reaches another person/);
+    // The case most easily got wrong: he asked a QUESTION, so answering it is
+    // the deliverable and the turn is correctly over.
+    expect(prompt).toMatch(/his message was a question and it has been answered/);
+  });
+
+  it('forbids speaking as him, or inventing his opinion', () => {
+    expect(prompt).toMatch(/Never speak as/);
+    expect(prompt).toMatch(/never invent an opinion of his/);
+  });
+
+  it('carries both sides of the yield, bounded', () => {
+    const long = yieldPrompt({ ask: 'x'.repeat(9000), closing: 'y'.repeat(9000) });
+    expect(long).toContain('x'.repeat(4000));
+    expect(long).not.toContain('x'.repeat(4001));
+    expect(long.length).toBeLessThan(12000);
+  });
+
+  it('says so when there was nothing to go on', () => {
+    const blank = yieldPrompt({ ask: '', closing: '' });
+    expect(blank).toMatch(/\(nothing — the chat began on its own\)/);
+    expect(blank).toMatch(/\(it said nothing\)/);
+  });
+});
+
+/**
+ * EVERY UNKNOWN IS A HANDOVER. The gate may only ever make the cockpit less
+ * likely to stop; a bug that makes it MORE likely to trap work inside a chat
+ * is the one outcome that would make it unusable, so the parser fails toward
+ * the behaviour muxpad had before any of this existed.
+ */
+describe('reading the verdict', () => {
+  it('takes a prod with something to say', () => {
+    expect(
+      parseVerdict('{"verdict":"prod","message":"run the suite","why":"no proof yet"}'),
+    ).toEqual({ kind: 'prod', message: 'run the suite', why: 'no proof yet' });
+  });
+
+  it('takes a deliver', () => {
+    expect(parseVerdict('{"verdict":"deliver","why":"he asked a question"}')).toEqual({
+      kind: 'deliver',
+      why: 'he asked a question',
+    });
+  });
+
+  it('finds the line inside whatever else the model said', () => {
+    const v = parseVerdict(
+      'Sure!\n```json\n{"verdict":"prod","message":"go on","why":"mid-job"}\n```',
+    );
+    expect(v).toEqual({ kind: 'prod', message: 'go on', why: 'mid-job' });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['prose', 'I think it should probably continue, honestly'],
+    ['broken json', '{"verdict":"prod", "message":'],
+    ['a prod with no message', '{"verdict":"prod","why":"mid-job"}'],
+    ['a prod with a blank message', '{"verdict":"prod","message":"   ","why":"x"}'],
+    ['a verdict nobody defined', '{"verdict":"escalate","why":"ring him"}'],
+    ['null', 'null'],
+  ])('hands over on %s', (_name, raw) => {
+    expect(parseVerdict(raw).kind).toBe('deliver');
+  });
+
+  it('always carries a reason a human can read', () => {
+    expect(parseVerdict('{"verdict":"deliver"}').why).toBe('no reason given');
+    expect(parseVerdict('nonsense').why).toBeTruthy();
+  });
+});
+
+describe('whose voice it speaks in', () => {
+  it('is muxpad, and not the owner', () => {
+    // Not a label choice. Every word he has ever typed is archived, and that
+    // archive is what a later version of this learns "what would Ohad answer"
+    // from. A machine writing in his voice poisons its own training data.
+    expect(YIELD_SPEAKER).toBe('muxpad');
+    expect(YIELD_SPEAKER.toLowerCase()).not.toContain('ohad');
+  });
+});
