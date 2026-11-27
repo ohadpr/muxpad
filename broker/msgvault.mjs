@@ -67,7 +67,39 @@ const ID = /^(?!-)[A-Za-z0-9_.:@+-]{1,128}$/;
  * an agent's to set (the argv gate refuses them for the same reason), and the
  * typed verbs below never read one from the payload.
  */
-export const OWNER_DRAFT_ACCOUNT = 'me@example.com';
+const OWNER_DRAFT_ACCOUNT_FALLBACK = 'me@example.com';
+
+/**
+ * WHICH MAILBOX A DRAFT IS WRITTEN INTO — from CONFIG, not from this file.
+ *
+ * It used to be a constant here, and that one decision is why msgvault has
+ * felt permanently broken. The repo is PUBLIC, so the constant had to be a
+ * placeholder; the installed copy was hand-edited to the real address. Which
+ * means the two can never be the same file — and `install.sh` copies the repo
+ * over the install, so reinstalling would point every draft at
+ * `me@example.com`. Nobody reinstalls something that breaks drafts, so the
+ * broker sat at its 14 November copy while every fix since landed in git and
+ * changed nothing on the machine. Measured 2026-11-27: thirteen days stale,
+ * including the calendar fix written specifically to unbreak calendars.
+ *
+ * The address is not a secret, but it IS the owner's, and owner-specific
+ * values in shipped source are what create this trap. It reads from the same
+ * place `defaultCalendar` already does, so the repo is now installable
+ * verbatim and the owner's mailbox lives in config where it belongs.
+ */
+export function ownerDraftAccount() {
+  try {
+    const d = JSON.parse(readFileSync('/Library/muxpad/integrations.json', 'utf8'))?.msgvault;
+    const v = d?.draftAccount;
+    return typeof v === 'string' && CAL_ACCOUNT.test(v) ? v : OWNER_DRAFT_ACCOUNT_FALLBACK;
+  } catch {
+    return OWNER_DRAFT_ACCOUNT_FALLBACK;
+  }
+}
+
+/** @deprecated Read {@link ownerDraftAccount} instead; kept so an older
+ *  caller cannot silently compose into the placeholder. */
+export const OWNER_DRAFT_ACCOUNT = OWNER_DRAFT_ACCOUNT_FALLBACK;
 
 /**
  * A DELIBERATE REFUSAL, tagged so it can be repeated to the caller.
@@ -452,7 +484,10 @@ const SPEC = {
    * STILL NO SEND. This creates a draft in the mailbox exactly like
    * `draft-reply`; nothing at this grant can put it on the wire.
    *
-   * `--account` IS PASSED, BY THE BROKER: {@link OWNER_DRAFT_ACCOUNT}. The
+   * `--account` IS PASSED, BY THE BROKER: {@link ownerDraftAccount}, which
+   * reads it from config rather than from this file — see that function for
+   * why a constant here is what kept the installed broker thirteen days
+   * stale. The
    * old note here said msgvault picks the source itself when it is not told;
    * it does not — a compose with no destination is refused, "--account or
    * --source-id is required". `--from` and `--source-id` stay unset, and none
@@ -644,7 +679,7 @@ const SPEC = {
         to: to.map(String),
         subject: p.subject,
         body: p.body,
-        account: OWNER_DRAFT_ACCOUNT,
+        account: ownerDraftAccount(),
       };
     },
     argv: (p) => [

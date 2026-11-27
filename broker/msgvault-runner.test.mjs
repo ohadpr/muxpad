@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { msgvaultRunner } from './msgvault-runner.mjs';
+import { explainRefusal, msgvaultRunner } from './msgvault-runner.mjs';
 
 const DECL = JSON.stringify({
   msgvault: {
@@ -685,4 +685,45 @@ test('an attachment works when the token is owned by the broker itself', async (
   // The declaration and the binary stay root-only.
   for (const c of checked.filter((c) => !String(c.path).includes('agent-token')))
     assert.deepEqual(c.owners, [0], c.path);
+});
+
+/**
+ * THE REFUSAL THAT COST THE MOST TIME.
+ *
+ * `draft_disabled` was handed back verbatim, and agents filled the silence
+ * themselves: "the mail tool keeps rejecting new drafts with draft_disabled;
+ * only you can re-enable drafts." Four separate sessions in the archive end
+ * that way. There is no such switch — msgvault composes a new email only
+ * into an IMAP source and the configured mailbox is a Gmail one — so the
+ * owner was repeatedly asked to flip something that does not exist.
+ */
+test('draft_disabled is explained, not just repeated', () => {
+  const out = explainRefusal('msgvault.draft-compose', 'draft_disabled');
+  // The ground truth survives: this is still what the tool said.
+  assert.match(out, /draft_disabled/);
+  // …and what it MEANS is attached to it.
+  assert.match(out, /IMAP source/);
+  assert.match(out, /Gmail/);
+  // The sentence that stops the next agent wasting his time.
+  assert.match(out, /no "drafts" switch/);
+  assert.match(out, /do not ask the owner to re-enable/i);
+  // What does work, and what would actually change the answer.
+  assert.match(out, /draft-reply/);
+  assert.match(out, /\[\[imap\.drafts\]\]/);
+});
+
+test('a refusal that already says what to do is left alone', () => {
+  // msgvault's other refusals are the useful half of this interface; dressing
+  // them up would be the same mistake in the other direction.
+  const same = 'query is not available in agent-delegated mode';
+  assert.equal(explainRefusal('msgvault.search', same), same);
+  assert.equal(explainRefusal('msgvault.run', 'search has no --deep'), 'search has no --deep');
+});
+
+test('it explains a draft_disabled from any verb, not only compose', () => {
+  // The verb that produced it is not always compose — an older client, a
+  // forward, a retry. The meaning is the same and so is the advice.
+  const out = explainRefusal('msgvault.draft-reply', 'draft_disabled');
+  assert.match(out, /IMAP source/);
+  assert.match(out, /draft-reply\) is unaffected/);
 });

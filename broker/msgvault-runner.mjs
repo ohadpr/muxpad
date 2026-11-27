@@ -22,6 +22,47 @@ import { assertProtectedPath } from './protected-path.mjs';
  * call, not at the next restart. This runs once per approved request, which
  * is a human-paced rate.
  */
+/**
+ * TURN msgvault's OPAQUE REFUSALS INTO SOMETHING A READER CAN ACT ON.
+ *
+ * The refusals are returned verbatim on purpose — "query is not available in
+ * agent-delegated mode" tells an agent exactly what to do instead. But one of
+ * them tells nobody anything, and it has cost more of the owner's time than
+ * any other failure in this system: `draft_disabled`.
+ *
+ * What agents did with it, repeatedly, across sessions in the archive: they
+ * reported "the mail tool keeps rejecting new drafts with draft_disabled;
+ * only you can re-enable drafts" and stopped. There is no such switch. The
+ * actual meaning, measured against the installed binary, is that msgvault
+ * composes a NEW email only into an IMAP source, and the configured mailbox
+ * is a Gmail (API) source — so compose is refused for everyone, always,
+ * while `draft-reply` works fine because replying needs no IMAP.
+ *
+ * An error nobody can act on is worse than a missing feature: the owner was
+ * asked four times to flip a switch that does not exist. So the verbatim text
+ * is kept — it is still the ground truth — and what it MEANS is added after
+ * it, including the one thing that would change the answer.
+ */
+export function explainRefusal(action, detail) {
+  if (!/draft_disabled/i.test(detail)) return detail;
+  const composing = String(action).includes('compose');
+  return [
+    detail,
+    '',
+    'What this means: msgvault writes a NEW email only into an IMAP source, and',
+    'the mailbox muxpad is configured to draft into is a Gmail (API) source, so',
+    'it refuses compose for every caller. There is no "drafts" switch to turn on',
+    '— do not ask the owner to re-enable them.',
+    '',
+    composing
+      ? 'What works instead: draft-reply, on any message in the thread you want to answer.'
+      : 'Replying to an existing message (draft-reply) is unaffected.',
+    'What would change this: the owner adding that mailbox over IMAP with an',
+    "[[imap.drafts]] grant in msgvault's own config. That is their machine and",
+    'their credential; no agent can do it.',
+  ].join('\n');
+}
+
 export function msgvaultRunner({
   declarationPath = '/Library/muxpad/integrations.json',
   io = { readFileSync, assertProtectedPath },
@@ -451,7 +492,7 @@ export function msgvaultRunner({
             const detail = String(stderr || err.message)
               .trim()
               .split('\n')[0];
-            reject(new Error(detail.slice(0, 300) || 'msgvault failed'));
+            reject(new Error(explainRefusal(action, detail.slice(0, 300) || 'msgvault failed')));
             return;
           }
           const text = String(stdout);

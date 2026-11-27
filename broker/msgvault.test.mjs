@@ -6,6 +6,7 @@ import {
   OWNER_DRAFT_ACCOUNT,
   describeMsgvault,
   msgvaultArgv,
+  ownerDraftAccount,
   resolveCalendarAccount,
   validateMsgvault,
 } from './msgvault.mjs';
@@ -602,6 +603,11 @@ test('the dialog says what will appear in the calendar, and that nobody is told'
  * email we are replying to came in to."
  */
 test('a new email is drafted in the owner’s default mailbox, and the dialog names it', () => {
+  // The SHIPPED fallback is a placeholder, deliberately: this repo is public.
+  // The real mailbox comes from /Library/muxpad/integrations.json — see
+  // ownerDraftAccount — so that the repo stays installable verbatim. A
+  // constant here is what made the installed broker and the repo permanently
+  // different files, and therefore what kept every fix from landing.
   assert.equal(OWNER_DRAFT_ACCOUNT, 'me@example.com');
   const p = validateMsgvault('msgvault.draft-compose', {
     to: ['a@b.com'],
@@ -633,7 +639,7 @@ test('an agent cannot choose the mailbox or identity of a draft', () => {
     assert.ok(!JSON.stringify(p).includes('someone-else'), action);
   }
   const c = validateMsgvault('msgvault.draft-compose', sneaky);
-  assert.equal(c.account, OWNER_DRAFT_ACCOUNT);
+  assert.equal(c.account, ownerDraftAccount());
 });
 
 test('a reply goes to the mailbox its message came in to — and the dialog says so', () => {
