@@ -707,9 +707,9 @@ test('draft_disabled is explained, not just repeated', () => {
   // The sentence that stops the next agent wasting his time.
   assert.match(out, /no "drafts" switch/);
   assert.match(out, /do not ask the owner to re-enable/i);
-  // What does work, and what would actually change the answer.
-  assert.match(out, /draft-reply/);
-  assert.match(out, /\[\[imap\.drafts\]\]/);
+  // What would actually change the answer.
+  assert.match(out, /IMAP source/);
+  assert.match(out, /app password/);
 });
 
 test('a refusal that already says what to do is left alone', () => {
@@ -720,10 +720,13 @@ test('a refusal that already says what to do is left alone', () => {
   assert.equal(explainRefusal('msgvault.run', 'search has no --deep'), 'search has no --deep');
 });
 
-test('it explains a draft_disabled from any verb, not only compose', () => {
-  // The verb that produced it is not always compose — an older client, a
-  // forward, a retry. The meaning is the same and so is the advice.
+test('it does NOT claim replies still work — measured, they do not', () => {
+  // The claim this replaces came from a 2026-11-10 measurement and was still
+  // in our source on 11-27, when a real draft-reply through the broker
+  // answered `draft_disabled` like everything else. An inherited measurement
+  // that nobody re-ran is how the owner spent sessions being told to retry.
   const out = explainRefusal('msgvault.draft-reply', 'draft_disabled');
-  assert.match(out, /IMAP source/);
-  assert.match(out, /draft-reply\) is unaffected/);
+  assert.match(out, /draft-REPLY/);
+  assert.doesNotMatch(out, /unaffected/);
+  assert.match(out, /paste/);
 });

@@ -45,21 +45,23 @@ import { assertProtectedPath } from './protected-path.mjs';
  */
 export function explainRefusal(action, detail) {
   if (!/draft_disabled/i.test(detail)) return detail;
-  const composing = String(action).includes('compose');
   return [
     detail,
     '',
-    'What this means: msgvault writes a NEW email only into an IMAP source, and',
-    'the mailbox muxpad is configured to draft into is a Gmail (API) source, so',
-    'it refuses compose for every caller. There is no "drafts" switch to turn on',
-    '— do not ask the owner to re-enable them.',
+    'What this means: msgvault will not write a draft into this archive at all.',
+    'MEASURED 2026-11-27, through the broker, on a real message: draft-REPLY',
+    'fails with this too, not only draft-compose. Do not repeat the older claim',
+    'that replies still work — they do not, and that claim cost the owner several',
+    'sessions of being told to retry something that could never have worked.',
     '',
-    composing
-      ? 'What works instead: draft-reply, on any message in the thread you want to answer.'
-      : 'Replying to an existing message (draft-reply) is unaffected.',
-    'What would change this: the owner adding that mailbox over IMAP with an',
-    "[[imap.drafts]] grant in msgvault's own config. That is their machine and",
-    'their credential; no agent can do it.',
+    'There is no "drafts" switch. DO NOT ask the owner to re-enable drafts; the',
+    'thing agents have asked him for four times does not exist.',
+    '',
+    'What is actually missing: msgvault writes drafts into an IMAP source and',
+    'this archive has none — its mailbox is a Gmail (API) source. Only the owner',
+    'can add one (the archive CLI add-imap verb, run as the service account,',
+    'with an app password). Until then no verb here creates a draft: offer to',
+    'write the text into the chat so it can be pasted instead.',
   ].join('\n');
 }
 
