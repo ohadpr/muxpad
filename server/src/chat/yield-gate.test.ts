@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from './TaskStore.js';
 import { CONTINUATION_LIMIT } from './task-continue.js';
-import { YIELD_SPEAKER, hardStop, parseVerdict, yieldPrompt } from './yield-gate.js';
+import {
+  YIELD_SPEAKER,
+  hardStop,
+  parseVerdict,
+  renderYieldProd,
+  yieldPrompt,
+} from './yield-gate.js';
 
 /**
  * THE ANTI-YIELD GATE.
@@ -174,5 +180,42 @@ describe('whose voice it speaks in', () => {
     // from. A machine writing in his voice poisons its own training data.
     expect(YIELD_SPEAKER).toBe('muxpad');
     expect(YIELD_SPEAKER.toLowerCase()).not.toContain('ohad');
+  });
+});
+
+/**
+ * THE AGENT IS TOLD. The alternative — a prod that reads like an ordinary
+ * instruction — buys more compliance and creates the failure that matters: an
+ * agent that believes Ohad asked for something, works a day on it, and tells
+ * him so afterwards.
+ */
+describe('the prod, as the agent receives it', () => {
+  const prod = renderYieldProd(
+    { kind: 'prod', message: 'Run the suite and paste the counts.', why: 'no proof yet' },
+    { attempt: 2, limit: 6 },
+  );
+
+  it('says who is speaking, and that he has not seen this', () => {
+    expect(prod).toContain(`[${YIELD_SPEAKER} autopilot`);
+    expect(prod).toMatch(/not Ohad/);
+    expect(prod).toMatch(/has not seen this turn/);
+  });
+
+  it('carries the instruction and the reason for it', () => {
+    expect(prod).toContain('Run the suite and paste the counts.');
+    expect(prod).toContain('no proof yet');
+  });
+
+  it('shows the budget, and what spends it', () => {
+    expect(prod).toMatch(/Continuation 2 of 6/);
+    expect(prod).toMatch(/spent by finishing,\s*\n?not by trying/);
+  });
+
+  it('leaves the valve CHEAP to pull — one line and stop', () => {
+    // A refusal that costs a negotiation is a refusal nobody makes, and then
+    // the gate has no way to hear "this one really is for him".
+    expect(prod).toMatch(/say so in one line and\s*\n?stop/);
+    expect(prod).toMatch(/irreversible/);
+    expect(prod).toMatch(/Do not argue with this message/);
   });
 });

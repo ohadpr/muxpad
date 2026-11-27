@@ -176,3 +176,38 @@ export function parseVerdict(raw: string): YieldVerdict {
   if (!message) return { kind: 'deliver', why: 'a prod with nothing to say' };
   return { kind: 'prod', message, why };
 }
+
+/**
+ * THE PROD, AS THE AGENT RECEIVES IT — and it is told who is speaking.
+ *
+ * The alternative was a prod that reads like an ordinary instruction, which
+ * buys ordinary compliance. It was rejected for the failure it creates: an
+ * agent that believes the owner asked for something, does a day of work on
+ * it, and tells him so later. Naming the autopilot costs a little compliance
+ * and buys the safety valve — an agent that can answer "this one really does
+ * need him", which a silent gate has no way to hear.
+ *
+ * So the message says three things: who is speaking, what to do and why he
+ * would want it, and how to refuse. The refusal is deliberately cheap: one
+ * line and stop. Anything that makes pushing back expensive turns the valve
+ * into decoration.
+ */
+export function renderYieldProd(
+  verdict: Extract<YieldVerdict, { kind: 'prod' }>,
+  budget: { attempt: number; limit: number },
+): string {
+  return [
+    `[${YIELD_SPEAKER} autopilot — not Ohad, and he has not seen this turn]`,
+    '',
+    verdict.message,
+    '',
+    `Why you are getting this instead of handing back: ${verdict.why}.`,
+    `Continuation ${budget.attempt} of ${budget.limit}; they are spent by finishing,`,
+    'not by trying, so record what moved.',
+    '',
+    'If this genuinely needs Ohad — it is irreversible, it costs money, it reaches',
+    'another person, or it is his taste with no precedent — say so in one line and',
+    'stop. That reaches him. Do not argue with this message; either carry on or',
+    'name the thing only he can settle.',
+  ].join('\n');
+}
