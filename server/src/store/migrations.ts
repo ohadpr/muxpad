@@ -2059,6 +2059,30 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS spawn_rounds_corpus_owed ON spawn_rounds(tab_id) WHERE delivered_at IS NULL;`);
     },
   },
+  {
+    version: 62,
+    /**
+     * WHO DECIDED THIS TASK EXISTED — the agent, or the autopilot?
+     *
+     * They are not the same commitment and must not be handed back the same
+     * way. An agent-declared task is its own plan and survives anything. An
+     * autopilot task is an INFERENCE about what the owner wanted, written by
+     * the gate when a chat tried to yield.
+     *
+     * Observed in the Kalshi chat: the gate opened a reconciliation task, the
+     * agent did it, then the owner said something else entirely — a standing
+     * rule about liquidating positions — and the chat answered that. The old
+     * reconciliation task was handed back on the very next turn, dragging the
+     * chat back to finished work and making it restate an answer it had
+     * already given. The owner's words outrank the gate's guess about them.
+     */
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'origin')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'");
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

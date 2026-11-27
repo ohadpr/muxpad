@@ -182,3 +182,42 @@ describe('the continuation budget', () => {
     expect(tasks.get(closed.id)?.continuations).toBe(1);
   });
 });
+
+/**
+ * THE OWNER'S WORDS RETIRE THE AUTOPILOT'S GUESS ABOUT THEM.
+ *
+ * From the Kalshi chat: the gate opened a reconciliation task, the chat did
+ * it, the owner then said something else entirely — a standing rule about
+ * liquidating positions — and the chat answered that. The old task was handed
+ * straight back on the next turn, dragging it into restating an answer it had
+ * already given. "The anti yield is driving the agent crazy stupid."
+ */
+describe('when the owner speaks', () => {
+  it('retires an autopilot task, related or not', () => {
+    const t = tasks.create('tab1', { request: 'reconcile the $40 gap' });
+    expect(t.origin).toBe('agent');
+    const auto = tasks.create('tab1', { request: 'reconcile exactly', origin: 'autopilot' });
+    expect(auto.origin).toBe('autopilot');
+    expect(tasks.settleAutopilotTasks('tab1')).toBe(1);
+    expect(tasks.get(auto.id)?.state).toBe('done');
+    expect(tasks.get(auto.id)?.evidence).toMatch(/superseded/);
+  });
+
+  it('leaves the CHAT’s own plan alone — a remark is not a reason to abandon it', () => {
+    const mine = tasks.create('tab1', { request: 'ship the sidebar fix' });
+    tasks.settleAutopilotTasks('tab1');
+    expect(tasks.get(mine.id)?.state).toBe('open');
+  });
+
+  it('touches no other chat', () => {
+    const other = tasks.create('tab2', { request: 'elsewhere', origin: 'autopilot' });
+    tasks.settleAutopilotTasks('tab1');
+    expect(tasks.get(other.id)?.state).toBe('open');
+  });
+
+  it('defaults to the agent, so nothing written before this is retired by it', () => {
+    const legacy = tasks.create('tab1', { request: 'from before the column existed' });
+    expect(legacy.origin).toBe('agent');
+    expect(tasks.settleAutopilotTasks('tab1')).toBe(0);
+  });
+});

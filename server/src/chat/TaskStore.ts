@@ -67,6 +67,9 @@ export interface Task {
   /** `updated_at` as it was when the last continuation went out, so the next
    *  decision can ask whether anything moved. Null before the first. */
   continued_from: number | null;
+  /** 'agent' when the chat declared it; 'autopilot' when the anti-yield gate
+   *  inferred it. The owner speaking supersedes an inference, not a plan. */
+  origin: 'agent' | 'autopilot';
 }
 
 export interface TaskWrite {
@@ -81,16 +84,25 @@ export class TaskStore {
     private readonly now: () => number = Date.now,
   ) {}
 
-  create(tabId: string, w: TaskWrite): Task {
+  create(tabId: string, w: TaskWrite & { origin?: 'agent' | 'autopilot' }): Task {
     const id = ulid();
     const at = this.now();
     this.db
       .prepare(
         `INSERT INTO tasks (id, tab_id, request, criteria, next_step, state, evidence,
-           created_at, updated_at, closed_at, continuations, continued_from)
-         VALUES (?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, 0, NULL)`,
+           created_at, updated_at, closed_at, continuations, continued_from, origin)
+         VALUES (?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, 0, NULL, ?)`,
       )
-      .run(id, tabId, w.request, w.criteria ?? null, w.next_step ?? null, at, at);
+      .run(
+        id,
+        tabId,
+        w.request,
+        w.criteria ?? null,
+        w.next_step ?? null,
+        at,
+        at,
+        w.origin ?? 'agent',
+      );
     return this.get(id) as Task;
   }
 
@@ -178,6 +190,31 @@ export class TaskStore {
         "UPDATE tasks SET state = 'open', updated_at = ?, closed_at = NULL WHERE id = ? AND state = 'blocked'",
       )
       .run(this.now(), id);
+  }
+
+  /**
+   * THE OWNER SPOKE, SO THE AUTOPILOT'S GUESS ABOUT HIM IS OVER.
+   *
+   * An autopilot task is an INFERENCE about what he wanted, written when a
+   * chat tried to yield. The moment he says something himself, the inference
+   * is superseded by the real thing — whether or not the two are related.
+   *
+   * The Kalshi chat is why: the gate opened a reconciliation task, the chat
+   * did it, the owner then said something else entirely (a standing rule
+   * about liquidating positions), the chat answered THAT — and the old task
+   * was handed straight back, dragging it into restating an answer it had
+   * already given. "The anti yield is driving the agent crazy stupid."
+   *
+   * An AGENT-declared task is untouched: that is the chat's own plan, and a
+   * passing remark from the owner is not a reason to abandon it.
+   */
+  settleAutopilotTasks(tabId: string): number {
+    return this.db
+      .prepare(
+        `UPDATE tasks SET state = 'done', evidence = ?, updated_at = ?, closed_at = ?
+          WHERE tab_id = ? AND state = 'open' AND origin = 'autopilot'`,
+      )
+      .run('superseded: the owner spoke for himself', this.now(), this.now(), tabId).changes;
   }
 
   /**

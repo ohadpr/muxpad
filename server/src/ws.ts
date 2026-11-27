@@ -1848,6 +1848,13 @@ export function attachWsServer(deps: {
       tasks.resetBudget(tabId);
       return;
     }
+    // THE OWNER'S WORDS RETIRE THE AUTOPILOT'S GUESS ABOUT THEM. An
+    // autopilot task is an inference written when a chat tried to yield; the
+    // moment he says something himself there is no inference left to serve.
+    // See TaskStore.settleAutopilotTasks for the chat this came from.
+    const retired = tasks.settleAutopilotTasks(tabId);
+    if (retired > 0)
+      console.log(`[task] ${tabId}: retired ${retired} autopilot task(s) — he spoke`);
     // Only the chat's MOST RECENT task may come back — see
     // TaskStore.reopenLatestBlocked for what reopening an older one did.
     if (tasks.reopenLatestBlocked(tabId)) tasks.resetBudget(tabId);

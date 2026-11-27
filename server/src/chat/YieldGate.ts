@@ -165,6 +165,9 @@ export class YieldGate {
       const task = tasks.create(tabId, {
         request: pair.ask || verdict.message,
         next_step: verdict.message,
+        // Marked as the gate's INFERENCE, not the chat's plan, so the owner
+        // speaking retires it — see TaskStore.settleAutopilotTasks.
+        origin: 'autopilot',
       });
       // Stamp BEFORE the send, as the continuation path does: a send that is
       // relayed and then fails to record its attempt is an unbounded loop.

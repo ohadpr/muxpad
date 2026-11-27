@@ -467,3 +467,27 @@ describe('a prod has to add something', () => {
     expect(prodAddsNothing('go', 'go')).toBe(false);
   });
 });
+
+/**
+ * "The anti yield is driving the agent crazy stupid." From the Kalshi chat:
+ * one unexplained $40 produced a prod demanding the account's open-order
+ * collateral, the full fills-and-fees history, and confirmation of four
+ * orders. It did find a real error — so the rigour was not wrong — but a prod
+ * is one move, and a chat sent on an audit reads as nagging.
+ */
+describe('a prod is the smallest next step', () => {
+  const prompt = yieldPrompt({
+    ask: 'why is cash $40 short?',
+    closing: 'Traced it to bot collateral.',
+  });
+
+  it('asks for the one move, not a survey', () => {
+    expect(prompt).toMatch(/THE SMALLEST NEXT STEP, not an audit/);
+    expect(prompt).toMatch(/If the gap is one number,\s*\n?ask for that number/);
+  });
+
+  it('says why an audit is the wrong answer, not merely that it is', () => {
+    expect(prompt).toMatch(/spends his\s*\n?chat on work he did not want/);
+    expect(prompt).toMatch(/reads as nagging/);
+  });
+});

@@ -14,6 +14,7 @@ const task = (over: Partial<Task> = {}): Task => ({
   id: 't1',
   tab_id: 'tab1',
   request: 'ship the sidebar fix',
+  origin: 'agent',
   criteria: 'suite green and the row order verified',
   next_step: 'run the migration against a copy',
   state: 'open',
