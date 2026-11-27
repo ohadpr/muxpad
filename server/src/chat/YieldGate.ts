@@ -9,8 +9,11 @@ import {
   type YieldVerdict,
   asksTheOwner,
   hardStop,
+  ownerAskedAQuestion,
   parseVerdict,
+  prodAddsNothing,
   renderYieldProd,
+  reportsWorkInFlight,
   yieldPair,
   yieldPrompt,
 } from './yield-gate.js';
@@ -129,6 +132,19 @@ export class YieldGate {
       this.log(`[yield] ${tabId}: handed over — the chat is asking him something`);
       return;
     }
+    // HE ASKED A QUESTION: the answer IS the deliverable. Deterministic,
+    // because the model turned "Status" into a work order — see
+    // ownerAskedAQuestion for that prod and the other one like it.
+    if (ownerAskedAQuestion(pair.ask)) {
+      this.log(`[yield] ${tabId}: handed over — he asked a question`);
+      return;
+    }
+    // Parked on something already running is not stuck. Three tasks spent the
+    // whole budget being nagged while they were simply cooking.
+    if (reportsWorkInFlight(pair.closing)) {
+      this.log(`[yield] ${tabId}: handed over — work is already in flight`);
+      return;
+    }
 
     this.inFlight.add(paneId);
     try {
@@ -136,6 +152,12 @@ export class YieldGate {
       const verdict: YieldVerdict = parseVerdict(raw);
       if (verdict.kind !== 'prod') {
         this.log(`[yield] ${tabId}: handed over — ${verdict.why}`);
+        return;
+      }
+      // A prod that only says the request back is not an instruction, and
+      // sending it costs a turn to learn nothing.
+      if (prodAddsNothing(pair.ask, verdict.message)) {
+        this.log(`[yield] ${tabId}: handed over — the prod only restated the request`);
         return;
       }
       // The task the agent should have written. Everything downstream — the

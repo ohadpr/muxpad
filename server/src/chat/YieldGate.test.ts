@@ -116,6 +116,42 @@ describe('the anti-yield gate on the turn bus', () => {
     expect(prompts).toEqual([]);
   });
 
+  it.each([
+    ['a question he asked', 'Status', 'erdos-cpu is stopped; the card is at $30,100.'],
+    [
+      'work that is already running',
+      'build it',
+      'Long build in progress (pid 21902), waiting for it.',
+    ],
+  ])('hands over without paying for a model call: %s', async (_n, ask, closing) => {
+    // Both of these were real prods on the gate's first day: "Status" became
+    // "Confirm erdos-cpu is stopped, then dry-run card.py", and three long
+    // jobs were nagged six times each while they were simply cooking.
+    vi.spyOn(lastMessage, 'recentChatEvents').mockReturnValue([
+      { kind: 'user', text: ask },
+      { kind: 'assistant', text: closing },
+    ] as never);
+    await turnDone(make());
+    expect(sent).toEqual([]);
+    expect(prompts).toEqual([]);
+  });
+
+  it('refuses to send a prod that only says the request back', async () => {
+    const ask =
+      'Check whether the games site agent has deployed the change that makes the studio tile open';
+    decided = JSON.stringify({ verdict: 'prod', message: ask, why: 'not confirmed' });
+    vi.spyOn(lastMessage, 'recentChatEvents').mockReturnValue([
+      { kind: 'user', text: ask },
+      { kind: 'assistant', text: 'I had a look around.' },
+    ] as never);
+    await turnDone(make());
+    // The model was asked — this one is only knowable after the verdict — but
+    // nothing was sent, and no task was opened for a non-instruction.
+    expect(prompts).toHaveLength(1);
+    expect(sent).toEqual([]);
+    expect(new TaskStore(db).openFor(tabId)).toBe(null);
+  });
+
   it('NEVER talks over Stop', async () => {
     await turnDone(make(), { stopped: true });
     expect(sent).toEqual([]);

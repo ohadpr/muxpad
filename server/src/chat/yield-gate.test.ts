@@ -6,8 +6,11 @@ import {
   YIELD_SPEAKER,
   asksTheOwner,
   hardStop,
+  ownerAskedAQuestion,
   parseVerdict,
+  prodAddsNothing,
   renderYieldProd,
+  reportsWorkInFlight,
   yieldPair,
   yieldPrompt,
 } from './yield-gate.js';
@@ -385,5 +388,82 @@ describe('what he sees when he comes back', () => {
     expect(prod).toMatch(/he has not read this one/);
     expect(prod).toMatch(/lead with the result/);
     expect(prod).toMatch(/Do not recap what the autopilot told you to do/);
+  });
+});
+
+/**
+ * WHAT ITS FIRST DAY OF REAL USE SHOWED.
+ *
+ * 21 prods, and three patterns in them worth fixing. Every case below is one
+ * the gate actually produced, taken from the task rows it wrote.
+ */
+describe('a question from him is not a backlog item', () => {
+  it.each([
+    'Status',
+    'All good? You doing a good job hunting for love money making opportunities?',
+    'TLDR',
+    'tl;dr on the email thing',
+    'where are we',
+    "how's it going",
+    'any news on the deploy?',
+    'why did that take so long?',
+  ])('answers rather than prods: %s', (ask) => {
+    expect(ownerAskedAQuestion(ask)).toBe(true);
+  });
+
+  it.each([
+    'fix the bottom bar',
+    'Can you fix the bottom bar?',
+    'add a test for this?',
+    'check whether the games site agent deployed it',
+    'Finish it',
+  ])('still treats work as work: %s', (ask) => {
+    // An imperative with a question mark is a request, not an enquiry.
+    expect(ownerAskedAQuestion(ask)).toBe(false);
+  });
+
+  it('reads a long brief as a brief, whatever it ends with', () => {
+    expect(ownerAskedAQuestion(`${'context '.repeat(60)}does that make sense?`)).toBe(false);
+  });
+});
+
+describe('a chat waiting on something it already started', () => {
+  it.each([
+    '2300/7200 cached answers validated; first row reviewed and published.',
+    'long test build in progress (pid 21902, started ok at 4s); waiting for it to finish',
+    'Still running — I will report when it completes.',
+    '1900/3580 validated, no failures so far.',
+  ])('is left alone: %s', (closing) => {
+    // Three tasks spent the ENTIRE budget of six being nagged while they were
+    // simply cooking. The anti-loop could not help: progress was being
+    // recorded, which is exactly what earns another continuation.
+    expect(reportsWorkInFlight(closing)).toBe(true);
+  });
+
+  it('does not mistake a finished report for work in flight', () => {
+    expect(reportsWorkInFlight('Done. 4,355 tests pass and the bar measures 59px.')).toBe(false);
+  });
+});
+
+describe('a prod has to add something', () => {
+  it('refuses to say the request back as if it were an instruction', () => {
+    const ask =
+      'Check whether the games site agent has deployed the change that makes the studio tile open';
+    expect(prodAddsNothing(ask, ask)).toBe(true);
+    expect(prodAddsNothing(ask, `${ask}.`)).toBe(true);
+  });
+
+  it('lets a real instruction through, even one built from the same words', () => {
+    const ask = 'check the deploy';
+    expect(
+      prodAddsNothing(
+        ask,
+        'Check the deploy by curling the health endpoint and paste the status code.',
+      ),
+    ).toBe(false);
+  });
+
+  it('says nothing about very short asks, where overlap means little', () => {
+    expect(prodAddsNothing('go', 'go')).toBe(false);
   });
 });

@@ -147,6 +147,99 @@ export function asksTheOwner(closing: string): boolean {
 }
 
 /**
+ * DID HE ASK A QUESTION? Then the answer is the deliverable.
+ *
+ * From the gate's first day of real use, two of its prods:
+ *
+ *   he said "Status"            → prod: "Confirm erdos-cpu is stopped, then
+ *                                 dry-run card.py against the $30k…"
+ *   he said "All good? You      → prod: "Add the model-release watchers for
+ *   doing a good job hunting…"    the SDK repos, Hugging Face uploads…"
+ *
+ * He asked how things were going and the gate sent the chat off to do work.
+ * That is the complaint in its purest form — "if I ask a question it can come
+ * in after the answer with a stupid request" — and it is deterministic, so it
+ * should never have been left to a model's judgement.
+ *
+ * An IMPERATIVE with a question mark is still work ("can you fix the bar?"),
+ * so the opening verb is checked: a request to DO something is not this.
+ */
+const ASKING_VERBS =
+  /^(fix|add|make|build|run|change|do|write|update|remove|delete|move|rename|implement|refactor|ship|push|commit|try|go|continue|carry on|finish|check|look|find|get|send|draft|set|turn|put|give)\b/i;
+/** Short, information-shaped openers that carry no question mark at all. */
+const STATUS_ASK =
+  /^(status|tldr|tl;dr|update|progress|summary|recap|where are we|how('s| is) it going|all good|any news|state of play|what('s| is) (the )?(status|state|latest))\b/i;
+
+export function ownerAskedAQuestion(ask: string): boolean {
+  const text = ask.trim();
+  if (!text) return false;
+  if (STATUS_ASK.test(text)) return true;
+  // Long messages are briefs, whatever punctuation they end on.
+  if (text.length > 400) return false;
+  // "Can you fix the bar?" is a request wearing a question mark. The politeness
+  // comes off before the verb is read, or every polite instruction reads as an
+  // enquiry — which would be the gate's old failure in reverse.
+  const bare = text.replace(/^\s*(please\s+)?(can|could|would|will)\s+(you|u)\s+/i, '');
+  if (ASKING_VERBS.test(bare)) return false;
+  return text.endsWith('?');
+}
+
+/**
+ * IS THE CHAT PARKED ON SOMETHING THAT IS ALREADY RUNNING?
+ *
+ * Three tasks spent the ENTIRE budget of six this way, and their recorded
+ * next steps say why: "2300/7200 cached answers validated", "1900/3580
+ * validated", "Native accepted 9/600,225 votes". Long jobs, proceeding
+ * normally, reporting progress — and the gate prodded each of them six times.
+ * The anti-loop could not stop it, because progress WAS being recorded, which
+ * is exactly what earns another continuation.
+ *
+ * A chat waiting on something it already started has not yielded in the sense
+ * the gate exists for. It is not stuck; it is cooking. Six model calls and
+ * six injected turns bought nothing.
+ */
+const WORK_IN_FLIGHT = new RegExp(
+  [
+    '\\b(in progress|still running|waiting for (it|the|that)|pid \\d+|started at',
+    '|under ?way|will report when|once it finishes|when it completes)\\b',
+    // A progress RATIO, with whatever words the chat put between it and the
+    // verb: "2300/7200 cached answers validated" is the real shape, not
+    // "2300/7200 validated".
+    '|\\b\\d+\\s*/\\s*\\d+\\b[^.\\n]{0,40}?\\b(done|validated|processed|complete|remaining)\\b',
+  ].join(''),
+  'i',
+);
+
+export function reportsWorkInFlight(closing: string): boolean {
+  return WORK_IN_FLIGHT.test(closing);
+}
+
+/**
+ * A PROD THAT ONLY REPEATS THE REQUEST IS NOT A PROD.
+ *
+ * Observed: he asked "Check whether the games site agent has deployed the
+ * change…" and the gate's instruction was that sentence again, verbatim. The
+ * chat learns nothing, the budget pays, and the reader sees a machine
+ * repeating them back to themselves.
+ */
+export function prodAddsNothing(ask: string, message: string): boolean {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  const a = norm(ask);
+  const m = norm(message);
+  if (a.length < 4 || m.length < 4) return false;
+  const bag = new Set(a);
+  const shared = m.filter((w) => bag.has(w)).length;
+  // Nearly every word of the prod already appears in the ask, and it is no
+  // longer than the ask: it is a restatement, not an instruction.
+  return shared / m.length > 0.85 && m.length <= a.length + 3;
+}
+
+/**
  * The gate's own question, as sent to the model.
  *
  * `ask` is the last thing the OWNER said and it is the single most important
