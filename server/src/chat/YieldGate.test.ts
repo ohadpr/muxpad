@@ -100,6 +100,22 @@ describe('the anti-yield gate on the turn bus', () => {
     expect(prompts[0]).toMatch(/GOAL/);
   });
 
+  it('leaves a chat that is ASKING HIM something — the Investing failure', async () => {
+    // The agent ended "Stopping here — the question is yours and I've asked
+    // it twice", and the gate prodded it anyway: it answered the GATE, the
+    // task handed it back, and by the time he arrived the chat had driven
+    // itself into work he did not want. `blocked` does not catch this — that
+    // is the ask_user TOOL, and almost every real question is prose.
+    vi.spyOn(lastMessage, 'recentChatEvents').mockReturnValue([
+      { kind: 'user', text: 'sort out the reserve' },
+      { kind: 'assistant', text: "Stopping here — the question is yours and I've asked it twice." },
+    ] as never);
+    await turnDone(make());
+    expect(sent).toEqual([]);
+    // And it costs nothing: no model call for a yield that was never in doubt.
+    expect(prompts).toEqual([]);
+  });
+
   it('NEVER talks over Stop', async () => {
     await turnDone(make(), { stopped: true });
     expect(sent).toEqual([]);

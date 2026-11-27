@@ -7,6 +7,7 @@ import { recentChatEvents } from './last-message.js';
 import { CONTINUATION_LIMIT } from './task-continue.js';
 import {
   type YieldVerdict,
+  asksTheOwner,
   hardStop,
   parseVerdict,
   renderYieldProd,
@@ -120,6 +121,14 @@ export class YieldGate {
     // Nothing the owner said, nothing the chat said: there is no yield here
     // to have an opinion about.
     if (!pair.ask && !pair.closing) return;
+    // A CHAT THAT IS ASKING HIM SOMETHING IS ALREADY YIELDING TO HIM, and
+    // deliberately. Checked here rather than left to the model, because the
+    // model got it wrong on exactly this case and the cost was a chat driven
+    // further into work he did not want. See asksTheOwner.
+    if (asksTheOwner(pair.closing)) {
+      this.log(`[yield] ${tabId}: handed over — the chat is asking him something`);
+      return;
+    }
 
     this.inFlight.add(paneId);
     try {

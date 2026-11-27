@@ -4,6 +4,7 @@ import type { Task } from './TaskStore.js';
 import { CONTINUATION_LIMIT } from './task-continue.js';
 import {
   YIELD_SPEAKER,
+  asksTheOwner,
   hardStop,
   parseVerdict,
   renderYieldProd,
@@ -294,5 +295,95 @@ describe('the two sides of a yield', () => {
 
   it('answers empty for a chat with nothing in it', () => {
     expect(yieldPair([], human)).toEqual({ ask: '', closing: '' });
+  });
+});
+
+/**
+ * THE GATE'S WORST FAILURE, from the Investing chat.
+ *
+ * The agent ended with "Stopping here — the question is yours and I've asked
+ * it twice." The gate prodded it anyway. The agent answered the GATE, the
+ * task handed it back again, and by the time the owner arrived the chat had
+ * driven itself deeper into work he did not want: "why are you dealing with
+ * my taxes? that's for another chat."
+ *
+ * `hardStop`'s `blocked` only catches a STRUCTURED question (the ask_user
+ * tool). An agent writing "I need you to tell me X" in prose is yielding just
+ * as deliberately, and in practice that is nearly all of them.
+ */
+describe('a chat that is asking HIM something', () => {
+  it.each([
+    "Stopping here — the question is yours and I've asked it twice.",
+    'Only you can decide whether to reserve the tax.',
+    'I need you to tell me the cost basis before I can finish.',
+    'Your call: ship it now, or wait for the review?',
+    'Which do you want — the fast one or the correct one?',
+    'Done with the rest. Let me know about the pricing and I will finish.',
+    'That needs your decision.',
+    'Three options, all reasonable. Shall I take the second?',
+  ])('is left alone: %s', (closing) => {
+    expect(asksTheOwner(closing)).toBe(true);
+  });
+
+  it('takes a trailing question as a question to the reader', () => {
+    expect(asksTheOwner('Fixed the bar.\n\nWant me to do the same on the phone?')).toBe(true);
+  });
+
+  it('does not take a question it went on to answer itself', () => {
+    // A rhetorical question mid-paragraph is how half of good prose is
+    // written; only the LAST line is a question put to the reader.
+    expect(
+      asksTheOwner('Why was it slow? The list re-sorted under the finger. Fixed, and measured.'),
+    ).toBe(false);
+  });
+
+  it.each([
+    'Done. 4,355 tests pass and the bar measures 59px.',
+    'Fixed and pushed; the suite is green.',
+    '',
+  ])('still lets an ordinary finish be judged: %s', (closing) => {
+    expect(asksTheOwner(closing)).toBe(false);
+  });
+});
+
+/**
+ * "I often ask for tldr — make the anti yield handle those automatically when
+ * it's clear from the chat that I'm trying to get shorter results."
+ */
+describe('the shape he asked for is part of the goal', () => {
+  const prompt = yieldPrompt({ ask: 'TLDR', closing: 'x'.repeat(900) });
+
+  it('tells the gate that a right answer in the wrong shape is not done', () => {
+    expect(prompt).toMatch(/THE SHAPE HE WANTS IS PART OF THE GOAL/);
+    expect(prompt).toMatch(/TLDR/);
+    expect(prompt).toMatch(/not done/);
+    // …and that the prod is to re-say it, not to go and do more work.
+    expect(prompt).toMatch(/say it again in the shape he asked for, not to do more work/);
+  });
+
+  it('works in the other direction too, so it is a style rule and not a short rule', () => {
+    expect(prompt).toMatch(/if he asked to see the reasoning, a bare conclusion is/);
+  });
+
+  it('counts a chat waiting on him as a hand-over, in the prompt as well', () => {
+    expect(prompt).toMatch(/the chat has put a question to HIM and is waiting/);
+  });
+});
+
+/**
+ * "When I come in what I see is the agent's final clarification to the anti
+ * yield request. I want the actual final result."
+ */
+describe('what he sees when he comes back', () => {
+  const prod = renderYieldProd(
+    { kind: 'prod', message: 'Say it in three lines.', why: 'he asked for a TLDR' },
+    { attempt: 1, limit: 6 },
+  );
+
+  it('tells the agent to answer HIM, not the prod', () => {
+    expect(prod).toMatch(/Your closing message is what Ohad will see/);
+    expect(prod).toMatch(/he has not read this one/);
+    expect(prod).toMatch(/lead with the result/);
+    expect(prod).toMatch(/Do not recap what the autopilot told you to do/);
   });
 });

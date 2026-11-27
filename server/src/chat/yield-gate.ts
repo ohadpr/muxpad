@@ -110,6 +110,43 @@ export function hardStop(ctx: YieldContext): string | null {
 }
 
 /**
+ * IS THIS CHAT ASKING THE OWNER SOMETHING?
+ *
+ * The gate's worst failure, from the Investing chat: the agent ended with
+ * "Stopping here — the question is yours and I've asked it twice", and the
+ * gate prodded it anyway. The agent then answered the GATE, the task handed
+ * it back again, and by the time the owner arrived the chat had driven itself
+ * deeper into work he did not want — "why are you dealing with my taxes?
+ * that's for another chat".
+ *
+ * `hardStop`'s `blocked` only catches a STRUCTURED question (the ask_user
+ * tool). An agent that writes "I need you to tell me X" in prose is yielding
+ * just as deliberately, and that prose is the common case by far.
+ *
+ * Deliberately liberal. A false positive costs one hand-over that might have
+ * been a prod — which is the behaviour muxpad had before the gate existed. A
+ * false negative talks over a direct question to the owner, which is the one
+ * thing it must never do.
+ */
+const ASKS_OWNER =
+  /\b(only you can|i need you to|need(s)? your (answer|call|decision|input)|your call|up to you|tell me (which|what|whether|the)|let me know|stopping here|waiting on you|can you (confirm|tell|decide)|which (do you|would you)|shall i)\b/i;
+
+export function asksTheOwner(closing: string): boolean {
+  const text = closing.trim();
+  if (!text) return false;
+  if (ASKS_OWNER.test(text)) return true;
+  // A turn whose LAST line is a question is putting it to the reader. Only
+  // the last — a question in the middle is usually rhetorical, or one the
+  // chat went on to answer itself.
+  const last =
+    text
+      .split('\n')
+      .filter((l) => l.trim())
+      .pop() ?? '';
+  return last.trim().endsWith('?');
+}
+
+/**
  * The gate's own question, as sent to the model.
  *
  * `ask` is the last thing the OWNER said and it is the single most important
@@ -134,8 +171,16 @@ export function yieldPrompt(input: { ask: string; closing: string }): string {
     '     that is the next instruction, not a question for him.',
     '',
     'Hand over (DELIVER) when: his message was a question and it has been answered;',
-    'the goal is genuinely met; the decision left is irreversible, costs real money,',
-    'reaches another person, or is a matter of his taste with no precedent.',
+    'the goal is genuinely met; the chat has put a question to HIM and is waiting;',
+    'the decision left is irreversible, costs real money, reaches another person,',
+    'or is a matter of his taste with no precedent.',
+    '',
+    'THE SHAPE HE WANTS IS PART OF THE GOAL. If this chat shows him asking for it',
+    'shorter — "TLDR", "too long", "just the answer", "in one line" — then a',
+    'correct answer delivered at five times the length is not done, and the prod',
+    'is to say it again in the shape he asked for, not to do more work. The same',
+    'goes the other way: if he asked to see the reasoning, a bare conclusion is',
+    'not done either. Match what he has actually been asking this chat for.',
     '',
     'Otherwise PROD: write the next instruction, in the imperative, to the agent.',
     'Say what to do and why he would want it. One or two sentences. Never speak as',
@@ -213,6 +258,15 @@ export function renderYieldProd(
     // how to REFUSE and never how to FINISH.
     'When the work is finished, close the task with the evidence (commands run,',
     'results seen) in the same turn instead of ending without closing it.',
+    '',
+    // WHAT HE ACTUALLY SEES WHEN HE COMES BACK. Reported from the Investing
+    // chat: "when I come in what I see is the agent's final clarification to
+    // the anti yield request. I want the actual final result." The prod is
+    // machinery he never read, so a reply addressed to IT buries the thing he
+    // asked for under an answer to a question he never asked.
+    'Your closing message is what Ohad will see, and he has not read this one.',
+    'So answer HIS last request in it — lead with the result, not with a reply to',
+    'this prod. Do not recap what the autopilot told you to do.',
     '',
     'If this genuinely needs Ohad — it is irreversible, it costs money, it reaches',
     'another person, or it is his taste with no precedent — say so in one line and',
