@@ -206,6 +206,14 @@ export function renderYieldProd(
     `Continuation ${budget.attempt} of ${budget.limit}; they are spent by finishing,`,
     'not by trying, so record what moved.',
     '',
+    // WITHOUT THIS LINE THE LOOP COSTS A ROUND TRIP EVERY TIME. Observed on
+    // the gate's first real prod: the work was done, committed and pushed,
+    // the turn ended, and the task — which the gate itself had written —
+    // came back untouched because nobody had closed it. The prod explained
+    // how to REFUSE and never how to FINISH.
+    'When the work is finished, close the task with the evidence (commands run,',
+    'results seen) in the same turn instead of ending without closing it.',
+    '',
     'If this genuinely needs Ohad — it is irreversible, it costs money, it reaches',
     'another person, or it is his taste with no precedent — say so in one line and',
     'stop. That reaches him. Do not argue with this message; either carry on or',

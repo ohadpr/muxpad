@@ -213,6 +213,16 @@ describe('the prod, as the agent receives it', () => {
     expect(prod).toMatch(/spent by finishing,\s*\n?not by trying/);
   });
 
+  it('says how to FINISH, not only how to refuse', () => {
+    // The gate's first real prod cost a wasted round trip: the work was done,
+    // committed and pushed, the turn ended, and the task the gate had written
+    // came back untouched because nobody had closed it. The message explained
+    // refusal and never completion.
+    expect(prod).toMatch(/close the task with the evidence/);
+    expect(prod).toMatch(/commands run,?\s*\n?results seen/);
+    expect(prod).toMatch(/in the same turn/);
+  });
+
   it('leaves the valve CHEAP to pull — one line and stop', () => {
     // A refusal that costs a negotiation is a refusal nobody makes, and then
     // the gate has no way to hear "this one really is for him".
