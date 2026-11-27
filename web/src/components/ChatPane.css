@@ -3963,3 +3963,32 @@
   border-radius: 2px;
   background: currentColor;
 }
+
+/* ─── THE AUTOPILOT'S VOICE ────────────────────────────────────────────────
+   The anti-yield gate's prods travel the ordinary send road (same queue, same
+   drain, same Stop button), so they arrive in the log where the owner's own
+   messages arrive. "I would like to see these Ohad agentic messages in the
+   chat labeled with some color so I can follow what happened."
+
+   The accent, which is what every other piece of muxpad machinery in the log
+   wears — a cron's chip, a loop's. Not a new colour: this is the cockpit
+   talking, and it should read as the same voice that says "a schedule fired",
+   not as a third person in the room. */
+.chat-autopilot {
+  display: block;
+  border-inline-start: 2px solid var(--accent);
+  padding-inline-start: 10px;
+}
+.chat-autopilot-chip {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--chrome-font);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  /* Held at the same bar as every other label in the log; --accent alone is
+     under 4.5:1 on several themes (themes.test.ts measured 1.02–7.52), so the
+     ink is the page's and the ACCENT is carried by the rule beside it. */
+  color: var(--fg-dim);
+  text-transform: uppercase;
+}

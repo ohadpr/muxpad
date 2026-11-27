@@ -1,0 +1,76 @@
+/* ──────────────────────────────────────────────────────────────────────
+   The list rows the desktop chat list's Unread / Activity views show (chosen
+   from the destination rail, DestinationRail). The rows are the phone's
+   (ChatPreviewList → MobileNav.css), re-scaled here for a 280px rail under
+   the rail's own root, so the phone is untouched.
+   ────────────────────────────────────────────────────────────────────── */
+
+.rail-view-list .mcl-scroll {
+  overflow: visible;
+  padding-block: 2px 8px;
+}
+.rail-view-list .mcl-row {
+  gap: 8px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 6px;
+  margin: 0 4px;
+}
+/* THE SEPARATOR STARTS WHERE THE TEXT DOES, on this surface too. It is drawn
+   by MobileNav.css at the PHONE's text column (14px padding + 28px emoji +
+   12px gap = 54px); here the row is 10 + 20 + 8 = 38, so the line began 16px
+   inside its own text and the rail's list read as a different object from the
+   page's. Each surface that re-scales these rows owes this number — the page
+   sets 48 (ChatPreviewList.test.tsx now holds all three to it). */
+.rail-view-list .mcl-row + .mcl-row::before {
+  inset-inline-start: 38px;
+}
+.rail-view-list .mcl-row[data-active="true"] {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.rail-view-list .mcl-row-emoji {
+  flex-basis: 20px;
+  font-size: 15px;
+  line-height: 20px;
+}
+.rail-view-list .mcl-row-name {
+  font-size: 0.8125rem;
+}
+.rail-view-list .mcl-row-meta {
+  font-size: 0.6875rem;
+}
+/* 1.35, NOT 1.3 — the same ratio the reservation in MobileNav.css is written
+   against (`min-height: calc(2 * 1.35em)`). At 1.3 the row held 32.4px for
+   two lines that measure 31.2, so every rail row carried a pixel of dead
+   space the page's did not. */
+.rail-view-list .mcl-row-preview {
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+/* Same two corrections as the page's copy of this rule: `display: flex`
+   REPLACED the preview's clamp box, so the one "runs on another machine" row
+   lost the two-line height every other row reserves and sat visibly short;
+   and --fg-faint measures 2.76–4.69:1, under the floor in ten of eleven
+   themes, for a line that is the ONLY thing its row says. */
+.rail-view-list .mcl-row-preview[data-elsewhere="true"] {
+  display: block;
+  font-style: normal;
+  color: var(--fg-dim);
+}
+.rail-view-list .mcl-empty {
+  padding: 40px 16px 8px;
+}
+.rail-view-list .mcl-empty-title {
+  font-size: 0.875rem;
+}
+.rail-view-list .mcl-empty-sub {
+  font-size: 0.75rem;
+}
+
+/* A COLLAPSED workspace header's unread count, in the tab count's slot
+   (NavTree WorkspaceNode): the same chip, filled, so it reads as "these want
+   reading" rather than "this many chats". */
+.navtree .navtree-ws-count.rail-ws-unread {
+  color: #fff;
+  background: var(--danger, #e01e5a);
+  font-weight: 700;
+}

@@ -1,16 +1,14 @@
 // GET /api/tabs/all — the one read behind the sidebar's search box.
 //
-// The contract that matters is not "it returns tabs": it is that it returns
-// the SAME rows, decorated the same way and in the same order, as the
-// per-workspace list the tree renders — because a result row and the tree row
-// it navigates to are the same thing seen twice — and that it never leaks the
-// hidden system container the navigator cannot reach.
+// Live rows retain the same decoration and stored order as workspace navigation.
+// Finished history is available on demand, not part of this hot response; a
+// retired chat that still owns an unparked pane remains live work.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHAT_DECAY_MS, DAY_MS, type Tab } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
 import { WorkspaceStore } from '../store/WorkspaceStore.js';
@@ -268,5 +266,237 @@ describe('GET /api/tabs/all — the cross-workspace search corpus', () => {
     // different SHAPES, and one endpoint returning an array or an object
     // depending on a query param is how a client ends up parsing both.
     expect((await test.app.request('/api/tabs')).status).toBe(400);
+  });
+  it('does not grow with finished or expired history, or build a historical clock snapshot', async () => {
+    const ws = await makeWorkspace('W');
+    const live = await makeChat(ws.id, 'live');
+    const now = Date.now();
+    const realNow = Date.now;
+    Date.now = () => now;
+    try {
+      const before = await all();
+      const tabs = new TabStore(db);
+      for (let i = 0; i < 100; i++) {
+        const old = await makeChat(ws.id, `finished ${i}`);
+        tabs.retire(old.id, 'delivered');
+        tabs.setUnread(old.id, true);
+        db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, old.id);
+        db.prepare('UPDATE tabs SET spawn_report = ? WHERE id = ?').run(
+          'report'.repeat(10_000),
+          old.id,
+        );
+        const expired = await makeChat(ws.id, `expired ${i}`);
+        tabs.resetClock(expired.id, now - CHAT_DECAY_MS - DAY_MS);
+        db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, expired.id);
+      }
+      // Candidate enumeration itself is bounded, before JSON/decorateTab.
+      expect(tabs.corpusCandidates(now - CHAT_DECAY_MS).map((t) => t.id)).toEqual([live.id]);
+      const prepare = db.prepare.bind(db);
+      const boundedReads = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        if (
+          /SELECT id FROM tabs WHERE unread = 1(?! AND id IN)/.test(sql) ||
+          /UNION SELECT tab_id FROM panes WHERE unread = 1/.test(sql)
+        ) {
+          throw new Error('whole-history unread enumeration');
+        }
+        return prepare(sql);
+      });
+      const original = tabs.clockRows;
+      TabStore.prototype.clockRows = () => {
+        throw new Error('whole-history clock scan');
+      };
+      try {
+        expect(await all()).toEqual(before);
+      } finally {
+        TabStore.prototype.clockRows = original;
+        boundedReads.mockRestore();
+      }
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('keeps retired work with an unparked pane, then drops it when parked', async () => {
+    const ws = await makeWorkspace('W');
+    const chat = await makeChat(ws.id, 'still running');
+    new TabStore(db).retire(chat.id, 'delivered');
+    const rows = (await all()).workspaces[0]?.tabs ?? [];
+    expect(rows.map((t) => t.id)).toContain(chat.id);
+    expect(rows.find((t) => t.id === chat.id)?.done).toBe(true);
+    db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(Date.now(), chat.id);
+    expect((await all()).workspaces[0]?.tabs).toEqual([]);
+  });
+
+  it('preserves clock exceptions, including an old sub-chat with a finished parent', async () => {
+    const ws = await makeWorkspace('W');
+    const tabs = new TabStore(db);
+    const terminal = await makeTab(ws.id, 'terminal');
+    const pinned = await makeChat(ws.id, 'pinned');
+    const parent = await makeChat(ws.id, 'finished parent');
+    const child = tabs.create({
+      name: 'old live child',
+      workspace_id: ws.id,
+      layout: '',
+      spawned_by: parent.id,
+    });
+    new PaneStore(db).create({ tab_id: child.id, startup_cmd: 'muxpad agent' });
+    for (const t of [terminal, pinned, parent, child]) {
+      tabs.resetClock(t.id, Date.now() - CHAT_DECAY_MS - DAY_MS);
+      db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(Date.now(), t.id);
+    }
+    tabs.setPinned(pinned.id, true);
+    tabs.retire(parent.id, 'delivered');
+    expect(new Set((await all()).workspaces[0]?.tabs.map((t) => t.id))).toEqual(
+      new Set([terminal.id, pinned.id, child.id]),
+    );
+    // Removing its agent changes the indexed content marker atomically.
+    db.prepare('UPDATE panes SET startup_cmd = NULL WHERE tab_id = ?').run(parent.id);
+    tabs.unretire(parent.id);
+    expect((await all()).workspaces[0]?.tabs.map((t) => t.id)).toContain(parent.id);
+  });
+
+  it('keeps finished unread in the inbox while excluding it from the corpus', async () => {
+    const ws = await makeWorkspace('W');
+    const tabs = new TabStore(db);
+    const manual = await makeChat(ws.id, 'manual unread');
+    const pane = await makeChat(ws.id, 'pane unread');
+    for (const t of [manual, pane]) {
+      tabs.retire(t.id, 'archived');
+      db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(Date.now(), t.id);
+      db.prepare(
+        'UPDATE tabs SET spawn_report = ?, spawn_report_state = ?, spawn_report_at = ? WHERE id = ?',
+      ).run('private long report', 'ok', 1, t.id);
+    }
+    tabs.setUnread(manual.id, true);
+    db.prepare('UPDATE panes SET unread = 1 WHERE tab_id = ?').run(pane.id);
+    expect((await all()).workspaces[0]?.tabs).toEqual([]);
+    const inbox = (await (await test.app.request('/api/tabs/unread')).json()) as AllTabsBody;
+    expect(new Set(inbox.workspaces[0]?.tabs.map((t) => t.id))).toEqual(
+      new Set([manual.id, pane.id]),
+    );
+    expect(inbox.workspaces[0]?.tabs.every((t) => t.done && t.unread && !t.spawn_report)).toBe(
+      true,
+    );
+  });
+
+  it('looks up historical names and archive pane ids without a history corpus, with bounded results', async () => {
+    const ws = await makeWorkspace('W');
+    const old = await makeChat(ws.id, 'historical needle');
+    const tabs = new TabStore(db);
+    tabs.retire(old.id, 'delivered');
+    db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(Date.now(), old.id);
+    const paneId = new PaneStore(db).listByTab(old.id)[0]?.id;
+    const lookup = async (q: string) =>
+      (await (await test.app.request(`/api/tabs/lookup?${q}`)).json()) as AllTabsBody;
+    expect((await lookup('q=needle')).workspaces[0]?.tabs.map((t) => t.id)).toEqual([old.id]);
+    expect((await lookup(`tabIds=${old.id}`)).workspaces[0]?.tabs.map((t) => t.id)).toEqual([
+      old.id,
+    ]);
+    expect((await lookup(`paneIds=${paneId}`)).workspaces[0]?.tabs.map((t) => t.id)).toEqual([
+      old.id,
+    ]);
+    expect((await lookup('q=')).workspaces[0]?.tabs).toEqual([]);
+    for (let i = 0; i < 65; i++) await makeTab(ws.id, `needle ${i}`);
+    expect((await lookup('q=needle')).workspaces[0]?.tabs).toHaveLength(60);
+  });
+  it('retains an expired parked parent while a live child is working', async () => {
+    const ws = await makeWorkspace('W');
+    const tabs = new TabStore(db);
+    const parent = await makeChat(ws.id, 'old parent');
+    tabs.resetClock(parent.id, Date.now() - CHAT_DECAY_MS - DAY_MS);
+    db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(Date.now(), parent.id);
+    const child = tabs.create({
+      name: 'working child',
+      workspace_id: ws.id,
+      layout: '',
+      spawned_by: parent.id,
+    });
+    const pane = new PaneStore(db).create({ tab_id: child.id, startup_cmd: 'muxpad agent' });
+    test.cache.setAgentBusy(pane.id, true);
+    const row = (await all()).workspaces[0]?.tabs.find((t) => t.id === parent.id);
+    expect(row).toMatchObject({ done: false, status: 'working', agents: 1 });
+  });
+
+  it('uses persisted unparked ownership without runtime or status inference', async () => {
+    const ws = await makeWorkspace('W');
+    const chat = await makeChat(ws.id, 'finished but unparked');
+    new TabStore(db).retire(chat.id, 'delivered');
+    const panes = new PaneStore(db);
+    const pane = panes.listByTab(chat.id)[0]!;
+    test.cache.setDead(pane.id, true);
+    const runtime = vi.spyOn(test.ptyd.client, 'listPanes').mockRejectedValue(new Error('offline'));
+    expect((await all()).workspaces[0]?.tabs[0]).toMatchObject({
+      id: chat.id,
+      done: true,
+      corpus_live: true,
+    });
+    panes.park(pane.id, Date.now());
+    expect((await all()).workspaces[0]?.tabs).toEqual([]);
+    const full = (await (await test.app.request(`/api/tabs?workspaceId=${ws.id}`)).json()) as Tab[];
+    expect(full.find((t) => t.id === chat.id)).toMatchObject({ corpus_live: false });
+    panes.unpark(pane.id);
+    expect((await all()).workspaces[0]?.tabs[0]).toMatchObject({ corpus_live: true });
+    expect(runtime).not.toHaveBeenCalled();
+  });
+
+  // THE TWO PATHS MUST AGREE, AND THEY ARE WRITTEN IN DIFFERENT LANGUAGES.
+  // `corpus_live` is decided in TS by decorateTab; membership is decided in
+  // SQL by corpusCandidates. A review found a row the first called live and
+  // the second dropped — an unread chat whose clock had expired and whose
+  // panes were all parked — so the workspace poll put it in the client's
+  // corpus and /all took it straight back out, and it appeared in instant
+  // search or not depending on which response landed last. Asserting the
+  // property, not the one example, is the only version of this test that
+  // keeps working as either side changes.
+  it('never calls a row corpus_live that the corpus query would drop', async () => {
+    const ws = await makeWorkspace('W');
+    const tabs = new TabStore(db);
+    const now = Date.now();
+    const stale = now - CHAT_DECAY_MS - DAY_MS;
+
+    const live = await makeChat(ws.id, 'live');
+    const unreadExpired = await makeChat(ws.id, 'unread but expired');
+    const paneUnreadExpired = await makeChat(ws.id, 'pane unread, expired');
+    const quietExpired = await makeChat(ws.id, 'nothing to see');
+    const retiredParked = await makeChat(ws.id, 'finished');
+    const retiredUnparked = await makeChat(ws.id, 'finished but still running');
+
+    for (const t of [unreadExpired, paneUnreadExpired, quietExpired]) {
+      tabs.resetClock(t.id, stale);
+      db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, t.id);
+    }
+    tabs.setUnread(unreadExpired.id, true);
+    db.prepare('UPDATE panes SET unread = 1 WHERE tab_id = ?').run(paneUnreadExpired.id);
+    for (const t of [retiredParked, retiredUnparked]) tabs.retire(t.id, 'delivered');
+    db.prepare('UPDATE panes SET parked_at = ? WHERE tab_id = ?').run(now, retiredParked.id);
+
+    const full = (await (await test.app.request(`/api/tabs?workspaceId=${ws.id}`)).json()) as Tab[];
+    const claimedLive = full.filter((t) => t.corpus_live).map((t) => t.id);
+    const candidates = new Set(tabs.corpusCandidates(now - CHAT_DECAY_MS).map((t) => t.id));
+    const inAll = new Set((await all()).workspaces[0]?.tabs.map((t) => t.id));
+
+    // The fixture has to contain the hard cases or the property is vacuous.
+    expect(claimedLive).toContain(unreadExpired.id);
+    expect(claimedLive).toContain(paneUnreadExpired.id);
+    expect(claimedLive).toContain(live.id);
+    expect(claimedLive).toContain(retiredUnparked.id);
+    expect(claimedLive).not.toContain(quietExpired.id);
+    expect(claimedLive).not.toContain(retiredParked.id);
+
+    expect([...claimedLive].filter((id) => !candidates.has(id))).toEqual([]);
+    expect([...claimedLive].filter((id) => !inAll.has(id))).toEqual([]);
+  });
+
+  it('ranks historical name matches before a broad workspace match reaches the lookup cap', async () => {
+    const ws = await makeWorkspace('Needle');
+    const exact = await makeChat(ws.id, 'Needle');
+    new TabStore(db).retire(exact.id, 'delivered');
+    for (let i = 0; i < 65; i++) await makeTab(ws.id, `other ${i}`);
+    db.prepare('UPDATE tabs SET last_user_at = 0 WHERE id = ?').run(exact.id);
+    const result = (await (
+      await test.app.request('/api/tabs/lookup?q=needle')
+    ).json()) as AllTabsBody;
+    expect(result.workspaces[0]?.tabs).toHaveLength(60);
+    expect(result.workspaces[0]?.tabs.map((t) => t.id)).toContain(exact.id);
   });
 });

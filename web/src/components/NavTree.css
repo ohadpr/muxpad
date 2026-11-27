@@ -170,14 +170,27 @@
      second rung on the read state bought nothing but an unreadable name — so
      read is simply --fg-dim now (5.51–11.2 on the rail, 4.79–11.2 on the
      band, AA everywhere), and the distance to unread is carried by the two
-     channels that were always doing the work. */
-  --nt-ink-read: var(--fg-dim);
+     channels that were always doing the work.
+
+     ── AND NOW NOT EVEN ONE RUNG ───────────────────────────────────────────
+     "For this tree view esp on mobile but likely always give me better
+     contrast in all themes", against Slack's mobile list: names in near-black
+     at weight, the hierarchy carried by weight and size rather than by grey.
+     The phone list already worked that way (--fg at 400, unread --fg at 700)
+     and the rail was the one surface still fading every name it was not
+     shouting about. Read is full ink now on both; unread keeps 700 against
+     read's 450, which is the step the eye reads down a list. What recedes is
+     what is RETIRED — the older chats — and that is the one row left on
+     --fg-dim. Pinned per theme by themes.test.ts. */
+  --nt-ink-read: var(--fg);
   /* A child is subordinate, so it sits one rung quieter again — and that rung
      is the one the read state just vacated. It was --fg-faint outright, which
      measured 3.26–5.58:1 and failed AA on EIGHT of the ten themes: the rows
      most likely to be the thing you were waiting for, set in the ink nobody
-     can read. 4.73–9.26 now. */
-  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
+     can read. 4.73–9.26 then; and now that read is full ink the child takes
+     the rung read vacated — --fg-dim itself, the quiet ink every theme holds
+     at 4.5:1 or better on both surfaces. */
+  --nt-ink-read-child: var(--fg-dim);
   /* A step fainter again — it is the least important thing on the line and
      only has to be legible when you deliberately look at it. The hover below
      is what makes it readable at the moment you actually want it. */
@@ -306,7 +319,15 @@
      gap could never do it, because a FIXED track does not grow for its item's
      margin. Deriving it removes the whole class of bug: there is no second
      number left to disagree with the first. */
-  --nt-col-icon: calc(var(--nt-chip) + var(--nt-air));
+  /* ── AND THE ICON END IS ONE STEP TIGHTER: the GUTTER, not the air ──────
+     "Spacing between icons and chat names is just a tad too wide." Measured:
+     12px of air from the 24px chip to the name, and the emoji glyph sits
+     ~3px inside its chip on each side, so the eye saw ~15px between the icon
+     and its word. The chip and the name are one object — the scale's own
+     word for that is the CONTENT step — so this track takes 8px. The STATE
+     chip at the row's tail keeps its air; only the head moves, and every
+     name still starts on one x because the track is still derived. */
+  --nt-col-icon: calc(var(--nt-chip) + var(--nt-gutter));
   /* The icon's BOX HEIGHT, pinned to one line of title text. It is the width
      that has to be a fixed track; the height must not exceed the text line, or
      a one-line row becomes icon-driven and its single line floats with more
@@ -452,20 +473,27 @@
   --nt-child-name-x: calc(var(--nt-rail-lead) + 8px + var(--nt-rail-emoji) + var(--nt-rail-gap));
   --nt-rail-lead: 14px;
   --nt-rail-trail: 12px;
-  --nt-rail-emoji: 20px;
+  --nt-rail-emoji: 22px;
   --nt-rail-gap: 8px;
-  /* Exactly the touch floor. Not a floor with slack above it — one number, so
-     the list has no rhythm to lose. */
-  --nt-rail-h: 44px;
-  --nt-row-tab: 44px;
+  /* ONE NUMBER, so the list has no rhythm to lose — and it is 48, not the 44px
+     touch floor it was. "On mobile the chat list view the fonts are just a tad
+     too small": the list is a full-screen destination, not the desktop rail in
+     a narrow window, and its names went 15 → 17px. A 17px name in a 44px row
+     reads cramped, so the row follows the type by 4px. The cost, measured at
+     390×844: the list's 740px viewport held 16 rows and now holds 15. One row
+     a screen, against Slack's mobile list as the reference — its names are
+     17pt too. */
+  --nt-rail-h: 48px;
+  --nt-row-tab: 48px;
   --nt-hit: 32px;
   --nt-icon-h: 20px;
   --nt-chip: 24px;
   --nt-gutter: 10px;
   --nt-air: 14px;
-  /* What a swiped row slides over — see SwipeRow.css. */
-  --swipe-surface: var(--bg-chrome);
-  font-size: 0.9375rem;
+  /* What a swiped row slides over — see SwipeRow.css. The rail's ground: the
+     phone's list IS the rail (MobileNav.css). */
+  --swipe-surface: var(--rail-surface);
+  font-size: 1.0625rem;
 }
 
 /* ─── Section header — DELETED ────────────────────────────────────────────
@@ -589,7 +617,9 @@
    the top of the PADDING box, so any padding above it is a band the rows scroll
    through in front of the header meant to be covering them. */
 .navtree[data-variant="sheet"] {
-  --nt-surface: var(--bg-chrome);
+  /* The sticky group header's opaque ground: the rail's, which is what the
+     list is drawn on now (MobileNav.css). */
+  --nt-surface: var(--rail-surface);
 }
 
 /* The sheet needs no card rule of its own any more: the sticky band is the
@@ -816,7 +846,9 @@
      the counters close at this size and weight. */
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--fg-dim);
+  /* Full ink. Caps, tracking, bold and the space above already say "this is a
+     container"; the grey on top of them only said "this is hard to read". */
+  color: var(--fg);
 }
 /* The active workspace steps to full ink — one channel, no fill. The accent
    is NOT spent here: it means "needs you", and the active TAB inside this
@@ -850,7 +882,9 @@
   background: transparent;
   border: none;
   padding: 0;
-  color: var(--fg-faint);
+  /* --fg-dim, not --fg-faint: a glyph is held to 3:1, and faint measured
+     2.62–2.97:1 on the phone list in four themes. */
+  color: var(--fg-dim);
   cursor: pointer;
   border-radius: 4px;
   touch-action: manipulation;
@@ -1108,7 +1142,9 @@
   flex: 0 0 auto;
   font-size: 0.625rem;
   line-height: 1;
-  color: var(--fg-dim);
+  /* Full ink: on its own fill --fg-dim measured 4.36:1 on tokyo-night's rail
+     and 4.45:1 on acme-dark's phone list — 10px text under AA. */
+  color: var(--fg);
   background: var(--bg-hover);
   border-radius: 8px;
   padding: 3px 6px;
@@ -1178,7 +1214,10 @@
   padding: 6px var(--nt-air) 6px calc(var(--nt-pad) + var(--nt-indent));
   border-radius: var(--nt-pill);
   color: var(--nt-ink-read);
-  font-weight: 500;
+  /* 450, not 500: with read and unread the same ink, weight is the whole step
+     between them, and 500 → 700 at 14px was the step that read as "not strong
+     enough". Faces without a 450 round to 400, which is the phone's weight. */
+  font-weight: 450;
 }
 /* Renaming collapses the row to icon + input: the meta, controls and status
    all stand down, and a 5-track template would strand the input in one narrow
@@ -1398,8 +1437,8 @@
      it: left on the rail's value, a selected pinned chat's name would be a
      rail-ink mix sitting on a pane-coloured row — the same substitution trap,
      one token further along. */
-  --nt-ink-read: var(--fg-dim);
-  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
+  --nt-ink-read: var(--fg);
+  --nt-ink-read-child: var(--fg-dim);
   /* Same derivations as the rail's, one surface along — see the definitions
      at the top. They have to be re-stated here or the tag goes on wearing
      rail ink on a pane-coloured row. */
@@ -1448,8 +1487,8 @@
      it: left on the rail's value, a selected pinned chat's name would be a
      rail-ink mix sitting on a pane-coloured row — the same substitution trap,
      one token further along. */
-  --nt-ink-read: var(--fg-dim);
-  --nt-ink-read-child: color-mix(in srgb, var(--fg-dim) 70%, var(--fg-faint));
+  --nt-ink-read: var(--fg);
+  --nt-ink-read-child: var(--fg-dim);
   /* Same derivations as the rail's, one surface along — see the definitions
      at the top. They have to be re-stated here or the tag goes on wearing
      rail ink on a pane-coloured row. */
@@ -1522,16 +1561,35 @@
      last attempt and survives this one. The pill's left corners are radius 6
      and the bar is inset 5px top and bottom, so it clears both curves. */
   left: 2px;
-  /* Short of the row's full height on purpose: a bar that runs edge to edge
-     reads as a divider between rows rather than as a mark on one. */
-  top: 5px;
-  bottom: 5px;
+  /* ── ONE LINE DOWN THE BLOCK, NOT A MARK PER ROW ──────────────────────
+     This read `top: 5px; bottom: 5px` with a 2px radius, and the note here
+     said why: "a bar that runs edge to edge reads as a divider between rows
+     rather than as a mark on one." That is true of ONE row and false of a
+     run of them. The phone has never done it — the sheet variant below zeroes
+     these insets — so on mobile the pinned rows' bars meet and the block
+     reads as a single unbroken rim. "Notice how on mobile the chat list shows
+     the pinned chats indicator as one continuous line. I think that's nice."
+     It is, and it says something truer than the capsules did. Pinned is a
+     property of the BLOCK: these chats sort above the divider together. One
+     line says "this region"; eight capsules say "this row, and this row, and
+     this row", which is a fact nobody needs per row.
+     Square ends for the same reason — a radius at each row boundary pinches
+     the line back into segments at exactly the joins it has to cross. The
+     rows carry no vertical margin, so zeroing the insets is all it takes.
+     The selected row's pill has radius 6 on its left corners and the bar sits
+     at x=2 beside it, so clearing that curve was never what the insets were
+     for; `left: 2px` is what does that, and it is unchanged. */
+  top: 0;
+  bottom: 0;
   width: 2px;
-  border-radius: 2px;
+  border-radius: 0;
   /* THE RAIL'S ACCENT EXPLICITLY, never the inherited one. The selected row
      re-points --accent to the PANE's, which is correct for everything painted
      ON the pill and wrong for this, which is painted beside it: a dark pane
-     accent on the dark rail is the "barely visible" half of the same bug. */
+     accent on the dark rail is the "barely visible" half of the same bug.
+     `--accent`, NOT the rail token by name: the island rebinds it, so the
+     rail gets the rail's value and the mobile sheet — which is not an island
+     — gets the app's. Naming --rail-accent here breaks the sheet. */
   background: var(--accent);
   z-index: 1;
 }
@@ -1668,43 +1726,9 @@
   border-top-color: transparent;
   animation: navtree-state-spin 0.8s linear infinite;
 }
-/* ── RISO SPINS TWO INK DOTS INSTEAD OF A CUT RING ────────────────────────
-   Same mark, same slot, SAME ANIMATION — only the drawing changes.
-
-   The cut ring is a 10px circle with a 1.5px stroke and one quadrant removed,
-   and on every other theme it is an amber arc on a dark grey rail: low
-   contrast, so the way a 1.5px curve aliases at 10px never shows. Riso puts
-   `#ffd84d` on `#1333c4`, which is about as far apart as two inks get — and
-   at maximum contrast the stroke's stair-stepping and the hard cut are the
-   two loudest things in it. It stops reading as a turning ring and starts
-   reading as a chunky yellow "U" that flips about. Reported from a
-   screenshot, and "harmonious" is the right word for what it is not.
-
-   A FILLED CIRCLE ALIASES FAR BETTER THAN A THIN ARC, because its edge is
-   where the colour is rather than where the colour stops. So riso's mark is
-   two dots on opposite ends of the same 10px box, turning on the same
-   keyframe: no stroke to stair-step, no cut to flip, and the motion reads as
-   an orbit rather than a stutter.
-
-   It is also the right IMAGE for this theme. A risograph prints one flat spot
-   ink at a time and its whole visual signature is two of them — registration
-   marks, halftone dots, overprint. Two ink dots going round is what the
-   process looks like. The second dot is the same hue at 55%, which is the
-   overprint read: the same ink, one pass lighter.
-
-   NO NEW ANIMATION, and that is a hard constraint rather than tidiness — one
-   keyframe in this rail is pinned by a test, because two that agree today are
-   two that can disagree tomorrow. */
-[data-theme="riso"] .navtree-mark[data-state="working"] {
-  border: 0;
-  background: radial-gradient(circle at 50% 17%, var(--status-working) 0 2.1px, transparent 2.3px),
-    radial-gradient(
-      circle at 50% 83%,
-      color-mix(in srgb, var(--status-working) 55%, transparent) 0 2.1px,
-      transparent 2.3px
-    );
-}
-
+/* Each THEME draws its own working mark over this one: StatusMark.css, "EVERY
+   THEME'S OWN WORKING". This cut ring is the fallback for a document with no
+   theme set; riso's two-dot override that lived here went with it. */
 .navtree-mark[data-state="ready"],
 .navtree-mark[data-state="blocked"],
 .navtree-mark[data-state="dead"] {
@@ -1748,15 +1772,6 @@
     border-color: var(--status-working);
     background: var(--status-working);
   }
-  /* Riso's two dots need saying again: the rule above sets `background`, and
-     the theme's own rule sets `background` too, at higher specificity. Left
-     alone, reduced motion would get a pair of static dots — "indistinguishable
-     from a decoration", which is the one outcome the fallback above exists to
-     avoid. Same solid mark as every other theme. */
-  [data-theme="riso"] .navtree-mark[data-state="working"] {
-    border: 1.5px solid var(--status-working);
-    background: var(--status-working);
-  }
   /* The active-row arm is gone with the slab, like the four hues above it. It
      mattered here more than anywhere: under reduced motion `working` is told
      ONLY by its colour, so re-inking it on the selected row left that row with
@@ -1777,12 +1792,21 @@
      ITS CARET SITS IN THE CHAT ICON COLUMN and its LABEL IN THE CHAT NAME
      COLUMN, because this is a row in that list — a disclosure for chats, not a
      second kind of header. The caret was already right at x=20; the label
-     landed at 42 where every chat name starts at 56, which is the 14px that
+     landed at 42 where every chat name started at 56 (52 since the icon
+     track took the gutter), which is the 14px that
      read as "not aligned". The first attempt at this moved the CARET to the
      workspace chevron's column instead, on the theory that one disclosure is
-     like another — and it looked, correctly, glued to the left edge. */
-  padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent));
-  gap: calc(56px - 35px);
+     like another — and it looked, correctly, glued to the left edge.
+
+     THE CARET NOW TRAILS THE LABEL (see NavTree.tsx) because leading it put
+     a chevron one row above the next workspace header's chevron in nearly
+     the same column. The LABEL has not moved: what was the caret's 15px plus
+     the 17px gap after it is this padding's extra 32px, so the word still
+     starts in the chat-name column and the alignment the paragraph above
+     argues for is intact. The gap is now the space between the word and its
+     chevron. */
+  padding: 14px var(--nt-pad) 4px calc(var(--nt-pad) + var(--nt-indent) + 32px);
+  gap: 5px;
   border: 0;
   background: none;
   font-family: inherit;
@@ -1971,7 +1995,9 @@
    control — it IS the done head, indented. */
 .navtree-done-head.-subs {
   padding-top: 6px;
-  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2);
+  /* The same +32px the head above carries, for the same reason: its caret
+     trails too, and the label keeps its indent. */
+  padding-left: calc(var(--nt-pad) + var(--nt-indent) * 2 + 32px);
   font-size: 0.75rem;
 }
 
@@ -2535,7 +2561,8 @@
 
    NOT the row you are on: `data-working` is already false there (see
    NavTree.tsx), because bold means "come back to this". */
-.navtree-tab-row[data-working="true"] .navtree-name-text,
+  .navtree-tab-row[data-working="true"]
+  .navtree-name-text,
 .navtree-pane-row[data-unread="true"] .navtree-pane-label {
   font-weight: 700;
   /* The colour is half the signal — see --nt-ink-read. Weight alone at 13px,
@@ -2847,14 +2874,18 @@
   padding: 4px 8px;
   background: transparent;
   border: none;
-  color: var(--accent);
+  /* THE ACCENT, CUT WITH INK, AT FULL OPACITY. It was the raw accent at 70%
+     opacity, 12px, and measured 1.94–3.83:1 on the rail in ten of eleven
+     themes — an action you could only find by already knowing it was there.
+     Half the accent keeps the hue that says "this does something"; half the
+     ink is what makes it readable on a deep rail and a pale sheet alike. */
+  color: color-mix(in srgb, var(--accent) 50%, var(--fg));
   font-family: inherit;
   font-size: var(--chrome-size-sm);
   font-weight: 500;
   text-align: left;
   border-radius: 4px;
   cursor: pointer;
-  opacity: 0.7;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
@@ -2862,7 +2893,7 @@
   padding: 8px;
 }
 .navtree-add:hover {
-  opacity: 1;
+  color: var(--accent);
   background: var(--bg-hover);
 }
 .navtree-add:disabled {
@@ -3138,46 +3169,14 @@ body.sidenav-resizing iframe {
   justify-content: center;
 }
 
-.sidenav-footer {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  height: var(--chrome-h);
-  border-top: 1px solid var(--border);
-}
-.sidenav-build {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 12px;
-  color: var(--fg-dim);
-  font-family: var(--chrome-font);
-  font-size: 0.6875rem;
-  text-decoration: none;
-  transition: background 80ms ease, color 80ms ease;
-}
-.sidenav-build:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-  text-decoration: none;
-}
-/* Settings popover normally drops DOWN from the top bar; anchored to
-   the sidebar's foot it must open UP, with the sharp corner meeting
-   the gear plate below it. */
-.sidenav-footer .settings-popover {
-  top: auto;
-  bottom: 100%;
-  /* Anchor left and spill rightward over the workspace — right-anchored
-     it would overflow past the viewport's left edge (popover is wider
-     than the sidebar). */
-  right: auto;
-  left: 0;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 6px 6px 6px 0;
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
-}
+/* ─── NO `.sidenav-footer` ──────────────────────────────────────────────
+   The build stamp, the theme swatch and the gear closed this column with a
+   `--chrome-h` bar. They are at the foot of the destination rail now
+   (DestinationRail.css, .dest-rail-foot), so the list runs to the bottom of
+   the window.
+   Its `.settings-popover` rule went with it and is not missed: Settings has
+   been a portalled <dialog> since, and the popover it was positioning has no
+   markup left anywhere. */
 
 /* ─── Foot: Artifacts and Apps ─────────────────────────────────────────── */
 
@@ -3202,7 +3201,8 @@ body.sidenav-resizing iframe {
   height: var(--nt-row-tab);
   padding: 0 8px;
   border-radius: var(--nt-pill);
-  color: var(--fg-dim);
+  /* Destinations, like a chat: the chat's read ink. */
+  color: var(--fg);
   text-decoration: none;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
@@ -3285,6 +3285,11 @@ body.sidenav-resizing iframe {
   padding-inline: var(--nt-rail-lead) var(--nt-rail-trail);
   color: var(--fg);
 }
+/* The phone's list leaves this bar out (NavTree `hideBar`): its header and
+   its Search tab carry what the bar did. */
+.navtree-bar[hidden] {
+  display: none;
+}
 .navtree-bar-ws {
   /* Takes the slack, so the two glyphs sit against the trailing edge. */
   flex: 1;
@@ -3364,7 +3369,8 @@ body.sidenav-resizing iframe {
      defect); with the band square there is nothing to leak through. */
   border-radius: 0;
   color: var(--fg);
-  font-weight: 400;
+  /* 500: heavy enough to be the page, with 700 still a clear step above it. */
+  font-weight: 500;
 }
 /* ── THE PINNED MARK ON A SHEET ROW ─────────────────────────────────────────
    The same 2px accent bar the desktop row wears, in the same channel, with two
@@ -3451,8 +3457,8 @@ body.sidenav-resizing iframe {
   block-size: var(--nt-rail-emoji);
   display: inline-grid;
   place-items: center;
-  --chatchip-glyph: 17px;
-  --chatchip-glyph-last: 15px;
+  --chatchip-glyph: 19px;
+  --chatchip-glyph-last: 17px;
   position: relative;
   inset-block-start: -1px;
   /* Above the stretched link below, or tapping the emoji navigates instead of
@@ -3491,6 +3497,9 @@ body.sidenav-resizing iframe {
   .navtree-tab-row:not([data-active="true"])
   .navtree-name-text {
   color: var(--fg-dim);
+  /* A size down as well as a rung of ink — see THE PHONE'S TYPE SCALE. */
+  font-size: 0.9375rem;
+  font-weight: 400;
 }
 /* The dot stands in the emoji's box, so it has to BE that box — otherwise the
    flex line closes up around a 6px mark and the name jumps left by 14px on
@@ -3548,12 +3557,37 @@ body.sidenav-resizing iframe {
 }
 .navtree[data-variant="sheet"] .navtree-tab-link .navtree-name-text {
   display: block;
+  /* 17px — see --nt-rail-h. */
   /* Alignment is NOT pinned here, unlike the desktop rail's `text-align: left`
      — the box has no slack to align inside, so pinning it would be a no-op
      that hid the real mechanism. */
   text-align: unset;
+  font-size: 1.0625rem;
+  line-height: 1.375rem;
+}
+
+/* ─── THE PHONE'S TYPE SCALE: SIZE AND WEIGHT ARE THE HIERARCHY ─────────────
+   Every role steps up with the names rather than leaving them alone at the
+   desktop's sizes, and the steps BETWEEN roles are what separates them — not
+   fading. A read name is 17/500 and an unread one 17/700; an older chat steps
+   DOWN a size as well as a rung of ink (15/400, declared with the older-row
+   ink further down, where the swipe shells are matched), so retired rows recede by
+   being smaller, which a list of a thousand chats needs to scan. The section
+   header stays a caps label a size under the names. None of this reaches the
+   desktop rail: the sheet only mounts under MOBILE_BREAKPOINT (AppLayout's
+   useMediaQuery), so `[data-variant="sheet"]` is already the phone. */
+.navtree[data-variant="sheet"] .navtree-ws-row .navtree-name-text {
+  font-size: 0.8125rem;
+  letter-spacing: 0.1em;
+}
+.navtree[data-variant="sheet"] .navtree-done-head {
   font-size: 0.9375rem;
-  line-height: 1.25rem;
+}
+.navtree[data-variant="sheet"] .navtree-ws-count {
+  font-size: 0.75rem;
+}
+.navtree[data-variant="sheet"] .navtree-foot-link {
+  font-size: 1.0625rem;
 }
 /* THE STRETCHED LINK. The name's box now stops at its text, which would leave
    most of a 390px row untappable — the row IS the target on a thumb surface.
@@ -3617,6 +3651,23 @@ body.sidenav-resizing iframe {
 
    `background-color`, never the shorthand — see StateChip.css. */
 .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
+  /* BACK TO THE RAIL'S INK. The base active rule re-points every token at the
+     PANE, because on the desktop the selected row is the pane's own surface
+     reaching into the rail. Here it is not: the sheet's selection is a wash
+     over the rail, so pane ink on it was dark ink on a deep ground — the same
+     substitution trap, in reverse. */
+  --bg-elev: var(--rail-elev);
+  --bg-hover: var(--rail-hover);
+  --fg: var(--rail-ink);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
   background-color: var(--nt-sel);
   color: var(--fg);
 }
@@ -3776,4 +3827,17 @@ body.sidenav-resizing iframe {
    them through. */
 .navtree .navtree-tab-row[data-worker="true"] .navtree-name-text {
   color: var(--nt-ink-read);
+}
+
+/* ── …EXCEPT ON THE SELECTED ROW, WHICH REBINDS IT NARROWER THAN THE ISLAND
+   The rule above takes `--accent` so that the rail island and the mobile
+   sheet each resolve their own. But the SELECTED row re-points --accent to
+   the PANE's for everything painted on its pill, and the pin edge sits on
+   that row — so its segment came out rgb(94,82,232), the pane's purple,
+   against #fff0a0 for every other row in the block.
+   That was invisible while pinned was eight separate capsules and obvious
+   the moment they joined into one line, which is how it was found. Scoped to
+   the SIDEBAR only, so the sheet keeps resolving --accent for itself. */
+.navtree[data-variant="sidebar"] .navtree-pin-edge {
+  background: var(--rail-accent);
 }

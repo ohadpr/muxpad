@@ -36,6 +36,11 @@ async function errorEnvelope(res: Response): Promise<{ message: string; code: st
  * server's answer. Still an Error, so every existing `e instanceof Error`
  * message path keeps working unchanged.
  */
+/** One chat's last message (server chat/last-message), or `elsewhere` when the
+ *  chat runs on another machine and its transcript is deliberately unreadable
+ *  from here. `null` on the wire is every other absence. */
+export type TabPreview = { text: string; by: 'user' | 'assistant' } | { elsewhere: true };
+
 export class ApiError extends Error {
   readonly status: number;
   /**
@@ -246,6 +251,34 @@ export const api = {
     }),
 
   listAllTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/all'),
+  // Every unread chat, finished ones included — the inbox, not the live corpus
+  // (web/src/lib/unread-tabs). Report text stripped; stored order kept.
+  listUnreadTabs: () => req<{ workspaces: WorkspaceTabs[] }>('/api/tabs/unread'),
+
+  /**
+   * BOUNDED lookup over every chat, finished history included — the
+   * historical half of ⌘K and the `@` picker, and how an archive hit whose
+   * pane is not in the live corpus finds its chat. Exactly one of `q` (name /
+   * headline / workspace), `paneIds`, or `tabIds` (exact references; both id
+   * forms capped at 60 by the server). Report prose is stripped. Client side: lib/tab-lookup.
+   */
+  lookupTabs: (
+    by: { q: string } | { paneIds: readonly string[] } | { tabIds: readonly string[] },
+  ) =>
+    req<{ workspaces: WorkspaceTabs[] }>(
+      'q' in by
+        ? `/api/tabs/lookup?q=${encodeURIComponent(by.q)}`
+        : 'paneIds' in by
+          ? `/api/tabs/lookup?paneIds=${by.paneIds.map(encodeURIComponent).join(',')}`
+          : `/api/tabs/lookup?tabIds=${by.tabIds.map(encodeURIComponent).join(',')}`,
+    ),
+
+  /** Each chat's last message, for the phone's Activity list — its own request,
+   *  never on the polled tab row (see server chat/last-message). */
+  tabPreviews: (ids: readonly string[]) =>
+    req<{ previews: Record<string, TabPreview | null> }>(
+      `/api/tabs/previews?ids=${ids.map(encodeURIComponent).join(',')}`,
+    ),
 
   /**
    * Full-text search over archived session transcripts — the search box's

@@ -1,11 +1,12 @@
 import type { Dirent } from 'node:fs';
-import { appendFile, mkdir, open, readdir, rename, stat, truncate } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, rename, stat, truncate, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { type ChatEvent, normalizeTranscriptLine } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
 import { findTranscript } from '../chat/TranscriptReader.js';
 import type { EventBus } from '../events.js';
 import type { ArchiveDb, ArchiveFileRow, MessageRow } from './ArchiveDb.js';
+import { ByteThrottle, DEFAULT_SETTLE_MS, type RecloneTarget, reclonePass } from './Reclone.js';
 
 /**
  * Session archiver — muxpad permanently owns a raw, byte-for-byte copy of
@@ -73,6 +74,24 @@ export interface ArchiverOpts {
   chunkBytes?: number | undefined;
   /** How many queued files archive concurrently. Default 3. */
   concurrency?: number | undefined;
+  /**
+   * Re-clone settled mirrors from their sources so the two share APFS blocks
+   * again (Reclone.ts explains why, and why replacing the file is safe).
+   * Absent/false = off, which keeps tests and non-APFS hosts unaffected.
+   */
+  reclone?:
+    | false
+    | {
+        /** No writes for this long before a file is touched. Default 24 h. */
+        settleMs?: number | undefined;
+        /** Byte-compare read budget. Default 64 MB/s. */
+        bytesPerSec?: number | undefined;
+        /** Minimum gap between passes. Default 1 h. */
+        intervalMs?: number | undefined;
+        /** JSONL log of every non-trivial outcome. */
+        logPath?: string | undefined;
+      }
+    | undefined;
 }
 
 const DEFAULT_CHUNK = 1024 * 1024;
@@ -100,6 +119,12 @@ export class Archiver {
   /** Last sid seen per pane — the sid-change trigger's memory. */
   private readonly paneSids = new Map<string, { sid: string; assistant: string }>();
   private closed = false;
+  /** Per-source-path serialization: archiveOne and the re-clone never
+   *  interleave on one file, so the swap can't race an append. */
+  private readonly pathLocks = new Map<string, Promise<unknown>>();
+  private readonly recloneOpts: Exclude<ArchiverOpts['reclone'], false | undefined> | undefined;
+  private recloning: Promise<void> | null = null;
+  private lastRecloneAt = 0;
 
   constructor(opts: ArchiverOpts) {
     this.archive = opts.archive;
@@ -112,6 +137,7 @@ export class Archiver {
     this.chunkBytes = opts.chunkBytes ?? DEFAULT_CHUNK;
     this.concurrency = opts.concurrency ?? 3;
     if (opts.isLocalPane) this.isLocalPane = opts.isLocalPane;
+    this.recloneOpts = opts.reclone || undefined;
   }
 
   /** Boot: subscribe triggers, kick the backfill sweep, arm the 15-min timer. */
@@ -169,6 +195,129 @@ export class Archiver {
       this.enqueue(item);
     }
     await this.drain();
+    this.maybeReclone();
+  }
+
+  /** Run `fn` once nothing else holds `path`; holds it until `fn` settles. */
+  private withPathLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.pathLocks.get(path) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => {});
+    this.pathLocks.set(path, tail);
+    void tail.then(() => {
+      if (this.pathLocks.get(path) === tail) this.pathLocks.delete(path);
+    });
+    return run;
+  }
+
+  /**
+   * Kick a re-clone pass if enabled, none is running, and the last one is
+   * older than the interval. Fire-and-forget: a first pass over a large
+   * archive reads for minutes (throttled) and must not hold the sweep.
+   */
+  private maybeReclone(): void {
+    const o = this.recloneOpts;
+    if (!o || this.closed || this.recloning) return;
+    if (Date.now() - this.lastRecloneAt < (o.intervalMs ?? 60 * 60_000)) return;
+    this.lastRecloneAt = Date.now();
+    this.recloning = this.reclonePassNow()
+      .catch((err) => console.error('[archive] reclone pass failed', err))
+      .finally(() => {
+        this.recloning = null;
+      });
+  }
+
+  /** One re-clone pass over every mirror with bytes not yet re-cloned. Public for tests. */
+  async reclonePassNow(): Promise<void> {
+    const o = this.recloneOpts;
+    if (!o) return;
+    const settleMs = o.settleMs ?? DEFAULT_SETTLE_MS;
+    await this.sweepRecloneTemps();
+    const rows = this.archive
+      .listFiles()
+      .filter(
+        (r) => r.offset > 0 && r.cloned_offset !== r.offset && r.reclone_settled_at !== r.offset,
+      );
+    if (rows.length === 0) return;
+    const targets: RecloneTarget[] = rows.map((r) => ({
+      sourcePath: r.source_path,
+      archivedAbs: join(this.archiveDir, r.archived_path),
+      offset: r.offset,
+    }));
+    let unsupported = false;
+    const log = async (line: object) => {
+      if (o.logPath) await appendFile(o.logPath, `${JSON.stringify(line)}\n`).catch(() => {});
+    };
+    const tally = await reclonePass(targets, {
+      settleMs,
+      throttle: new ByteThrottle(o.bytesPerSec ?? 64 * 1024 * 1024),
+      shouldStop: () => this.closed || unsupported,
+      // Re-read the ledger INSIDE the lock: an append that landed while this
+      // file waited moves `offset`, and recloneOne must judge the new length.
+      around: (t, fn) =>
+        this.withPathLock(t.sourcePath, async () => {
+          const fresh = this.archive.getFile(t.sourcePath);
+          if (fresh) t.offset = fresh.offset;
+          return fn();
+        }),
+      onResult: (t, r) => {
+        if (r.outcome === 'recloned' || r.outcome === 'raced-repaired') {
+          this.archive.setClonedOffset(t.sourcePath, t.offset);
+        }
+        // A VERDICT THIS OFFSET WILL KEEP. Without this the pass re-read every
+        // byte of every differing file every hour to be told the same thing,
+        // and logged it; a sealed or vanished source was re-examined forever.
+        // An append moves `offset` and the row comes back on its own.
+        if (r.outcome === 'differs' || r.outcome === 'sealed' || r.outcome === 'source-gone') {
+          this.archive.setRecloneSettledAt(t.sourcePath, t.offset);
+        }
+        if (r.outcome === 'clone-unsupported') unsupported = true; // not APFS — stop asking
+        if (r.outcome !== 'not-settled') {
+          void log({ ts: Date.now(), path: t.archivedAbs, offset: t.offset, ...r });
+        }
+        if (r.outcome === 'differs' || r.outcome === 'error' || r.outcome === 'raced-repaired') {
+          console.warn(`[archive] reclone ${r.outcome} ${t.archivedAbs}: ${r.detail ?? ''}`);
+        }
+      },
+    });
+    const parts = Object.entries(tally.byOutcome).map(
+      ([k, v]) => `${k}=${v?.files}(${((v?.bytes ?? 0) / 1e6).toFixed(1)}MB)`,
+    );
+    console.log(`[archive] reclone pass: ${parts.join(' ')}`);
+    await log({ ts: Date.now(), pass: tally.byOutcome });
+  }
+
+  /**
+   * Delete `.reclone-*` temp files older than an hour. recloneOne unlinks its
+   * own on every refusal, but a process killed mid-clone cannot, and nothing
+   * else ever would: the leftovers are full-size copies of a transcript, so
+   * one death during a pass could cost more disk than the pass reclaims. An
+   * hour is far longer than any single clone and shorter than the interval,
+   * so a live pass's own temp is never in range.
+   */
+  private async sweepRecloneTemps(): Promise<void> {
+    const cutoff = Date.now() - 3600_000;
+    const walk = async (dir: string): Promise<void> => {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const abs = join(dir, e.name);
+        if (e.isDirectory()) {
+          await walk(abs);
+        } else if (e.name.startsWith('.reclone-')) {
+          const st = await stat(abs).catch(() => null);
+          if (st && st.mtimeMs < cutoff) {
+            await unlink(abs).catch(() => {});
+            console.warn(`[archive] swept abandoned reclone temp ${abs}`);
+          }
+        }
+      }
+    };
+    await walk(this.archiveDir);
   }
 
   /** Queue one file (deduped by path) and make sure the drain loop is running. */
@@ -356,7 +505,7 @@ export class Archiver {
           for (const b of batch) this.pending.delete(b.path);
           await Promise.all(
             batch.map((item) =>
-              this.archiveOne(item).catch((err) =>
+              this.withPathLock(item.path, () => this.archiveOne(item)).catch((err) =>
                 console.error(`[archive] failed on ${item.path}`, err),
               ),
             ),

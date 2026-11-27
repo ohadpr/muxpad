@@ -4,6 +4,7 @@ import {
   PaneSpecSchema,
   type PaneStatus,
   STATUS_ORDER,
+  TabUpdatedEventSchema,
   WorkspaceSchema,
   maxStatus,
   rollupStatus,
@@ -80,5 +81,25 @@ describe('domain schemas', () => {
     expect(maxStatus('idle', bogus)).toBe('idle');
     expect(rollupStatus([bogus, 'working'])).toBe('working');
     expect(rollupStatus([bogus])).toBe('idle');
+  });
+});
+
+describe('tab.updated placement compatibility', () => {
+  it('preserves explicit placement and membership while accepting older events', () => {
+    const tab = {
+      id: 't',
+      name: 'T',
+      slug: 't',
+      layout: '',
+      panes: [],
+      created_at: 1,
+      updated_at: 1,
+      position: 0,
+      corpus_live: false,
+    };
+    const current = TabUpdatedEventSchema.parse({ type: 'tab.updated', workspace_id: 'w', tab });
+    expect(current.workspace_id).toBe('w');
+    expect(current.tab.corpus_live).toBe(false);
+    expect(TabUpdatedEventSchema.parse({ type: 'tab.updated', tab }).workspace_id).toBeUndefined();
   });
 });

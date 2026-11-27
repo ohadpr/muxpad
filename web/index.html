@@ -2,17 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover"
-    />
+    <!-- NO `viewport-fit=cover`, and this is the second half of the iOS 26
+         fix. `cover` lays the page out EDGE TO EDGE, under the status bar and
+         the home indicator, whatever the status-bar style says — which is why
+         removing `apple-mobile-web-app-status-bar-style` alone did not stop
+         the Liquid Glass blur: the page was still underneath the bar for iOS
+         to draw its material over. Reported three times from a real phone,
+         each time after a clean re-install.
+         Without `cover` the web view is inset by the system, the page starts
+         below an opaque status bar, and there is no content under it to
+         frost. The safe-area insets then report 0, which is correct — there
+         is nothing to inset around — and `.app-layout`'s border-box padding
+         collapses to nothing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>muxpad</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="muxpad" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- NO `apple-mobile-web-app-status-bar-style`, deliberately.
+         `black-translucent` ran the page under the status bar, and on iOS 26
+         it also earns a SYSTEM-drawn Liquid Glass blur about 40pt deep over
+         the top of the page that no CSS can turn off — reported from a real
+         phone as a frosted header with the rows bleeding through it. The
+         default style starts the page below an OPAQUE status bar tinted by
+         `theme-color` below.
+         iOS reads this when the app is ADDED to the home screen, so an
+         existing install keeps the blur until it is removed and re-added. -->
     <meta name="theme-color" content="#1e1e2e" />
     <!-- No <link> to fonts.googleapis.com. It was render-blocking on EVERY
          load (cross-origin DNS + TLS to the public internet before first

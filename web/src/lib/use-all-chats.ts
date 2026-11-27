@@ -1,8 +1,10 @@
 import type { Tab, Workspace } from '@muxpad/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
+import { corpusTabs } from './corpus-tabs';
+import { type SearchableTab, toSearchableTabs } from './nav-search';
 
 /**
  * Every visible workspace's tabs, for the navigator's flat 'recent' view.
@@ -33,7 +35,7 @@ import { cachedAllTabs, loadAllTabs, subscribeAllTabs } from './all-tabs';
  *
  * ─── VISIBLE ONLY ────────────────────────────────────────────────────────────
  * The route returns every workspace including HIDDEN ones (the apps container),
- * and those are excluded here for the reason MobileNavSwitcher already excludes
+ * and those are excluded here for the reason the nav surfaces already exclude
  * them: the apps container holds long-lived server panes whose pty output makes
  * them read as `working` forever. In a flat global list they would sit at the
  * top of every render, permanently, which is the churn feed in its purest form.
@@ -63,10 +65,72 @@ export function useAllChats(): { workspace: Workspace; tabs: Tab[] }[] {
   }, []);
 
   const byId = new Map((corpus ?? []).map((g) => [g.id, g.tabs]));
-  return visibleWorkspaces(workspaces).map((w) => ({
+  const groups = visibleWorkspaces(workspaces).map((w) => ({
     workspace: w,
     // The corpus if we have it, else whatever this workspace's own poll has
     // already cached — which for the workspace you are in is always something.
-    tabs: byId.get(w.id) ?? cachedTabsFor(w.id),
+    tabs: byId.get(w.id) ?? corpusTabs(cachedTabsFor(w.id)),
   }));
+  return stableGroups(useRef<Groups | null>(null), groups);
+}
+
+type Groups = { workspace: Workspace; tabs: Tab[] }[];
+
+/**
+ * THE SAME ARRAY BACK, when nothing underneath it moved.
+ *
+ * This returned a freshly built array on every render — and `useChatCorpus`
+ * below memoises on it, so the memo NEVER hit and `toSearchableTabs` re-ran
+ * for every consumer on every render, over every chat on the install. Found
+ * by the performance review (web/src/lib/use-all-chats.ts:66 in its report).
+ *
+ * NOT `useMemo([workspaces, corpus])`, which is the obvious fix and is wrong:
+ * the `cachedTabsFor` fallback is read non-reactively, for workspaces the
+ * corpus does not hold — `mergeWorkspaceTabs` returns early for those rather
+ * than publishing — so keying on the corpus would freeze exactly the rows that
+ * have no other way to update. Recomputing every render is what kept them
+ * fresh.
+ *
+ * So: build the array every render as before, and hand back the PREVIOUS one
+ * when every workspace and every tabs array is identity-identical to last
+ * time. Cheap (a length check and N comparisons over ~2 workspaces), correct
+ * for the fallback (a changed cache is a changed array identity), and it gives
+ * the memo downstream something stable to hold.
+ */
+/** Test seam — the identity rule is the whole fix, so it is tested directly
+ *  rather than through a hook that would need a renderer to drive it. */
+export const stableGroupsForTest = stableGroups;
+
+function stableGroups(ref: { current: Groups | null }, next: Groups): Groups {
+  const held = ref.current;
+  if (
+    held &&
+    held.length === next.length &&
+    held.every((g, i) => g.workspace === next[i]?.workspace && g.tabs === next[i]?.tabs)
+  )
+    return held;
+  ref.current = next;
+  return next;
+}
+
+/**
+ * The same chats as {@link useAllChats}, flattened into the corpus shape the
+ * search and the section rules read (lib/nav-search, lib/chat-sections) —
+ * one memoised flattening per publish, for the desktop rail's Unread filter
+ * and the Activity page.
+ */
+export function useChatCorpus(): SearchableTab[] {
+  const groups = useAllChats();
+  return useMemo(
+    () =>
+      toSearchableTabs(
+        groups.map((g) => ({
+          id: g.workspace.id,
+          slug: g.workspace.slug,
+          name: g.workspace.name,
+          tabs: g.tabs,
+        })),
+      ),
+    [groups],
+  );
 }

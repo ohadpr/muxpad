@@ -33,6 +33,11 @@ vi.mock('@tanstack/react-router', () => ({
     </a>
   ),
   useNavigate: () => () => {},
+  // NavTree reads the path to decide whether a view PAGE owns the list's view
+  // (railViewFor). These suites render beside a chat, which is the path that
+  // leaves the stored view in charge.
+  useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
+    select({ location: { pathname: '/w/w1/t/a' } }),
 }));
 vi.mock('../tabs', () => ({
   useTabs: () => ({ tabs: [], refresh: async () => {} }),
@@ -63,7 +68,11 @@ const foot = (variant: 'sidebar' | 'sheet') => {
   }));
 };
 
-it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps on the %s', (variant) => {
+it('puts no foot on the desktop list — Artifacts and Apps are entries of the destination rail', () => {
+  expect(foot('sidebar')).toEqual([]);
+});
+
+it.each(['sheet'] as const)('lists Artifacts then Apps first on the %s', (variant) => {
   // ARTIFACTS FIRST: it is the half reached by the question that gets asked
   // (the same portal was asked for three times in five days), and the half
   // whose contents expire — a reason to meet the list rather than recall it.
@@ -71,10 +80,15 @@ it.each(['sidebar', 'sheet'] as const)('lists Artifacts then Apps on the %s', (v
   // THE SHEET CASE IS THE REGRESSION. It answered with an empty list while
   // the foot lived in the workspace picker, which is exactly what "where do I
   // see artifacts on mobile" turned out to mean.
-  expect(foot(variant)).toEqual([
+  expect(foot(variant).slice(0, 2)).toEqual([
     { href: '/artifacts', text: 'Artifacts' },
     { href: '/apps', text: 'Apps' },
   ]);
+});
+
+it('offers no Activity entry — the desktop rail’s Home | Unread | Activity switcher is the way in', () => {
+  for (const variant of ['sidebar', 'sheet'] as const)
+    expect(foot(variant).map((l) => l.href)).not.toContain('/activity');
 });
 
 it('no longer offers a single "Hosted" entry', () => {
@@ -84,10 +98,11 @@ it('no longer offers a single "Hosted" entry', () => {
   }
 });
 
-it('is mounted twice and no more — the rail and the sheet, not the picker', () => {
-  // One component, two mounts. A THIRD would be the workspace picker getting
-  // it back, which is where it was hiding on mobile.
+it('is mounted once — the sheet — and not in the picker', () => {
+  // The desktop rail's mount went when Artifacts and Apps moved into the
+  // destination rail (components/DestinationRail). A second here would be the
+  // workspace picker getting it back, which is where it was hiding on mobile.
   const src = readFileSync(join(__dirname, 'NavTree.tsx'), 'utf8');
-  expect(src.match(/<HostedFoot/g) ?? []).toHaveLength(2);
+  expect(src.match(/<HostedFoot/g) ?? []).toHaveLength(1);
   expect(src).not.toContain('to="/hosted"');
 });

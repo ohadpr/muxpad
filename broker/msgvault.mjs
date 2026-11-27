@@ -67,7 +67,39 @@ const ID = /^(?!-)[A-Za-z0-9_.:@+-]{1,128}$/;
  * an agent's to set (the argv gate refuses them for the same reason), and the
  * typed verbs below never read one from the payload.
  */
-export const OWNER_DRAFT_ACCOUNT = 'me@example.com';
+const OWNER_DRAFT_ACCOUNT_FALLBACK = 'me@example.com';
+
+/**
+ * WHICH MAILBOX A DRAFT IS WRITTEN INTO — from CONFIG, not from this file.
+ *
+ * It used to be a constant here, and that one decision is why msgvault has
+ * felt permanently broken. The repo is PUBLIC, so the constant had to be a
+ * placeholder; the installed copy was hand-edited to the real address. Which
+ * means the two can never be the same file — and `install.sh` copies the repo
+ * over the install, so reinstalling would point every draft at
+ * `me@example.com`. Nobody reinstalls something that breaks drafts, so the
+ * broker sat at its 14 November copy while every fix since landed in git and
+ * changed nothing on the machine. Measured 2026-11-27: thirteen days stale,
+ * including the calendar fix written specifically to unbreak calendars.
+ *
+ * The address is not a secret, but it IS the owner's, and owner-specific
+ * values in shipped source are what create this trap. It reads from the same
+ * place `defaultCalendar` already does, so the repo is now installable
+ * verbatim and the owner's mailbox lives in config where it belongs.
+ */
+export function ownerDraftAccount() {
+  try {
+    const d = JSON.parse(readFileSync('/Library/muxpad/integrations.json', 'utf8'))?.msgvault;
+    const v = d?.draftAccount;
+    return typeof v === 'string' && CAL_ACCOUNT.test(v) ? v : OWNER_DRAFT_ACCOUNT_FALLBACK;
+  } catch {
+    return OWNER_DRAFT_ACCOUNT_FALLBACK;
+  }
+}
+
+/** @deprecated Read {@link ownerDraftAccount} instead; kept so an older
+ *  caller cannot silently compose into the placeholder. */
+export const OWNER_DRAFT_ACCOUNT = OWNER_DRAFT_ACCOUNT_FALLBACK;
 
 /**
  * A DELIBERATE REFUSAL, tagged so it can be repeated to the caller.
@@ -147,14 +179,85 @@ const CAL_WHEN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?([.+-][\d:.]+|Z)?)?$/;
  * the verb is passed `--read-only` for the two queries, and a name the
  * archive does not hold is refused by msgvault rather than by a guess here.
  */
+/**
+ * THE CONFIGURED CALENDAR, so an agent does not have to know one.
+ *
+ * -- THE CONTRACT THAT KEPT FAILING ---------------------------------------
+ * Calendar verbs require a SOURCE identifier
+ * (`me@example.com/c_x@group.calendar.google.com`), and the only verb that
+ * enumerates them is refused to a delegated agent by msgvault itself. So
+ * every calendar call asked the agent for a string it was structurally
+ * forbidden from discovering, and a wrong guess came back `403 calendar
+ * operation denied: enabled calendar source is required`, which reads like a
+ * permissions failure and is not one. The owner hit this trying to create an
+ * event; the agent had passed a Gmail address, because a Gmail address is the
+ * only identifier it had any way to know.
+ *
+ * That is the mistake Slack does NOT make. There the broker owns the identity
+ * and the agent only names the intent -- it cannot pick who sends, so it
+ * cannot pick wrong. Calendar had it inverted.
+ *
+ * So the binding lives HERE, beside the binary declaration the runner already
+ * reads from the same file. An agent that names no account gets the
+ * configured one; an agent that names one is still obeyed, because a person
+ * with two calendars has to be able to say which.
+ *
+ * With nothing configured the refusal says what to DO about it rather than
+ * repeating the demand that caused the problem: the agent cannot look this
+ * up, so the only correct next move is to ask the owner.
+ */
+function configuredCalendar() {
+  try {
+    const d = JSON.parse(readFileSync('/Library/muxpad/integrations.json', 'utf8'))?.msgvault;
+    const v = d?.defaultCalendar;
+    return typeof v === 'string' && CAL_ACCOUNT.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `local@host`, optionally followed by `/<calendar-id>` -- no whitespace in
+ *  either half, so it stays one argv word and cannot smuggle a flag. */
+const CAL_ACCOUNT = /^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/;
+
+/**
+ * WHICH CALENDAR, given what the agent asked for and what is configured.
+ *
+ * Pure, exported and tested directly, because the fallback is the whole
+ * point and it cannot be exercised through `calendarAccount` on a machine
+ * with nothing configured -- removing the fallback there changed no test,
+ * which is how an untested fallback stays untested.
+ *
+ * ABSENT IS NOT THE SAME AS INVALID. `str()` refuses a leading `-` (the argv
+ * note above), so reading "str() said no" as "the agent gave nothing" would
+ * hand `--from=2026-01-01` the CONFIGURED calendar instead of refusing it --
+ * a flag smuggled into a value, silently accepted.
+ */
+export function resolveCalendarAccount(given, configured) {
+  const present = given !== undefined && given !== null && given !== '';
+  if (present) {
+    const v = String(given);
+    return CAL_ACCOUNT.test(v) && v.length <= 256 && !v.startsWith('-')
+      ? { account: v }
+      : { error: 'invalid' };
+  }
+  return configured ? { account: configured } : { error: 'unconfigured' };
+}
+
 function calendarAccount(p) {
-  // `local@host`, optionally followed by `/<calendar-id>` — no whitespace in
-  // either half, so it stays one argv word and cannot smuggle a flag.
-  if (!str(p.account, 256) || !/^[^\s@/]+@[^\s@/]+(\/[^\s]+)?$/.test(String(p.account)))
+  const r = resolveCalendarAccount(p.account, configuredCalendar());
+  if (r.error === 'invalid')
     fail(
-      'Give the calendar account — an email address, or the account/calendar-id that list-accounts prints',
+      'Give the calendar account - an email address, or the account/calendar-id that the accounts listing prints',
     );
-  return { account: p.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
+  if (r.error === 'unconfigured')
+    fail(
+      'No calendar is configured for muxpad, and an agent cannot discover one: ' +
+        'the accounts listing is refused to delegated callers. Ask the owner to set ' +
+        'msgvault.defaultCalendar in /Library/muxpad/integrations.json to an ' +
+        'account/calendar-id.',
+    );
+  return { account: r.account, calendar: str(p.calendar, 256) ? p.calendar : 'primary' };
 }
 /** …plus a time window, for the two reads. */
 function calendarWindow(p) {
@@ -320,7 +423,10 @@ const SPEC = {
    */
   'msgvault.draft-reply': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the message id to reply to');
+      if (!ID.test(String(p.id ?? '')))
+        fail(
+          'Give the message id to reply to - the `id` on a row that a search, show-thread or show-message returned',
+        );
       if (!str(p.body, 20000)) fail('Give a body');
       // `--all` is reply-to-everyone. Opt IN, because the difference between
       // answering one person and answering a thread of nine is exactly the
@@ -378,7 +484,10 @@ const SPEC = {
    * STILL NO SEND. This creates a draft in the mailbox exactly like
    * `draft-reply`; nothing at this grant can put it on the wire.
    *
-   * `--account` IS PASSED, BY THE BROKER: {@link OWNER_DRAFT_ACCOUNT}. The
+   * `--account` IS PASSED, BY THE BROKER: {@link ownerDraftAccount}, which
+   * reads it from config rather than from this file — see that function for
+   * why a constant here is what kept the installed broker thirteen days
+   * stale. The
    * old note here said msgvault picks the source itself when it is not told;
    * it does not — a compose with no destination is refused, "--account or
    * --source-id is required". `--from` and `--source-id` stay unset, and none
@@ -498,7 +607,8 @@ const SPEC = {
   'msgvault.calendar-update': {
     validate: (p) => {
       const base = calendarAccount(p);
-      if (!str(p.event, 256)) fail('Give the event id to update');
+      if (!str(p.event, 256))
+        fail('Give the event id to update - the id a calendar read returns for that event');
       refuseGuests(p);
       const when = CAL_WHEN;
       if (p.start !== undefined && !when.test(String(p.start))) fail('Bad start time');
@@ -533,7 +643,8 @@ const SPEC = {
   'msgvault.calendar-delete': {
     validate: (p) => {
       const base = calendarAccount(p);
-      if (!str(p.event, 256)) fail('Give the event id to delete');
+      if (!str(p.event, 256))
+        fail('Give the event id to delete - the id a calendar read returns for that event');
       return { ...base, event: p.event };
     },
     argv: (p) => [
@@ -568,7 +679,7 @@ const SPEC = {
         to: to.map(String),
         subject: p.subject,
         body: p.body,
-        account: OWNER_DRAFT_ACCOUNT,
+        account: ownerDraftAccount(),
       };
     },
     argv: (p) => [
@@ -587,13 +698,16 @@ const SPEC = {
   },
   'msgvault.draft-get': {
     validate: (p) =>
-      ID.test(String(p.id ?? '')) ? { id: p.id } : fail('Give the draft id to read'),
+      ID.test(String(p.id ?? ''))
+        ? { id: p.id }
+        : fail('Give the draft id to read - draft-reply returns it when it creates one'),
     argv: (p) => ['draft-get', '--json', '--', p.id],
     describe: (p) => `read draft ${p.id}`,
   },
   'msgvault.draft-edit': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to edit');
+      if (!ID.test(String(p.id ?? '')))
+        fail('Give the draft id to edit - draft-reply returns it when it creates one');
       if (!str(p.body, 20000)) fail('Give a body');
       return { id: p.id, body: p.body, revision: draftRevision(p) };
     },
@@ -611,7 +725,8 @@ const SPEC = {
   },
   'msgvault.draft-delete': {
     validate: (p) => {
-      if (!ID.test(String(p.id ?? ''))) fail('Give the draft id to delete');
+      if (!ID.test(String(p.id ?? '')))
+        fail('Give the draft id to delete - draft-reply returns it when it creates one');
       return { id: p.id, revision: draftRevision(p) };
     },
     argv: (p) => ['draft-delete', '--json', '--revision', String(p.revision), '--', p.id],

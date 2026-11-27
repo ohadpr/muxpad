@@ -196,6 +196,40 @@ describe('a worker that stopped to ask you something is not "working"', () => {
     expect(subChatLiveWord(revived)).toBe('working');
   });
 
+  it('a worker that ALREADY DELIVERED stops saying it needs you', () => {
+    // The row, verbatim, three days after the fact: `sidebar layout research`
+    // retired `delivered` on 18 November with a written report, and this
+    // drawer kept it in RUNNING under a red NEEDS YOU until 21 November.
+    //
+    // The contradiction had been fixed the day before — for the SIDEBAR. The
+    // server learned that an `awaiting` claim expires once the round reaches
+    // the parent; this surface still read the raw flag, so the rail said
+    // delivered while the drawer said a person was holding it up.
+    const stale = sub({
+      done: true,
+      doneReason: 'delivered',
+      report: { state: 'awaiting' } as MentionChat['report'],
+    });
+    expect(subChatLiveWord(stale)).toBeNull();
+    expect(subChatIsOpen(stale)).toBe(false);
+  });
+
+  it('…but an awaiting worker that has NOT retired is untouched', () => {
+    // The live case, which is the whole reason the awaiting check sits ahead
+    // of the done check. Narrowing it must not swallow this.
+    const asking = sub({ report: { state: 'awaiting' } as MentionChat['report'] });
+    expect(subChatLiveWord(asking)).toBe('needs you');
+    expect(subChatIsOpen(asking)).toBe(true);
+    // Nor a chat that left the live list some OTHER way: archived or decayed
+    // is not a delivery, so a question it asked is still unanswered.
+    const archived = sub({
+      done: true,
+      doneReason: 'archived',
+      report: { state: 'awaiting' } as MentionChat['report'],
+    });
+    expect(subChatLiveWord(archived)).toBe('needs you');
+  });
+
   it('a crashed worker is not in the live block and claims nothing', () => {
     const crashed = sub({ done: true, report: { state: 'crashed' } as MentionChat['report'] });
     expect(subChatLiveWord(crashed)).toBeNull();

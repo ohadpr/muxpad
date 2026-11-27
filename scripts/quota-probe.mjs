@@ -18,6 +18,25 @@ import { isAuthFailureText } from '../server/dist/agent-runner/auth-heal.js';
  * request produces anyway.
  */
 import { AccountPool, accountEnv } from '../server/dist/claude-accounts/pool.js';
+import { constants, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+// Keep the next primary failure's native CLI diagnostics, not just the SDK's
+// generic auth error. Two private files only; no extra requests or scheduler.
+const diagnosticDir = join(homedir(), '.muxpad', 'auth-diagnostics');
+function startDiagnostic(account) {
+  if (account.id !== 'primary') return undefined;
+  try {
+    mkdirSync(diagnosticDir, { recursive: true, mode: 0o700 });
+    const path = join(diagnosticDir, 'primary-current.log');
+    writeFileSync(path, `${new Date().toISOString()} primary quota probe\n`, { mode: 0o600 });
+    return path;
+  } catch {
+    console.error('primary: could not prepare private authentication diagnostics');
+    return undefined;
+  }
+}
 
 const pool = AccountPool.open();
 if (!pool) {
@@ -49,6 +68,7 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 45_000);
   let got = false;
+  const debugFile = startDiagnostic(account);
   try {
     const session = query({
       prompt: 'Reply with the single character: .',
@@ -62,6 +82,7 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
         settingSources: [],
         maxTurns: 1,
         abortController: abort,
+        ...(debugFile ? { debugFile } : {}),
       },
     });
     for await (const msg of session) {
@@ -92,6 +113,14 @@ for (const account of pool.accounts().filter((a) => a.enabled)) {
     // a pane and watches it fail. It used to end up in a log file instead, so
     // the account stayed preferred and the next session walked into it.
     if (isAuthFailureText(message.replace(/^Claude Code returned an error result:\s*/i, ''))) {
+      if (debugFile) {
+        try {
+          copyFileSync(debugFile, join(diagnosticDir, 'primary-first-auth-failure.log'), constants.COPYFILE_EXCL);
+          console.error('primary: preserved private native authentication failure diagnostics');
+        } catch (error) {
+          if (error.code !== 'EEXIST') console.error('primary: could not preserve authentication diagnostics');
+        }
+      }
       pool.markCredential(account.id, 'dead', message);
       console.error(
         `${account.id}: marked signed out — run /login, then: muxpad claude-account status`,

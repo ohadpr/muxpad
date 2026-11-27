@@ -26,6 +26,15 @@ export interface ArchiveFileRow {
   size: number;
   indexed_offset: number;
   version: number;
+  /** Ledger offset at which the mirror was last re-cloned from its source
+   *  (Reclone.ts); -1 = never. Equal to `offset` = nothing new to reclaim. */
+  cloned_offset: number;
+  /** Ledger offset at which the re-clone pass reached a verdict it will not
+   *  change while `offset` stays there — differs, sealed, source gone; -1 =
+   *  no such verdict. Keeps an hourly pass from re-comparing the whole file
+   *  forever for an answer it already has. A new append moves `offset`, which
+   *  makes the row eligible again on its own. */
+  reclone_settled_at: number;
 }
 
 export interface ArchiveSessionRow {
@@ -100,6 +109,20 @@ export class ArchiveDb {
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
+    // Additive column for the re-clone pass (Reclone.ts). Existing rows read
+    // -1 = "never re-cloned", so the first pass verifies every settled file.
+    const cols = this.db.prepare('PRAGMA table_info(archive_files)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'cloned_offset')) {
+      this.db.exec(
+        'ALTER TABLE archive_files ADD COLUMN cloned_offset INTEGER NOT NULL DEFAULT -1',
+      );
+    }
+    // Likewise for the pass's terminal verdicts; -1 = "ask again".
+    if (!cols.some((c) => c.name === 'reclone_settled_at')) {
+      this.db.exec(
+        'ALTER TABLE archive_files ADD COLUMN reclone_settled_at INTEGER NOT NULL DEFAULT -1',
+      );
+    }
   }
 
   close(): void {
@@ -158,12 +181,27 @@ export class ArchiveDb {
       .run(Math.round(mtime), size, sourcePath);
   }
 
+  /** The mirror now shares its blocks with the source up to `offset`. */
+  setClonedOffset(sourcePath: string, clonedOffset: number): void {
+    this.db
+      .prepare('UPDATE archive_files SET cloned_offset = ? WHERE source_path = ?')
+      .run(clonedOffset, sourcePath);
+  }
+
+  /** The pass reached a verdict for this offset that re-asking cannot change. */
+  setRecloneSettledAt(sourcePath: string, offset: number): void {
+    this.db
+      .prepare('UPDATE archive_files SET reclone_settled_at = ? WHERE source_path = ?')
+      .run(offset, sourcePath);
+  }
+
   /** A compact/rewrite sealed the active copy: bump version, reset offsets. */
   sealFile(sourcePath: string, newVersion: number): void {
     this.db
       .prepare(
         `UPDATE archive_files
-           SET version = ?, "offset" = 0, indexed_offset = 0
+           SET version = ?, "offset" = 0, indexed_offset = 0, cloned_offset = -1,
+               reclone_settled_at = -1
          WHERE source_path = ?`,
       )
       .run(newVersion, sourcePath);

@@ -92,3 +92,54 @@ export function cardColorScheme(surface: string): 'light' | 'dark' | 'light dark
   const luminance = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
   return luminance < 0.4 ? 'dark' : 'light';
 }
+
+/**
+ * EVERY CONTAINER AN HTML CARD'S FRAME CAN SIT IN.
+ *
+ * The frame paints itself with its container's measured background, because
+ * `transparent` hands the canvas to the UA default, which follows the
+ * BROWSER's colour-scheme preference — the black-slab-in-a-light-app bug this
+ * module exists for.
+ *
+ * It was `closest('.chat-card')`, naming the one container that existed. The
+ * cards PAGE then put the same component in `.cards-tile`, `closest` returned
+ * null, the surface fell back to `transparent`, and every card on that page
+ * went black on a machine set to dark. Reported as "the background colour of
+ * the cards themselves got messed up and it was very dark" — the original bug,
+ * reintroduced by adding a surface rather than by changing this code.
+ *
+ * So the containers are named HERE, next to the reason, and
+ * {@link measureCardSurface} never returns `transparent` even for one that is
+ * missing from this list.
+ */
+export const CARD_CONTAINERS = '.chat-card, .cards-tile';
+
+/**
+ * The colour an html card's frame should paint, measured from the DOM.
+ *
+ * Walks up for the first ancestor that actually PAINTS something if the known
+ * containers do not match — a container nobody added here still gets a real
+ * colour rather than the UA's guess. Only a document with no painted ancestor
+ * at all falls through, and then the caller's own fallback applies.
+ */
+export function measureCardSurface(from: Element | null | undefined): string | null {
+  const painted = (c: string) => !!c && c !== 'transparent' && !/,\s*0\s*\)$/.test(c);
+  const known = from?.closest(CARD_CONTAINERS);
+  if (known) {
+    const c = getComputedStyle(known).backgroundColor;
+    if (painted(c)) return c;
+  }
+  // The container itself paints nothing — the archive group's tiles are
+  // deliberately `background: transparent` — so the colour the card actually
+  // sits on is further up. This is also what catches a container nobody added
+  // to CARD_CONTAINERS.
+  for (let el: Element | null = from ?? null; el; el = el.parentElement) {
+    const c = getComputedStyle(el).backgroundColor;
+    if (painted(c)) return c;
+  }
+  // NOTHING painted anywhere. Hand back the container's own value rather than
+  // null: it is what this measured before the walk-up existed, and refusing
+  // to answer here would turn an unstyled test fixture into the transparent
+  // frame the whole module exists to prevent.
+  return known ? getComputedStyle(known).backgroundColor : null;
+}

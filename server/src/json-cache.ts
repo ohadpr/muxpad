@@ -65,10 +65,11 @@ const BR_QUALITY = 4;
 /**
  * The biggest answer this will hold in memory.
  *
- * muxpad's own JSON answers are hundreds of KB at the very top end (the tab
- * corpus on a 537-tab install is ~500 KB uncompressed). A `.json` ATTACHMENT
- * can be 512 MB. 2 MB is comfortably above everything the API produces and far
- * below anything that is really a file.
+ * The hot tab corpus is bounded by live work, not accumulated history.
+ * Historical reports are fetched per parent, and search metadata is bounded
+ * per query. Keep this a safety ceiling, not a target payload size: raising
+ * it would allow larger synchronous compression work on the event loop.
+ * JSON attachments can be 512 MB and must pass through untouched.
  */
 export const MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 

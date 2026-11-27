@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { bootstrapTab, deleteTabCascade } from '../agent-tab.js';
+import { lastMessagesForTabs } from '../chat/last-message.js';
 import type { EventBus } from '../events.js';
 import type { PaneOps } from '../node-link/PaneRouter.js';
 import { hasProjectContext } from '../project-root.js';
@@ -30,13 +31,16 @@ import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { pruneDeadPanes } from '../store/migrations.js';
 import type { TabActivity } from '../tab-activity.js';
 import { type ClockSnapshot, clockSnapshot, reviveChat, tabLifecycle } from '../tab-clock.js';
-import { orderedTabsForWorkspace } from '../tab-list.js';
+import { decorateSelectedTabs, liveCorpusTabs, orderedTabsForWorkspace } from '../tab-list.js';
 import { retireChat } from '../tab-retire.js';
 
 /**
  * CRUD for tabs (the things in the tab bar). Each tab belongs to a
  * parent workspace. List queries are scoped via `?workspaceId=…`.
  */
+/** How many previews one request may ask for — a screenful, with room. */
+const MAX_PREVIEW_IDS = 60;
+
 export function tabsRoutes(deps: {
   db: Database.Database;
   ptyd: PaneOps;
@@ -255,11 +259,14 @@ export function tabsRoutes(deps: {
    *  ../tab-list.ts so `GET /api/boot` can serve the IDENTICAL list — a
    *  prefetch that disagreed with the endpoint it stands in for would make the
    *  sidebar render one order and then rearrange itself. */
-  const orderedForWorkspace = (workspaceId: string, shared?: ClockSnapshot): Tab[] =>
-    orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared);
+  const orderedForWorkspace = (
+    workspaceId: string,
+    shared?: ClockSnapshot,
+    opts?: { omitReportText?: boolean },
+  ): Tab[] => orderedTabsForWorkspace(deps.db, deps.cache, workspaceId, shared, opts);
 
   /**
-   * Every VISIBLE workspace's tabs in ONE request — the instant tier of the
+   * Every visible workspace's LIVE WORK in one request — the instant tier of the
    * sidebar's search box (web/src/components/NavSearch.tsx).
    *
    * The search has to match across workspaces the user has never expanded, and
@@ -273,16 +280,67 @@ export function tabsRoutes(deps: {
    * NAME (it is a matchable field) and its SLUG (half the route a result
    * navigates to), and `Tab` carries neither.
    */
-  app.get('/all', (c) => {
-    const clocks = clockSnapshot(deps.db);
-    const list = workspaces.list().map((w) => ({
-      id: w.id,
-      slug: w.slug,
-      name: w.name,
-      tabs: orderedForWorkspace(w.id, clocks),
-    }));
-    return c.json({ workspaces: list });
+  app.get('/all', (c) => c.json(grouped(liveCorpusTabs(deps.db, deps.cache))));
+
+  // Finished unread chats belong to the inbox, not the live-work corpus.
+  app.get('/unread', (c) =>
+    c.json(
+      grouped(decorateSelectedTabs(deps.db, deps.cache, tabs.unreadTabs()).filter((t) => t.unread)),
+    ),
+  );
+
+  // Search is on demand and bounded. Archive hits resolve only their named
+  // panes; a client never needs the whole history to navigate one result.
+  app.get('/lookup', (c) => {
+    const q = (c.req.query('q') ?? '').trim();
+    if (q.length > 256)
+      return c.json({ error: { code: 'bad_request', message: 'query too long' } }, 400);
+    const paneIds = [...new Set((c.req.query('paneIds') ?? '').split(',').filter(Boolean))].slice(
+      0,
+      60,
+    );
+    const tabIds = [...new Set((c.req.query('tabIds') ?? '').split(',').filter(Boolean))].slice(
+      0,
+      60,
+    );
+    return c.json(
+      grouped(decorateSelectedTabs(deps.db, deps.cache, tabs.lookup(q, paneIds, 60, tabIds))),
+    );
   });
+
+  function grouped(rows: Tab[]) {
+    // Preserve both workspace order and the stored order inside each group.
+    const byWorkspace = new Map<string, Tab[]>();
+    const ids = rows.map((t) => t.id);
+    const owners = ids.length
+      ? (deps.db
+          .prepare(`SELECT id, workspace_id FROM tabs WHERE id IN
+      (${ids.map(() => '?').join(',')})`)
+          .all(...ids) as { id: string; workspace_id: string }[])
+      : [];
+    const ownerById = new Map(owners.map((r) => [r.id, r.workspace_id]));
+    for (const row of rows) {
+      const ws = ownerById.get(row.id);
+      if (!ws) continue;
+      const list = byWorkspace.get(ws) ?? [];
+      list.push(row);
+      byWorkspace.set(ws, list);
+    }
+    // Only metadata is needed. WorkspaceStore.list decorates tab_count by
+    // counting every historical tab, which would undo candidate selection.
+    const visible = deps.db
+      .prepare(`SELECT id, slug, name FROM workspaces
+      WHERE hidden = 0 ORDER BY position, created_at, id`)
+      .all() as { id: string; slug: string; name: string }[];
+    return {
+      workspaces: visible.map((w) => ({
+        id: w.id,
+        slug: w.slug,
+        name: w.name,
+        tabs: byWorkspace.get(w.id) ?? [],
+      })),
+    };
+  }
 
   /**
    * Every ROUND of every child of this chat, keyed by child tab id.
@@ -297,10 +355,57 @@ export function tabsRoutes(deps: {
    * and a report is up to 800 characters × every round × every child. The same
    * reasoning that kept the full transcript off the row.
    */
+  /**
+   * The LAST MESSAGE of each chat asked for — the phone's Activity list's
+   * second line. NOT on the tab row, for the reason `/:id/spawn-rounds` below
+   * is not: the row rides every five-second sidebar poll, and this is read by
+   * one surface for the twenty-odd rows it shows. See chat/last-message.
+   * Capped, so a malformed caller cannot turn one request into a disk sweep.
+   */
+  app.get('/previews', (c) => {
+    const ids = (c.req.query('ids') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, MAX_PREVIEW_IDS);
+    return c.json({ previews: lastMessagesForTabs(deps.db, ids) });
+  });
+
+  /**
+   * …AND THE CHILDREN THEMSELVES, as the corpus would have shown them.
+   *
+   * The spawn cards used to take WHO from the corpus and only WHEN from here.
+   * The corpus now carries live work only, so a delivered worker's row — its
+   * name, task, link, report — is nowhere else the log can read it. Every
+   * DIRECT child is listed, read from `tabs` rather than the rounds join, so a
+   * child that never opened a round (it predates the table, or was never
+   * messaged) still has its card. Grouped exactly like `/all`, and decorated
+   * by the same function, so a card cannot describe a worker differently
+   * depending on which list it came from.
+   *
+   * The report TEXT is whole here, not stripped — but ONLY for a child whose
+   * rounds do not already carry it. The cards render the round's report when
+   * there is one and fall back to the tab-level copy when there is not, so
+   * sending both put the same prose in the response twice: measured on a
+   * snapshot, a 519-child coordinator's response was 1.41 MB, of which 413 KB
+   * was tab-level report text duplicating what the rounds beside it already
+   * said. Found by review. A child with no round that reported still gets its
+   * card's only text, which is what this was for.
+   */
   app.get('/:id/spawn-rounds', (c) => {
     const id = c.req.param('id');
     const byChild = new SpawnRoundStore(deps.db).listByParent(id);
-    return c.json({ rounds: Object.fromEntries(byChild) });
+    const raw = tabs.listChildren(id).filter((r) => r.id !== id);
+    const text = new Map(
+      raw
+        .filter((t) => !(byChild.get(t.id) ?? []).some((r) => r.report))
+        .map((t) => [t.id, t.spawn_report]),
+    );
+    const decorated = decorateSelectedTabs(deps.db, deps.cache, raw).map((t) =>
+      text.get(t.id) ? ({ ...t, spawn_report: text.get(t.id) } as Tab) : t,
+    );
+    const children = grouped(decorated).workspaces.filter((g) => g.tabs.length > 0);
+    return c.json({ rounds: Object.fromEntries(byChild), children });
   });
 
   /**
@@ -329,7 +434,8 @@ export function tabsRoutes(deps: {
         400,
       );
     }
-    return c.json(orderedForWorkspace(workspaceId));
+    // Reports are fetched per parent through spawn-rounds, not on tab lists.
+    return c.json(orderedForWorkspace(workspaceId, undefined, { omitReportText: true }));
   });
 
   // Mark every pane in a tab as "seen". Called by the web client when

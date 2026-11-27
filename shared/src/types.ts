@@ -364,6 +364,8 @@ export const PaneSpecSchema = z.object({
   // rendered as a BOLD name (like unread mail), and cleared when you view the
   // pane. DB-persisted (survives restart), not a runtime cache flag.
   unread: z.boolean().optional(),
+  /** Persisted process parking state, independent of tab retirement. */
+  parked: z.boolean().optional(),
   // Runtime-only. Web apps muxpad detected this (shell) pane is serving,
   // confirmed listening. Decorated at the route layer from the ptyd cache.
   // Empty/absent for url panes and shells that aren't serving anything.
@@ -552,6 +554,9 @@ export const TabSchema = z.object({
   // unconditional. `.optional()` here is wire-compat with a server that
   // predates the column, where absent correctly reads as "not done".
   done: z.boolean().optional(),
+  // Always emitted on decorated lists/events: !done OR owns an unparked pane.
+  // False ejects a cached corpus row; absent is older-server compatibility.
+  corpus_live: z.boolean().optional(),
   // WHY it is done — each is visually distinct in the done group and in a
   // tooltip, and only the server can tell them apart. Absent while live.
   //   'decayed'   — four days with no message
@@ -731,6 +736,8 @@ export const TabAddedEventSchema = z.object({
 });
 export const TabUpdatedEventSchema = z.object({
   type: z.literal('tab.updated'),
+  // Optional only for compatibility with older servers. New servers always send it.
+  workspace_id: z.string().optional(),
   tab: TabSchema,
 });
 export const TabRemovedEventSchema = z.object({
@@ -823,6 +830,17 @@ export const AgentTurnEventSchema = z.object({
   backend: z.string(),
   /** Present only when this start relays this durable queue row. */
   queue_id: z.string().optional(),
+  /**
+   * Did a HUMAN press Stop on this turn? `done` only.
+   *
+   * On the bus because the anti-yield gate (chat/yield-gate.ts) subscribes
+   * here, and Stop is the one condition it must never talk over: it is not
+   * advice, and a prod sent into a turn somebody just halted is the cockpit
+   * arguing with the person holding the button. The flag lives in the socket
+   * handler's per-turn state, so without carrying it here a bus subscriber
+   * cannot know and would have to guess.
+   */
+  stopped: z.boolean().optional(),
   /**
    * How many BACKGROUND COMMANDS this pane still has running, on a `done`.
    *

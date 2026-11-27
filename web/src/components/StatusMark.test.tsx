@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { STATUS_ORDER, rollupStatus } from '@muxpad/shared';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -129,5 +131,35 @@ describe('precedence, after the done → ready rename', () => {
     // A stale cached client sending the old value clamps to a blank reserved
     // column rather than throwing — the documented cross-version behaviour.
     expect(html('done' as never)).not.toContain('<svg');
+  });
+});
+
+describe('the marks turn smoothly', () => {
+  const raw = readFileSync(join(__dirname, 'StatusMark.css'), 'utf8');
+  // COMMENTS STRIPPED, and that is not tidiness. The first version of the
+  // will-change assertion read the file whole, and the prose above the
+  // declaration explains `will-change: transform` by name — so deleting the
+  // DECLARATION left the test green. Caught by sabotaging it.
+  const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('no mark ticks — every spin is linear', () => {
+    // Three of them stepped: dracula/alucard's comet in sixths, github-light's
+    // three dots in thirds (Primer's own behaviour), and wokintosh's busy
+    // cursor in eighths (System 7's). All three were a deliberate quote and
+    // all three read as broken at 10px: "all the status working animations
+    // should be smooth and not choppy."
+    expect(css).not.toMatch(/steps\(/);
+    // …and nothing reintroduces it under another name.
+    expect(css).not.toMatch(/step-(start|end)/);
+  });
+
+  it('every mark is composited, or it stutters under load', () => {
+    // These are conic-gradients under a radial mask. A masked element with no
+    // layer of its own is re-rasterized every frame — the gradient redrawn and
+    // the mask reapplied — at whatever the main thread has left, which with
+    // forty rows turning is not much. `will-change: transform` makes each one
+    // a layer that is rasterized once and then merely rotated.
+    const shared = /\[data-theme\][^{]*::after,?[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(shared).toMatch(/will-change:\s*transform/);
   });
 });

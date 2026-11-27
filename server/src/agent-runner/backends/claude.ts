@@ -19,6 +19,7 @@ import {
   REPLY_ACK,
   blockText,
   isAgentLaunchTool,
+  isMachineMessage,
   needsReplyFallback,
   parseCronMarker,
   subagentLabel,
@@ -1313,7 +1314,10 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
    * message, so the autonomous path has nothing to say about it, and setting
    * it from here would be inventing a transition the caller did not make.
    */
-  const beginTurn = (text: string | null, kind: 'human' | 'cron' | 'slash' | 'autonomous') => {
+  const beginTurn = (
+    text: string | null,
+    kind: 'human' | 'cron' | 'relay' | 'slash' | 'autonomous',
+  ) => {
     inTurn = true;
     interruptRequested = false;
     lastAssistantText = '';
@@ -1331,7 +1335,9 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
     turnCron = kind === 'cron';
     // Only a person is owed a reply. A cron is a relay, a slash command talks
     // to the session rather than the agent, and nobody asked for an
-    // autonomous turn at all.
+    // autonomous turn at all. `relay` is every OTHER thing muxpad injects — a
+    // sub-chat's report, a cron result, a rebase briefing, a task
+    // continuation — all of which used to land here as `human`.
     turnHuman = kind === 'human';
   };
   /**
@@ -1470,9 +1476,24 @@ export function createClaudeBackend(host: RunnerHost, opts: BackendOptions): Age
         // `isHumanMessage` does — a flag would be lost across the durable queue
         // and a server restart. A slash command is the user talking to the
         // SESSION (`/compact`, `/clear`), not asking the agent anything.
+        //
+        // …AND IT SAID "EXACTLY AS ws.ts DOES" WHILE DOING SOMETHING ELSE.
+        // ws.ts asks `isMachineMessage`, which knows every injected type; this
+        // asked `parseCronMarker`, which knows one. So a sub-chat's REPORT
+        // reached its parent classified as the user typing — the turn could
+        // not end quietly, and the parent answered a message nobody sent. That
+        // is how `Build reading app for 4-year-old` went bold overnight, and
+        // it is the mechanism behind "sub chats keep bugging me" in general.
+        // The shared predicate is now the only reader of provenance here.
         beginTurn(
           text,
-          parseCronMarker(text) !== null ? 'cron' : text.startsWith('/') ? 'slash' : 'human',
+          parseCronMarker(text) !== null
+            ? 'cron'
+            : text.startsWith('/')
+              ? 'slash'
+              : isMachineMessage(text)
+                ? 'relay'
+                : 'human',
         );
         // `/clear` is the one message whose SIDE EFFECT is a new session id.
         // Remembered from here (not from slash(), which only queues it) so the

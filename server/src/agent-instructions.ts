@@ -130,6 +130,9 @@ been told.
   something.**
   Live work you cannot see dies with it. Read logs and status instead, and let
   the user choose the moment.
+- **Work meant to outlive your turn starts with \`setsid\`.** \`&\`, \`nohup\`
+  and \`disown\` do NOT save it — the reap signals the process GROUP. Python:
+  \`start_new_session=True\`. A server goes in \`muxpad app\`.
 `;
 
 export const AGENT_INSTRUCTIONS_SEED = `# muxpad
@@ -207,6 +210,7 @@ stories in those pages got written.
 | \`modes\` | Chat mode and Agent mode, and what each one carries |
 | \`mentions\` | an \`@other-chat\` handed to you as context |
 | \`turns\` | what a turn costs, and how to wait without burning tokens |
+| \`tasks\` | work that outlives your turn: \`muxpad task\`, and what continues it |
 <!--cap:msgvault-->| \`msgvault\` | the user's own mail and calendar, approved per use |
 <!--/cap:msgvault-->
 <!--cap:slack-->| \`slack\` | the company Slack, sent AS THE USER, approved per use |
@@ -419,8 +423,34 @@ export const INSTRUCTION_TOPICS: Readonly<Record<string, string>> = {
   Quote a query that contains spaces, exactly as you would for msgvault
   itself: \`muxpad msgvault search 'from:x@y.com newer_than:30d'\`.
 
-  CALENDAR: \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
-  is busy and what overlaps (\`--account --start --end --tz\`);
+  CALENDAR — \`--account\` MUST NAME AN ACCOUNT THAT HAS CALENDAR CONTROL,
+  and that is the whole rule. A mail address that happens to exist is not one.
+
+  Written here twice, wrongly, in one day. The first version said nothing
+  about the account's shape and agents guessed. The second said the bare
+  address "always comes back 403" and that a slash form was required — then
+  an audit of the archive found every calendar call that has ever WORKED used
+  the bare account, and every failure used a different address that has no
+  calendar control. Both versions were written from one failure each, by
+  someone who had not looked at the successes.
+
+  So: do not guess, and do not infer the form from this paragraph. **OMIT
+  \`--account\` ENTIRELY** and muxpad uses the account the owner configured —
+  that is now the normal way to call these, and the only one you can be sure
+  of. There is no accounts listing for you to discover an account with, and a
+  wrong guess returns \`403 calendar operation denied: enabled calendar source
+  is required\` — which reads like a permissions problem and is not one. It is
+  "that account cannot drive a calendar". Pass \`--account\` only when the
+  owner has told you, in words, which one to use.
+
+  If nothing is configured the refusal says so and names the file; that is a
+  message for the owner, not something to work around.
+
+  \`--calendar=<id>\` names WHICH calendar of that account, and defaults to
+  the primary one.
+
+  \`calendar-freebusy\` and \`calendar-conflicts\` ask when the owner
+  is busy and what overlaps (\`--start --end --tz\`);
   \`calendar-create --summary="…"\` puts an event in their own calendar, and
   \`calendar-update --event=<id>\` / \`calendar-delete --event=<id>\` fix or
   remove one. **No guests, no reminders, no notifications** — every flag that
@@ -1052,6 +1082,58 @@ tomorrow, and its result comes back to you through one path.
 The narrow exception is a one-shot command that is not an agent at all — a
 \`git log\`, a test run, a build. Those are tools, not workers.
 `,
+  tasks: `## Tasks — work that outlives your turn
+
+\`muxpad task\` is how you say "this job is not finished" to something that is
+still there after your turn ends.
+
+    muxpad task new "<what you are doing>" --done="<what finished means>" [--next="<first step>"]
+    muxpad task show
+    muxpad task next <id> "<the next concrete step>"
+    muxpad task done <id> --evidence="<what proves it>"
+    muxpad task block <id> --why="<what only the user can settle>"
+
+**WHAT IT BUYS YOU.** While a task is open, muxpad hands it back to you when
+your turn ends — your own request, your own acceptance criteria, your own next
+step — instead of leaving it for the user to notice and say "carry on". The
+friction this exists for, in the owner's words: *"it requires me in order to
+continue even if continuing is trivial"*.
+
+**DECLARE ONE WHEN THE WORK IS LONGER THAN A TURN AND THE USER HAS ALREADY
+ASKED FOR IT.** A multi-step build, a migration with verification, a sweep
+across files, anything where you can already name the next three steps. Not for
+a lookup, not for a question, and NOT as a way to keep working on something
+nobody asked for — a task records a job you were given, it does not authorize
+one you invented.
+
+**YOU DECIDE WHEN IT IS DONE. NOTHING REVIEWS YOU.** muxpad never asks a model
+whether your work is finished and never spawns a reviewer to judge it: that
+judgement needs the conversation, and you are the conversation. Which is
+exactly why \`done\` demands evidence — a commit, a passing suite, a url, a
+measurement. The failure this catches is real and dated: on 11/09 a chat
+declared itself complete and a review the next morning found six defects still
+open.
+
+**RECORDING PROGRESS IS WHAT BUYS THE NEXT CONTINUATION.** \`task next\` after
+each real step. If the task looks untouched when your turn ends, it stops
+being handed back rather than being asked again — one retry, not six. That rule is
+what makes this safe to leave on, so do not treat it as a formality: an agent
+that works without recording gets exactly one more turn.
+
+**WHAT ALWAYS WINS OVER A CONTINUATION.** A Stop. A question you have put to
+the user (\`block\` it and stop). A message already waiting in the queue — that
+is the next step, and it is usually a person's. A turn that ended in failure.
+And the budget: 6 continuations per engagement, reset when a human
+speaks in the chat.
+
+**BLOCK RATHER THAN GUESS.** If you are stuck on something only the user can
+settle — a spend, a destructive step, a choice between two real options —
+\`muxpad task block <id> --why="<the question>"\` and say it in your reply. The
+task comes back to life by itself when they answer.
+
+**ONE OPEN TASK PER CHAT.** Declaring a second supersedes the first, because a
+chat with three open tasks has no answer to "what are you doing now".
+`,
   turns: `## Working across chats and terminals
 
 Other chats, agents and terminals are running alongside you. The map:
@@ -1093,6 +1175,43 @@ call; about 15% were follow-up reads that did not depend on the previous result.
   give each a sub-chat with \`--deliver=batch\`. They run at once and start with
   a small context, so their calls are cheaper than yours. A question you can
   answer in three reads is not one: a sub-chat takes minutes to report.
+
+## Work that must outlive your turn starts in its OWN SESSION
+
+A build, a scoring run, a long batch — anything you intend to still be running
+when you next wake up — must be started with \`setsid\`, or it will be killed
+the moment your turn ends. \`&\`, \`nohup\` and \`disown\` do NOT save it: what
+reaps it signals the process GROUP, and none of those three leave the group.
+
+\`\`\`sh
+python3 -c "import subprocess; p=subprocess.Popen(['sh','-c','<your command>'], \\
+  start_new_session=True, stdin=subprocess.DEVNULL, \\
+  stdout=open('/tmp/job.log','a'), stderr=subprocess.STDOUT); print(p.pid)"
+\`\`\`
+
+Measured both ways, outside this cockpit entirely — bare \`codex exec\` in an
+empty directory, nothing else involved. A command started the ordinary
+way was alive during the turn and GONE the instant that turn's process exited.
+The same command under \`start_new_session=True\` was still running, as its own
+session leader, long after. So this is not something muxpad does, and there is
+no setting here that changes it: \`codex exec\` tears its session down at
+\`turn.completed\` and that teardown kills the command groups it is holding.
+
+It bites CODEX HARDEST because muxpad runs \`codex exec\` once per turn, so
+every turn ends in a session shutdown; a backend that holds one long-lived
+session crosses that boundary far less often. Write it the safe way whoever you
+are — a \`setsid\` job behaves identically on every backend, and you do not
+always know which one you are.
+
+**Better than either, when the work has a shape muxpad already knows**: a
+server is \`muxpad app add\`, which keeps it alive with no tab and gives you
+\`app logs\`; a long visible run can go in a terminal pane of its own, which the
+user can watch and interrupt. Reach for a raw detached process when the work
+fits neither.
+
+**And it does not become a thing muxpad can see.** A detached job has no row,
+no status and no notification — so write its progress and its result to a file
+you name up front, and check that file rather than trying to find the process.
 
 ## Waiting without burning tokens
 

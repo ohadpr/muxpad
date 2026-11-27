@@ -10,6 +10,7 @@ import {
   perChildBudget,
   renderSpawnDelivery,
 } from './spawn-delivery.js';
+import { renderTaskContinuation } from './task-marker.js';
 
 const entry = (over: Partial<SpawnDeliveryEntry> = {}): SpawnDeliveryEntry => ({
   tabId: 't1',
@@ -327,5 +328,97 @@ describe('a delivery says how many times round the loop it is', () => {
       { tabId: 't1', paneId: 'p1', name: 'build it', state: 'ok', report: 'done' },
     ]);
     expect(out).not.toMatch(/attempt|not converging/);
+  });
+});
+
+/**
+ * ── THE LIST THAT GETS FORGOTTEN ────────────────────────────────────────
+ *
+ * This file's own docstring predicted the failure in writing: "`isHumanMessage`
+ * was `parseCronMarker(text) === null` and every new injected message type
+ * after cron would have silently read as human." By 23 November there were
+ * five types and the predicate knew three.
+ *
+ * What it cost, measured: `Build reading app for 4-year-old` went bold
+ * overnight because two of its retired sub-chats reported in. The reports were
+ * classified as the owner typing, so the parent could not end its turn quietly
+ * and answered a message nobody had sent — pulling him into a sub-chat that is
+ * supposed to be its parent's business.
+ *
+ * So this is a ROLL CALL, not a spot check: every type muxpad injects gets a
+ * line, and a new one without a line here is the bug repeating.
+ */
+describe('every message muxpad injects reads as machine', () => {
+  it('knows all five', () => {
+    const cron = renderCronMarker({ id: 'c1', name: 'sweep', at: null, missed: 0 }, 'do it');
+    const report = renderSpawnDelivery([entry()]);
+    const task = renderTaskContinuation(
+      { id: 'tk1', attempt: 1, limit: 6 },
+      { request: 'r', criteria: null, next_step: null },
+    );
+    // These two have no parser of their own — they are matched on the leading
+    // tag — so they are the ones most likely to be missed again.
+    const cronResult =
+      '<muxpad-cron-result name="opening-review">\nSPX +0.4%\n</muxpad-cron-result>';
+    const rebase = '<muxpad-rebase>\nThis chat has been REBASED…\n</muxpad-rebase>';
+    for (const [what, text] of [
+      ['cron fire', cron],
+      ['sub-chat report', report],
+      ['task continuation', task],
+      ['cron result', cronResult],
+      ['rebase briefing', rebase],
+    ] as const)
+      expect(isMachineMessage(text), `${what} reads as human`).toBe(true);
+  });
+
+  it('still calls a person a person', () => {
+    expect(isMachineMessage('ship the sidebar fix')).toBe(false);
+    expect(isMachineMessage('')).toBe(false);
+    // Prose ABOUT the machinery is not machinery: only a LEADING block counts,
+    // which is the rule every parser here already follows.
+    expect(isMachineMessage('why did <muxpad-cron-result> show up in my chat?')).toBe(false);
+    expect(isMachineMessage('the <muxpad-rebase> wrapper is confusing')).toBe(false);
+  });
+});
+
+/**
+ * ── A GENERATED SUMMARY MAY NOT OUTRANK A RECORDED FACT ──────────────────
+ *
+ * Reported from a live run: the delivery for a worker read "Show HN run
+ * complete, report published, task marked done" while its task was OPEN with a
+ * next step recorded and `run.lock` held by a live PID. The parent nearly
+ * relayed that completion to the user.
+ *
+ * The summary is a model's description of a transcript. The task is the
+ * worker's own statement of record, written through `muxpad task`. When they
+ * disagree the reader is shown both — at the point of reading, not in a
+ * footer.
+ */
+describe('a worker whose task is still open', () => {
+  const done = 'Show HN run complete, report published, task marked done.';
+
+  it('says so under the summary that claims otherwise', () => {
+    const text = renderSpawnDelivery([
+      entry({ report: done, openTask: { nextStep: 'score the remaining 180 rows' } }),
+    ]);
+    expect(text).toContain('Its task is still OPEN');
+    expect(text).toContain('score the remaining 180 rows');
+    // The note lands AFTER the report, where the contradiction is unmissable.
+    expect(text.indexOf('still OPEN')).toBeGreaterThan(text.indexOf('task marked done'));
+  });
+
+  it('does not edit or suppress what the worker said', () => {
+    // Hiding a worker's own words removes exactly what a reviewer needs when
+    // the worker is wrong.
+    const text = renderSpawnDelivery([entry({ report: done, openTask: { nextStep: null } })]);
+    expect(text).toContain(done);
+    expect(text).toContain('Its task is still OPEN');
+  });
+
+  it('says nothing at all for a worker with no open task', () => {
+    // The ordinary case, which must render exactly as it did before.
+    const text = renderSpawnDelivery([entry({ report: done })]);
+    expect(text).not.toContain('still OPEN');
+    expect(text).toContain(done);
   });
 });

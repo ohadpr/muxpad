@@ -28,7 +28,7 @@ import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { bootRoutes } from './routes/boot.js';
 import { browserProxyRoutes, browsersRoutes } from './routes/browsers.js';
-import { cardsRoutes } from './routes/cards.js';
+import { allCardsRoutes, cardsRoutes } from './routes/cards.js';
 import { chatActionsRoutes } from './routes/chat-actions.js';
 import { cronsRoutes } from './routes/crons.js';
 import { eventsRoutes } from './routes/events.js';
@@ -44,11 +44,13 @@ import { archiveRoutes, searchRoutes } from './routes/search.js';
 import { connectorRoutes } from './routes/slack.js';
 import { summaryRoutes } from './routes/summary.js';
 import { tabsRoutes } from './routes/tabs.js';
+import { tasksRoutes } from './routes/tasks.js';
 import { voiceRoutes } from './routes/voice.js';
 import { workspacesRoutes } from './routes/workspaces.js';
 import { sameOriginGuard } from './same-origin.js';
 import { readOrCreateSayKey } from './say-key.js';
 import { PrefStore } from './store/PrefStore.js';
+import { TabStore } from './store/TabStore.js';
 import { WorkspaceStore } from './store/WorkspaceStore.js';
 import type { TabActivity } from './tab-activity.js';
 import { clockSnapshot } from './tab-clock.js';
@@ -267,6 +269,8 @@ export function createApp(deps: AppDeps): Hono {
     events: deps.events ?? new EventBus(),
     paneOps: deps.paneOps ?? deps.ptyd,
   };
+  const tabStore = new TabStore(deps.db);
+  resolved.events.setTabWorkspaceResolver((id) => tabStore.getWorkspaceId(id));
   // CSRF: refuse a state-changing request that a foreign page made on the
   // user's behalf. muxpad has no auth — reachability is authorization — so
   // without this, any web page open on a tailnet browser could POST
@@ -394,7 +398,15 @@ export function createApp(deps: AppDeps): Hono {
           .list(opts)
           .map((w) => decorateWorkspace(resolved.cache, resolved.db, w, clocks));
       },
-      listTabs: (workspaceId) => orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId),
+      // SAME SHAPE AS THE ROUTE IT STANDS IN FOR, report text included —
+      // which here means excluded. `GET /api/boot` prefetches the sidebar's
+      // first rungs, and tab-list.ts's whole reason for existing is that a
+      // prefetch disagreeing with its endpoint makes the sidebar render one
+      // thing and then change it.
+      listTabs: (workspaceId) =>
+        orderedTabsForWorkspace(resolved.db, resolved.cache, workspaceId, undefined, {
+          omitReportText: true,
+        }),
     }),
   );
   app.route('/api/tabs', tabsRoutes(lifecycle));
@@ -402,6 +414,10 @@ export function createApp(deps: AppDeps): Hono {
   // Chat cards — named persistent blocks pinned in a conversation. Tab-scoped
   // because a card belongs to a chat; see routes/cards.ts.
   app.route('/api/tabs', cardsRoutes(resolved));
+  // Every card on the install, across every chat — the cards page. See
+  // allCardsRoutes for why it is not a child of /api/tabs.
+  app.route('/api/cards', allCardsRoutes(resolved));
+  app.route('/api/tabs', tasksRoutes({ db: resolved.db }));
   app.route('/api/panes', panesScopedRoutes(lifecycle));
   app.route('/api/panes', paneIoRoutes(resolved));
   app.route('/api/panes', chatActionsRoutes(resolved));

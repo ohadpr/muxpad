@@ -5,7 +5,7 @@
 //
 // See docs/plans/2026-07-01-web-chat-session-switching.md.
 
-import { stripMentionContext } from './chat-context.js';
+import { type MentionedChat, parseMentionContext, stripMentionContext } from './chat-context.js';
 import { parseCronMarker } from './cron.js';
 import { parseSpawnDelivery } from './spawn-delivery.js';
 import type { AgentMode } from './types.js';
@@ -33,6 +33,8 @@ interface Base {
 export interface UserTextEvent extends Base {
   kind: 'user';
   text: string;
+  /** Exact mention identities survive removal of the agent-only envelope. */
+  mentions?: MentionedChat[];
   /**
    * This "message" is PLUMBING — a folded cron's injected instruction.
    *
@@ -927,7 +929,9 @@ export function expandChatEvent(event: ChatEvent): ChatEvent[] {
  */
 function forDisplay(event: ChatEvent & { kind: 'user' }): ChatEvent {
   const shown = stripMentionContext(event.text);
-  return shown === event.text ? event : { ...event, text: shown };
+  if (shown === event.text) return event;
+  const mentions = parseMentionContext(event.text);
+  return { ...event, text: shown, ...(mentions.length ? { mentions } : {}) };
 }
 
 /**
@@ -1033,7 +1037,7 @@ export function normalizeTranscriptLine(line: unknown): ChatEvent[] {
       if (history) return history;
       // An `@mention`'s handles are for the agent, not the reader — see
       // `forDisplay`.
-      return [{ kind: 'user', id, ts, text: stripMentionContext(content) }];
+      return [forDisplay({ kind: 'user', id, ts, text: content })];
     }
     if (Array.isArray(content)) {
       const out: ChatEvent[] = [];

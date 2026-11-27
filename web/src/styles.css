@@ -284,12 +284,20 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #313443;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #9a9aa8;
   --rail-ink: #c0caf5;
   --rail-ink-dim: #a3acd1;
   --rail-ink-faint: #7b82a0;
   --rail-hover: #404355;
   --rail-border: #484c5f;
-  --rail-seam: #4e5267;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #5f647c;
   --rail-accent: #8fb3ff;
   --rail-status-ready: #49c07d;
   --rail-status-working: #e8b34b;
@@ -324,12 +332,21 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #454750;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff7b72;
+  --rail-status-dead: #a6a8b4;
   --rail-ink: #f8f8f2;
   --rail-ink-dim: #d4d5d2;
   --rail-ink-faint: #a2a3a4;
   --rail-hover: #575960;
   --rail-border: #62636a;
-  --rail-seam: #696a71;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #7e8084;
   --rail-accent: #d0b3ff;
   --rail-status-ready: #50fa7b;
   --rail-status-working: #f1fa8c;
@@ -388,6 +405,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #3d345f;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8a80;
+  --rail-status-dead: #aaa5c4;
   --rail-ink: #ffffff;
   --rail-ink-dim: #cccad6;
   --rail-ink-faint: #9794a5;
@@ -396,7 +417,9 @@
   --rail-seam: transparent;
   --rail-accent: #a98cff;
   --rail-status-ready: #98bca8;
-  --rail-status-working: #d0c19f;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   /* Rail: a decisive step toward the ink, so the pane reads as a separate
      surface at last (ΔL* 78 against the pane, from 2.7). */
   --bg: #f5f4fb;
@@ -460,6 +483,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #2a3c50;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8f87;
+  --rail-status-dead: #a2abb6;
   --rail-ink: #ffffff;
   --rail-ink-dim: #d2d4d6;
   --rail-ink-faint: #979ca2;
@@ -468,7 +495,9 @@
   --rail-seam: transparent;
   --rail-accent: #79b8ff;
   --rail-status-ready: #9bc3ae;
-  --rail-status-working: #d5c19d;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   --bg: #ffffff;
   --bg-elev: #ffffff;
   --bg-hover: #eaeef2;
@@ -539,6 +568,10 @@
      tokyo-night, dracula and acme-dark are already in the band and are left
      alone — a blanket percentage would have pushed those past Slack. */
   --rail-surface: #3b3659;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ff8a80;
+  --rail-status-dead: #aaa6bc;
   --rail-ink: #fffdf6;
   --rail-ink-dim: #cec8c2;
   --rail-ink-faint: #928d8e;
@@ -547,7 +580,9 @@
   --rail-seam: transparent;
   --rail-accent: #b3a3ff;
   --rail-status-ready: #9bc3ae;
-  --rail-status-working: #d5c19d;
+  /* Saturated amber, not the beige it was (#d0c19f/#d5c19d), which read as a
+     near-white on the deep rail. 6.9:1 on --rail-surface. */
+  --rail-status-working: #f5c451;
   --bg: #fdf6ea;
   --bg-elev: #fffdf6;
   --bg-hover: #f6ecd8;
@@ -596,12 +631,20 @@
   /* The rail, as reviewed on the demo — these are its rendered values, not a
      second guess at them. */
   --rail-surface: #3e325a;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #a8a3bd;
   --rail-ink: #ebe5d2;
   --rail-ink-dim: #c8c1ba;
   --rail-ink-faint: #988f99;
   --rail-hover: #4f4466;
   --rail-border: #5a4f6e;
-  --rail-seam: #615672;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #756b80;
   --rail-accent: #c3b0ff;
   --rail-status-ready: #50fa7b;
   --rail-status-working: #f5c85a;
@@ -705,12 +748,20 @@
      border, seam) re-steps with it, and the dim ink lands at 6.2:1 on
      its own field against the 4.5 floor. */
   --rail-surface: #1c3a3d;
+  /* The rail's own dead mark: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-dead: #9ab0b2;
   --rail-ink: #d8f6ff;
   --rail-ink-dim: #a7cad4;
   --rail-ink-faint: #7ba39f;
   --rail-hover: #254b4e;
   --rail-border: #376a6c;
-  --rail-seam: #2a5457;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #58767b;
   --rail-accent: #ff2fd0;
   --rail-status-ready: #2bff9a;
   --rail-status-working: #ffb224;
@@ -1079,12 +1130,21 @@
      a shadow at the edge of the sheet; it is the one panel that is filled
      in. */
   --rail-surface: #1d5693;
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+  --rail-status-blocked: #ffb0a8;
+  --rail-status-dead: #b9cade;
   --rail-ink: #eaf3ff;
   --rail-ink-dim: #d2e3f8;
   --rail-ink-faint: #9fbddb;
   --rail-hover: #27689f;
   --rail-border: #5491ca;
-  --rail-seam: #2a6099;
+  /* The EDGE carries the rail/pane split on the dark themes, not the fill:
+     their two grounds measured 1.26–1.41:1, and lifting the rail to widen
+     that would spend the rail's own text margin (tokyo-night's dim ink
+     is 5.51:1 on it today). The seam is the rail cut 32% with its ink,
+     ≥2:1 against the rail and ≥2.7:1 against the pane. */
+  --rail-seam: #5f88b6;
   --rail-accent: #ffcf6b;
   --rail-status-ready: #5ddba0;
   --rail-status-working: #ffcf6b;
@@ -1253,6 +1313,14 @@
   --danger: #d4002b;
 
   --rail-surface: #1333c4;
+
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ffb3a8;
+
+  --rail-status-dead: #bcc6f0;
   --rail-ink: #ffffff;
   --rail-ink-dim: #cdd6fa;
   --rail-ink-faint: #94a4e8;
@@ -1440,6 +1508,12 @@
   --danger: #e01b2e;
 
   --rail-surface: #17151d;
+
+  /* The rail's own blocked mark: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ff4d5e;
   --rail-ink: #fbf8f1;
   --rail-ink-dim: #cfc9d6;
   --rail-ink-faint: #928ca0;
@@ -1651,6 +1725,423 @@
   /* --fg for the same reason as the section name above: the brand is drawn in
      the rail AND in the app's top bar, and only one of those is an island. */
   color: var(--fg);
+}
+
+/* ─── WOKINTOSH ─────────────────────────────────────────────────────────────
+   The Color Classic desktop, after anandman/wokintosh: a flat teal desktop,
+   cream paper windows, light-grey title bars ruled with pinstripes, a 1.5px
+   black frame and a hard, unblurred drop shadow down and to the right. One
+   colour of selection — System 7's periwinkle — and black ink on everything.
+
+   THE RAIL IS THE DESKTOP AND THE PANE IS A WINDOW. That is the mapping, and
+   it is why the rail is teal rather than the menu bar's grey: grey against
+   the paper measured 1.21:1, under the floor themes.test.ts sets for the two
+   surfaces, and the selected row (the pane's paper reaching into the rail)
+   then reads as a window's tab lifted off the desktop.
+
+   The teal is wokintosh's #008c8c taken down two steps, because white
+   section names on the original measured 4.09:1, and the search field's
+   resting label (dim ink on the rail's raised box) needs room under that.
+   #006b6b is 6.33:1 for white and still reads as the same desktop. */
+[data-theme="wokintosh"] {
+  /* Arial is what wokintosh sets its content in; Geneva is its title-bar
+     face and System 7's own, and ships on every Mac; Monaco is the classic
+     Mac monospace and a system font, so the terminal never waits for it. */
+  --ui-font: Arial, "Helvetica Neue", Helvetica, system-ui, sans-serif;
+  --chrome-font: Geneva, Verdana, "DejaVu Sans", Tahoma, system-ui, sans-serif;
+  --term-font: Monaco, Menlo, monospace;
+
+  /* Warmer than wokintosh's #f6f5ea on purpose: the visible pane wears a 5%
+     wash of the accent (tab.css), and the periwinkle took the original paper
+     to a cool grey. This lands the washed face at #f0ede4 — the cream. */
+  --bg: #f8f5e2;
+  --bg-elev: #ffffff;
+  --bg-hover: #e9e7f8;
+  --bg-chrome: #e0e0e0;
+  --bg-tabbar: #d6d6d6;
+
+  --fg: #000000;
+  --fg-dim: #525252;
+  /* Decorative only — see the --hit-* note in :root; never text. */
+  --fg-faint: #8a8a8a;
+  /* The row rules between list items are a pale stone in the original; the
+     window FRAME is black, and that is --border-strong. */
+  --border: #cfccbc;
+  --border-strong: #000000;
+
+  --accent: #5e52e8;
+  --accent-fg: #ffffff;
+  --danger: #c41a1a;
+
+  --rail-surface: #006b6b;
+
+  /* The rail's own blocked/dead marks: the pane's value is tuned for a light
+
+     ground and measured under 3:1 here (themes.test.ts, the tree sweep). */
+
+  --rail-status-blocked: #ffb0a8;
+
+  --rail-status-dead: #c5dedd;
+  --rail-ink: #ffffff;
+  --rail-ink-dim: #d4eeec;
+  --rail-ink-faint: #8fcfca;
+  /* Darker, not lighter: a lighter teal took the dim ink under 4:1. */
+  --rail-hover: #005c5c;
+  --rail-border: #2a8484;
+  --rail-seam: transparent;
+  --rail-accent: #fff0a0;
+  --rail-status-ready: #b8ffc0;
+  /* A YELLOW, not #fff0a0: that read as white on the teal, so the working mark
+     was a black-and-white object belonging to neither. 4.86:1 on --rail-surface. */
+  --rail-status-working: #ffe14a;
+
+  /* --bg, not the washed face: the active-pane wash is laid OVER the
+     terminal's canvas too, so the canvas has to start where the paper does. */
+  --xterm-bg: #f8f5e2;
+  --xterm-fg: #000000;
+
+  --fade-1: 0.7;
+  --fade-2: 0.46;
+  --clock-base: #dcd9c8;
+
+  /* Light re-step (see :root). Ready is wokintosh's "Working" green and
+     blocked its red; working is its amber, a step darker so the ring holds
+     3:1 on the paper with no word beside it. */
+  --status-blocked: #c41a1a;
+  --status-working: #8f5a00;
+  --status-ready: #006b0f;
+  --status-quiet: #b3b0a0;
+  --status-dead: #6b6960;
+  --status-wash: 10%;
+  --status-chip-wash: 18%;
+  --status-ink-mix: 50%;
+
+  /* The rainbow mark's yellow. */
+  --hit-bg: #ffd126;
+  --hit-ink: #000000;
+  --hit-rule: #8a6a00;
+}
+
+/* EVERY WINDOW HAS A FRAME AND A SHADOW, AND NEITHER IS SOFT. 1.5px of black
+   and a 3×4 offset with no blur — the one gesture that makes the whole look.
+   Nothing on a 1991 screen was rounded except the screen. */
+[data-theme="wokintosh"] .chat-bubble,
+[data-theme="wokintosh"] .chat-composer,
+[data-theme="wokintosh"] .settings-dialog {
+  background-color: var(--bg-elev);
+  border: 1.5px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 3px 4px 0 var(--fg);
+}
+
+/* A card is furniture, one step down from a window: the frame without the
+   shadow, so two of them stacked do not outrank the message above. */
+[data-theme="wokintosh"] .chat-card {
+  background-color: var(--bg-elev);
+  border-radius: 0;
+  border: 1.5px solid var(--fg);
+  box-shadow: none;
+}
+
+/* A sub-chat's card is a small window of its own: white, framed, with the
+   shadow at two-thirds — it is inside the transcript, not on the desktop. */
+[data-theme="wokintosh"] .chat-mention-card {
+  background: var(--bg-elev);
+  border: 1.5px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 2px 3px 0 var(--fg);
+}
+
+/* An act is a dialog box's line, not a window: square and framed, with the
+   outcome hues taken to the paper's step. The defaults are tuned for a white
+   card and measured under 3:1 as text on this grey. */
+[data-theme="wokintosh"] .action-card {
+  --a-wait: #8f5a00;
+  --a-sent: #006b0f;
+  --a-failed: #c41a1a;
+  --a-declined: #5b5b78;
+  background: var(--bg-elev);
+  border-radius: 0;
+}
+[data-theme="wokintosh"] .chat-md :not(pre) > code {
+  border-radius: 0;
+}
+
+/* The focused composer is the selected window: System 7 drew selection in
+   one colour, and so does this. */
+[data-theme="wokintosh"] .chat-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 3px 4px 0 var(--fg), 0 0 0 1.5px var(--accent);
+}
+
+/* CODE IS A DOCUMENT WINDOW. White, framed, square, with a smaller shadow
+   than a message has — it sits inside one. */
+[data-theme="wokintosh"] .chat-md pre {
+  background: var(--bg-elev);
+  border: 1px solid var(--fg);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--fg);
+}
+
+[data-theme="wokintosh"] .navtree-mark,
+[data-theme="wokintosh"] .navtree-state-dot {
+  border-radius: 0;
+}
+
+/* THE MENU BAR. On a phone the strip above the pane is the menu bar, and the
+   menu bar was plain grey with a black rule under it — no pinstripes. Those
+   were a window's, and on this strip they ran straight through the
+   breadcrumb's text. */
+[data-theme="wokintosh"] .ws-tabbar {
+  background-color: var(--bg-chrome);
+  border-bottom: 1.5px solid var(--fg);
+}
+
+/* …AND IN A CHAT THE MENU BAR IS THE SAME TITLE BAR AS THE LIST'S. Everywhere
+   else the chat's top bar joins the rail (MobileNav.css). Here that would be
+   teal, and a System 7 window's title bar is grey: the teal is the DESKTOP,
+   and the list's own header is already a grey, pinstriped, pane-ink island
+   sitting on it. The two views were already sharing a colour — #e0e0e0 on
+   both, the only theme that measured that way — and what separated them was
+   that one was a title bar and the other a plain strip. So the chat gets the
+   same title bar: pinstripes edge to edge, the name and the controls on clear
+   patches, a black rule under it, pane ink and pane status marks on grey. */
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --fg-faint: var(--pane-ink-faint);
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
+  --border: var(--pane-border);
+  --border-strong: var(--pane-border);
+  --accent: var(--pane-accent);
+  --status-ready: var(--pane-status-ready);
+  --status-working: var(--pane-status-working);
+  --status-blocked: var(--pane-status-blocked);
+  --status-dead: var(--pane-status-dead);
+  color: var(--pane-ink);
+  background-color: var(--bg-chrome);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    #00000094 2px 3px,
+    transparent 3px 4px
+  );
+  background-size: calc(100% - 16px) 19px;
+  background-position: 8px center;
+  background-repeat: no-repeat;
+  border-bottom: 1.5px solid var(--pane-ink);
+}
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .mobile-chat-title {
+  flex: 0 1 auto;
+  margin-right: auto;
+  padding: 0 8px;
+  background: var(--bg-chrome);
+}
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .mobile-chat-back,
+[data-theme="wokintosh"] .ws-tabbar:has(.mobile-chat-head) .icon-btn {
+  background: var(--bg-chrome);
+  box-shadow: -7px 0 0 0 var(--bg-chrome), 7px 0 0 0 var(--bg-chrome);
+}
+
+/* …AND THE CHAT IS A WINDOW ON THE SAME DESKTOP. "No color tie-in from list
+   view to chat view": the headers matched, but the list is the teal desktop
+   and a chat was the cream paper edge to edge, so nothing carried across the
+   transition. A System 7 window SITS ON the desktop rather than replacing it,
+   so on the phone the chat's paper is inset on the teal: a strip of desktop
+   either side and above it, the window's 1.5px black frame, and the theme's
+   hard shadow down and to the right. It runs off the bottom of the screen,
+   as a window taller than the screen does, which spends nothing on the
+   composer or the home indicator. The menu bar above stays full width — it
+   is the same bar as the list's, and it is not part of the window.
+   The cost is width, measured: the paper is 390 → 375px and the reading
+   column 339 → 322px (−17px, −5.0%) — roughly one word in twenty on a line. */
+[data-theme="wokintosh"] .mobile-pane-slot:has(.chat-pane) {
+  background: var(--rail-surface);
+  padding: 8px 9px 0 6px;
+}
+[data-theme="wokintosh"] .mobile-pane-slot:has(.chat-pane) .chat-pane {
+  border: 1.5px solid var(--pane-ink);
+  border-bottom: 0;
+  box-shadow: 3px 4px 0 #000000d9;
+}
+
+/* THE TITLE BAR IS THE RAIL'S HEAD. The desktop has no tab strip, so the
+   window-title treatment lives on the brand row:
+   grey, pinstriped edge to edge, a black rule under it, and the wordmark set
+   on a clear patch. It is a pane-ink island inside the rail's, so the search
+   button and the wordmark go back to black on grey. The phone's list header
+   (.mcl-head) is the same row on the same rail, so it wears the same bar. */
+[data-theme="wokintosh"] .sidenav-brand,
+[data-theme="wokintosh"] .mcl-head {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --bg-elev: var(--pane-elev);
+  --bg-hover: var(--pane-hover);
+  color: var(--pane-ink);
+  background-color: var(--bg-chrome);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    #00000094 2px 3px,
+    transparent 3px 4px
+  );
+  background-size: calc(100% - 16px) 19px;
+  background-position: 8px center;
+  background-repeat: no-repeat;
+  border-bottom: 1.5px solid var(--fg);
+}
+[data-theme="wokintosh"] .sidenav-brand .brand-text,
+[data-theme="wokintosh"] .mcl-head .brand-text {
+  background: var(--bg-chrome);
+  padding: 0 8px;
+}
+[data-theme="wokintosh"] .sidenav-brand .brand-mark,
+[data-theme="wokintosh"] .mcl-head .brand-mark {
+  /* TWO OFFSET SHADOWS, NOT ONE SPREAD. A spread grows on every side: the mark
+     sits 9px above the row's bottom edge and the spread was 10px, so the patch
+     reached 1px past it and painted over the 1px rule — a white notch in the
+     underline directly beneath the icon, which is how it was reported.
+     Measured in the live page: markBottom 27, rowBottom 36, spread 10.
+
+     Offsets with no blur and no spread paint two copies of the mark's own box,
+     shifted left and right. The patch is therefore exactly as TALL as the icon
+     whatever the row height becomes, and the rule underneath cannot be
+     reached. A background would be simpler and is wrong here: the rainbow IS
+     this element's background, so painting one erases the mark (tried it —
+     the icon vanished and left an empty box). */
+  box-shadow: -10px 0 0 0 var(--bg-chrome), 10px 0 0 0 var(--bg-chrome);
+}
+/* The search button sits where a window's close box did, on its own clear
+   patch of the bar. */
+[data-theme="wokintosh"] .sidenav-brand .navtree-search,
+[data-theme="wokintosh"] .mcl-head .icon-btn,
+[data-theme="wokintosh"] .mcl-head .mcl-head-icon {
+  background: var(--bg-chrome);
+}
+/* On the phone the title is a flex:1 span, so a patch on it would cover the
+   whole bar. It shrinks to its word instead and pushes the buttons right, and
+   the buttons' patches reach across the 10px gaps between them with the same
+   offset copies the mark uses — so the stripes run from the title to the
+   buttons and nowhere else. */
+[data-theme="wokintosh"] .mcl-head .mcl-head-title {
+  flex: 0 1 auto;
+  margin-right: auto;
+  padding: 0 8px;
+  background: var(--bg-chrome);
+}
+[data-theme="wokintosh"] .mcl-head .icon-btn,
+[data-theme="wokintosh"] .mcl-head .mcl-head-icon {
+  box-shadow: -7px 0 0 0 var(--bg-chrome), 7px 0 0 0 var(--bg-chrome);
+}
+
+/* ── HOVER MUST NOT ERASE THE PINSTRIPES ──────────────────────────────────
+   The bar is a background-IMAGE on `.sidenav-brand`, and the wordmark, mark
+   and search button each punch a clear patch by painting `--bg-chrome` behind
+   themselves. `.brand:hover` sets `background: var(--bg-hover)`, which is a
+   flat fill over the whole link — so hovering the wordmark wiped the rules
+   from that span of the bar and left a lavender slab where the stripes had
+   been. Reported with a screenshot; it is the only theme that draws chrome
+   with a background-image, which is why no other one shows it.
+
+   Keeping the chrome colour here is also the more faithful answer: a System 7
+   menu title did nothing on hover and INVERTED on click. The affordance is
+   already carried by the two rules that brighten the rainbow mark and darken
+   the wordmark, and those are theme-agnostic. */
+[data-theme="wokintosh"] .sidenav-brand .brand:hover,
+[data-theme="wokintosh"] .ws-tabbar .brand:hover {
+  /* TRANSPARENT, not `--bg-chrome`: the clear patches are painted by the
+     CHILDREN (.brand-text, .brand-mark, .navtree-search), each exactly as wide
+     as itself. Any opaque fill on the link covers the span BETWEEN them, which
+     is where the rules show — so the first fix here swapped a lavender slab
+     for a grey one and looked just as wrong. The link has no resting
+     background either; this simply keeps it that way. */
+  background: transparent;
+}
+
+/* THE PHONE'S TAB BAR IS THE MENU BAR, AT THE BOTTOM. The title bar above
+   the list is grey with a black rule under it; the bar below is the same
+   grey with a black rule above it — the list is the desktop between them.
+   A pane-ink island like the title bar, so the labels go back to System 7's
+   black and grey on grey (6.2:1 resting, 15.9:1 current). The hard rule is
+   the edge; wokintosh draws nothing soft, so no shadow. */
+[data-theme="wokintosh"] .mcl-tabs {
+  --fg: var(--pane-ink);
+  --fg-dim: var(--pane-ink-dim);
+  --bg-elev: var(--bg-chrome);
+  background: var(--bg-chrome);
+  border-top: 1.5px solid var(--pane-ink);
+  box-shadow: none;
+}
+
+/* THE SELECTED ROW ON THE PHONE IS AN INVERTED ICON LABEL. On the desktop the
+   selected row is the pane's paper reaching into the rail; on the phone there
+   is no pane beside the list, and the shared selection — a 20% wash of the
+   rail's accent — lifted the teal under white ink to 4.39:1. System 7 marked a
+   selected icon on the desktop by inverting its label, so this one goes the
+   other way: a darker teal under the same white, 10.54:1. */
+[data-theme="wokintosh"] .navtree[data-variant="sheet"] .navtree-tab-row[data-active="true"] {
+  background-color: #004747;
+}
+
+/* THE MENU-BAR WORDMARK. Geneva bold in ink, beside the six-stripe rainbow
+   mark that sat at the left of every menu bar. */
+[data-theme="wokintosh"] .brand-text {
+  font-family: var(--chrome-font);
+  font-weight: 700;
+  color: var(--fg);
+}
+[data-theme="wokintosh"] .brand-mark rect {
+  fill: transparent;
+}
+[data-theme="wokintosh"] .brand-mark {
+  background: linear-gradient(
+    to bottom,
+    #33ab47 0 16.6%,
+    #ffd126 16.6% 33.3%,
+    #ff8224 33.3% 50%,
+    #e33838 50% 66.6%,
+    #ab1fb0 66.6% 83.3%,
+    #009ecc 83.3%
+  );
+  outline: 1px solid #000000b3;
+  outline-offset: -1px;
+}
+
+/* SECTION NAMES ARE ICON LABELS ON THE DESKTOP: Geneva, bold, in the rail's
+   ink. --fg, not --rail-ink — the mobile sheet sits on the paper, not the
+   desktop, and the island rebinds --fg to the rail's ink where there is one. */
+[data-theme="wokintosh"] .navtree-ws-name .navtree-name-text {
+  color: var(--fg);
+  font-family: var(--chrome-font);
+  font-weight: 700;
+}
+[data-theme="wokintosh"] .navtree-tab-row[data-active="true"] .navtree-name-text {
+  font-weight: 700;
+}
+
+/* THE SEND KEY IS THE DEFAULT BUTTON: a white rounded rectangle in a black
+   frame, with the thick outer ring that meant "Return presses this". The one
+   rounded thing in the theme, because it was the one rounded thing on the
+   screen. */
+[data-theme="wokintosh"] .chat-send {
+  border-radius: 8px;
+  border: 1.5px solid var(--fg);
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--fg);
+}
+
+/* THE SCROLLBAR IS A SCROLLBAR. A 50% grey dither for the track and a white
+   thumb in a black frame. */
+[data-theme="wokintosh"] .navtree-scroll::-webkit-scrollbar-thumb,
+[data-theme="wokintosh"] .chat-list::-webkit-scrollbar-thumb {
+  background: var(--bg-elev);
+  border: 1px solid var(--fg);
+  border-radius: 0;
+}
+[data-theme="wokintosh"] .chat-list::-webkit-scrollbar-track {
+  background: repeating-conic-gradient(#0000002e 0 25%, transparent 0 50%) 0 0 / 2px 2px;
 }
 
 * {
@@ -1913,6 +2404,19 @@ select:focus {
      the chrome tab bar would slide under them. env() returns 0 on
      non-notched devices. */
   height: 100svh;
+  /* BORDER-BOX, and it is load-bearing. The padding below reserves the status
+     bar, and with the default content-box it ADDED to `height`, so the layout
+     was one status bar taller than the screen and the bottom tab bar fell off
+     the end of it — reported from a phone, in both the list and a chat.
+
+     It did not show up before because the old `black-translucent` status bar
+     ran the page under the status bar and the overflow went under it. Removing
+     that meta (see index.html) is what exposed this. */
+  box-sizing: border-box;
+  /* Kept rather than deleted: an install added BEFORE the meta was dropped
+     keeps the translucent bar until it is re-added, and on those the page
+     still runs underneath and still needs the room. env() is 0 wherever it is
+     not needed, and with border-box a 0 costs nothing. */
   padding-top: env(safe-area-inset-top);
   overflow: hidden;
 }

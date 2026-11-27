@@ -1009,10 +1009,10 @@ write (a draft reply; it can never send):
   run <args…>                               send argv straight to msgvault (reviewed, approved once)
                                             (for usage, run `msgvault <command> --help` directly:
                                              it opens no database and needs no approval)
-  calendar-freebusy|calendar-conflicts --account=<email> --start=<…> --end=<…> --tz=<IANA>
-  calendar-update --account=<email> --event=<id> [--summary=…] [--start=…] [--end=…] [--tz=…]
-  calendar-delete --account=<email> --event=<id>
-  calendar-create --account=<email> --summary="…" --start=<YYYY-MM-DDTHH:MM>
+  calendar-freebusy|calendar-conflicts [--account=<email>] --start=<…> --end=<…> --tz=<IANA>
+  calendar-update [--account=<email>] --event=<id> [--summary=…] [--start=…] [--end=…] [--tz=…]
+  calendar-delete [--account=<email>] --event=<id>
+  calendar-create [--account=<email>] --summary="…" --start=<YYYY-MM-DDTHH:MM>
                   --end=<…> --tz=<IANA> [--calendar=<id>] [--location=…]
   draft-compose --to=<addr> [--to=…] --subject="…" --body="…"
   draft-reply <message-id> --body="…" [--all]
@@ -1278,14 +1278,23 @@ cmd_msgvault() {
         esac
         shift
       done
-      for pair in "account:$facct" "start:$ffrom" "end:$fto" "tz:$ftz"; do
+      # --account IS OPTIONAL, and that is the whole point of the configured
+      # default: msgvault.defaultCalendar in /Library/muxpad/integrations.json.
+      # An agent cannot discover an account (the accounts listing is refused to
+      # delegated callers), so a CLI that demanded one made the owner's
+      # configured calendar unreachable through every supported caller — the
+      # broker's fallback existed and could never run. When it is not given
+      # the key is OMITTED rather than sent empty, so the fallback is reached
+      # by the absence the broker actually looks for.
+      for pair in "start:$ffrom" "end:$fto" "tz:$ftz"; do
         [ -n "${pair#*:}" ] || { echo "muxpad: $verb needs --${pair%%:*}=" >&2; return 1; }
       done
       local fbody; fbody="$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
         --arg account "$facct" --arg calendar "$fcal" \
         --arg start "$ffrom" --arg end "$fto" --arg tz "$ftz" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,start:$start,end:$end,tz:$tz}')"
+        '{pane:$pane,key:$key,calendar:$calendar,start:$start,end:$end,tz:$tz}
+         + (if $account == "" then {} else {account:$account} end)')"
       # Literal paths, not "$verb": the set of endpoints this CLI may call is
       # pinned by a test that READS these strings, and a URL built from a
       # variable is an endpoint that test cannot see.
@@ -1311,14 +1320,14 @@ cmd_msgvault() {
         esac
         shift
       done
-      [ -n "$uacct" ] || { echo "muxpad: $verb needs --account=" >&2; return 1; }
       [ -n "$uevent" ] || { echo "muxpad: $verb needs --event=" >&2; return 1; }
       local ubody; ubody="$(jq -nc \
         --arg pane "$MUXPAD_PANE_ID" --arg key "$MUXPAD_PANE_KEY" \
         --arg account "$uacct" --arg calendar "$ucal" --arg event "$uevent" \
         --arg summary "$usum" --arg start "$ufrom" --arg end "$uto" \
         --arg tz "$utz" --arg location "$uloc" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,event:$event}
+        '{pane:$pane,key:$key,calendar:$calendar,event:$event}
+         + (if $account == "" then {} else {account:$account} end)
          + (if $summary == "" then {} else {summary:$summary} end)
          + (if $start == "" then {} else {start:$start} end)
          + (if $end == "" then {} else {end:$end} end)
@@ -1346,7 +1355,7 @@ cmd_msgvault() {
         esac
         shift
       done
-      for pair in "account:$cacct" "summary:$csum" "start:$cfrom" "end:$cto" "tz:$ctz"; do
+      for pair in "summary:$csum" "start:$cfrom" "end:$cto" "tz:$ctz"; do
         [ -n "${pair#*:}" ] || { echo "muxpad: calendar-create needs --${pair%%:*}=" >&2; return 1; }
       done
       slack_call POST /api/msgvault/calendar-create "$(jq -nc \
@@ -1354,7 +1363,8 @@ cmd_msgvault() {
         --arg account "$cacct" --arg calendar "$ccal" --arg summary "$csum" \
         --arg start "$cfrom" --arg end "$cto" --arg tz "$ctz" \
         --arg location "$cloc" --arg description "$cdesc" \
-        '{pane:$pane,key:$key,account:$account,calendar:$calendar,summary:$summary,start:$start,end:$end,tz:$tz}
+        '{pane:$pane,key:$key,calendar:$calendar,summary:$summary,start:$start,end:$end,tz:$tz}
+         + (if $account == "" then {} else {account:$account} end)
          + (if $location == "" then {} else {location:$location} end)
          + (if $description == "" then {} else {description:$description} end)')" ;;
     draft-get)
@@ -2136,6 +2146,140 @@ cmd_card_clear() {
   [ -z "$name" ] && { echo "usage: muxpad card clear <name>" >&2; exit 1; }
   http_request DELETE "/api/tabs/$(card_tab)/cards/$name" >/dev/null
   printf '%s✓%s cleared %s\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+# ─── task ──────────────────────────────────────────────────────────────────
+#
+# A task that outlives the turn that started it. The agent declares it; muxpad
+# hands it back at turn-end while it is open and progress is being recorded.
+# See `muxpad help tasks`, server/src/chat/TaskStore.ts and task-continue.ts.
+
+cmd_task_new() {
+  reset_flags tab done next
+  parse_flags tab done next -- "$@"
+  require_jq
+  local request="${POSITIONAL[0]:-}"
+  if [ -z "$request" ]; then
+    echo 'usage: muxpad task new "<what you are doing>" --done="<what finished means>" [--next="<first step>"]' >&2
+    exit 1
+  fi
+  local body
+  body="$(jq -n --arg r "$request" '{request:$r}')"
+  if [ -n "${FLAG_done:-}" ]; then
+    body="$(printf '%s' "$body" | jq --arg c "$FLAG_done" '. + {criteria:$c}')"
+  fi
+  if [ -n "${FLAG_next:-}" ]; then
+    body="$(printf '%s' "$body" | jq --arg n "$FLAG_next" '. + {next_step:$n}')"
+  fi
+  local res
+  res="$(http_request POST "/api/tabs/$(card_tab)/tasks" "$body")"
+  local id
+  id="$(printf '%s' "$res" | jq -r '.task.id // empty')"
+  [ -z "$id" ] && { printf '%s' "$res" >&2; exit 1; }
+  printf '%s✓%s task %s — open\n' "$C_GREEN" "$C_RESET" "$id"
+  # `if`, not `[ -n … ] && printf`: the AND form leaves the FAILED test as the
+  # function's exit status, so `task new` printed its success line and exited 1
+  # whenever nothing was superseded — which is the common case.
+  local sup
+  sup="$(printf '%s' "$res" | jq -r '.superseded // empty')"
+  if [ -n "$sup" ]; then
+    printf '  superseded %s (one open task per chat)\n' "$sup"
+  fi
+}
+
+cmd_task_show() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  local res
+  res="$(http_request GET "/api/tabs/$(card_tab)/tasks")"
+  printf '%s' "$res" | jq -r '
+    if .open then
+      "open  \(.open.id)\n  request:   \(.open.request)\n  done when: \(.open.criteria // "—")\n  next step: \(.open.next_step // "—")\n  handed back: \(.open.continuations) time(s)"
+    else "no open task in this chat" end,
+    (if (.tasks | length) > 1 then "\nclosed:" else empty end),
+    (.tasks[] | select(.state != "open") | "  \(.state)  \(.id)  \(.request[0:60])")'
+}
+
+# One PATCH shape for the three closing moves, so the CLI cannot disagree with
+# the route about what each one means.
+task_patch() {
+  local id="$1" body="$2"
+  local res
+  res="$(http_request PATCH "/api/tabs/$(card_tab)/tasks/$id" "$body")"
+  if printf '%s' "$res" | grep -q '"error"'; then
+    printf '%s' "$res" | (require_jq; jq -r '.error.message // .' ) >&2
+    exit 1
+  fi
+}
+
+cmd_task_next() {
+  reset_flags tab
+  parse_flags tab -- "$@"
+  require_jq
+  local id="${POSITIONAL[0]:-}" step="${POSITIONAL[1]:-}"
+  if [ -z "$id" ] || [ -z "$step" ]; then
+    echo 'usage: muxpad task next <taskId> "<the next concrete step>"' >&2
+    exit 1
+  fi
+  task_patch "$id" "$(jq -n --arg n "$step" '{next_step:$n}')"
+  printf '%s✓%s next step recorded\n' "$C_GREEN" "$C_RESET"
+}
+
+cmd_task_done() {
+  reset_flags tab evidence
+  parse_flags tab evidence -- "$@"
+  require_jq
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ] || [ -z "${FLAG_evidence:-}" ]; then
+    echo 'usage: muxpad task done <taskId> --evidence="<what proves it>"' >&2
+    exit 1
+  fi
+  task_patch "$id" "$(jq -n --arg e "$FLAG_evidence" '{state:"done",evidence:$e}')"
+  printf '%s✓%s task %s — done\n' "$C_GREEN" "$C_RESET" "$id"
+}
+
+cmd_task_block() {
+  reset_flags tab why
+  parse_flags tab why -- "$@"
+  require_jq
+  local id="${POSITIONAL[0]:-}"
+  if [ -z "$id" ] || [ -z "${FLAG_why:-}" ]; then
+    echo 'usage: muxpad task block <taskId> --why="<what the user has to settle>"' >&2
+    exit 1
+  fi
+  task_patch "$id" "$(jq -n --arg e "$FLAG_why" '{state:"blocked",evidence:$e}')"
+  printf '%s✓%s task %s — blocked, waiting for the user\n' "$C_GREEN" "$C_RESET" "$id"
+}
+
+cmd_task() {
+  case "${1:-}" in
+    new)   cmd_task_new "${@:2}" ;;
+    show)  cmd_task_show "${@:2}" ;;
+    next)  cmd_task_next "${@:2}" ;;
+    done)  cmd_task_done "${@:2}" ;;
+    block) cmd_task_block "${@:2}" ;;
+    *)
+      cat >&2 <<'EOF'
+usage:
+  muxpad task new "<what you are doing>" --done="<what finished means>" [--next="<first step>"]
+  muxpad task show
+  muxpad task next <taskId> "<the next concrete step>"
+  muxpad task done <taskId> --evidence="<what proves it>"
+  muxpad task block <taskId> --why="<what the user has to settle>"
+
+A task survives the end of your turn. While it is open and you keep recording
+progress, muxpad hands it back to you at turn-end instead of waiting for the
+user to say "carry on" — bounded, and never over a Stop or a pending question.
+
+YOU decide when it is done; nothing reviews you. That is why `done` needs
+evidence: a completion claim with nothing to point at is the failure this
+exists to catch.
+
+The chat defaults to the one you are in; pass --tab=<id> for another.
+EOF
+      exit 1 ;;
+  esac
 }
 
 cmd_card() {
@@ -5948,6 +6092,18 @@ HTTP CLI (requires the daemon; defaults read from MUXPAD_*_ID env):
   card get <name>                    the content, bare (read-modify-write)
   card list                          every card in this chat
   card clear <name>                  remove one
+  task new "<what you are doing>"    a task that OUTLIVES your turn. While it is
+          --done="<finished means>"  open and you keep recording progress,
+          [--next="<first step>"]    muxpad hands it back at turn-end instead of
+                                     waiting for the user to say "carry on" —
+                                     bounded, never over a Stop or a question.
+  task show                          this chat's open task + closed history
+  task next <id> "<next step>"       record progress; this is what buys the next
+                                     continuation
+  task done <id> --evidence="<…>"    finished. Evidence is required: a claim with
+                                     nothing to point at is the failure this
+                                     exists to catch
+  task block <id> --why="<…>"        stuck on something only the user can settle
   app add --url=<url> [--name=<n>] [--slug=<s>] [--cwd=<dir>]
           [--no-start] [--no-autostart] -- <command...>
                                      register a local web server muxpad keeps
@@ -6125,6 +6281,7 @@ case "$VERB" in
   browser) cmd_browser "${ARGS[@]:1}" ;;
   msgvault) cmd_msgvault "${ARGS[@]:1}" ;;
   card) cmd_card "${ARGS[@]:1}" ;;
+  task) cmd_task "${ARGS[@]:1}" ;;
   publish) cmd_publish "${ARGS[@]:1}" ;;
   # ── PAYING FOR SOMETHING, IN THE BROWSER YOU ARE ALREADY IN ───────────
   # Two verbs with a HUMAN between them: `fill` types the stored card into the

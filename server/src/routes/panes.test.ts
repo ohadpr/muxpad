@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../events.js';
 import { PaneStore } from '../store/PaneStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { WorkspaceStore } from '../store/WorkspaceStore.js';
 import { openDb } from '../store/db.js';
 import { type TestApp, createTestApp } from '../test-helpers/createTestApp.js';
 
@@ -43,6 +44,50 @@ describe('panes routes', () => {
     await test.cleanup();
     rmSync(tmp, { recursive: true, force: true });
   });
+
+  it.each([{ kind: 'url', url: 'https://example.test' }, { shell: '/bin/cat' }])(
+    'publishes membership when an off-layout pane is added or removed: %j',
+    async (body) => {
+      const localDb = openDb(':memory:');
+      const events = new EventBus();
+      const local = await createTestApp({ db: localDb, dataDir: tmp, events });
+      try {
+        const workspace = new WorkspaceStore(localDb).create({ name: 'W' });
+        const tabs = new TabStore(localDb);
+        const tab = tabs.create({ workspace_id: workspace.id, name: 'finished', layout: '' });
+        tabs.retire(tab.id, 'delivered');
+        const received: MuxpadEvent[] = [];
+        events.subscribe((event) => received.push(event));
+        const response = await local.app.request(`/api/tabs/${tab.id}/panes`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(201);
+        const pane = (await response.json()) as { id: string };
+        expect(received).toContainEqual(
+          expect.objectContaining({
+            type: 'tab.updated',
+            workspace_id: workspace.id,
+            tab: expect.objectContaining({ id: tab.id, done: true, corpus_live: true }),
+          }),
+        );
+        received.length = 0;
+        expect(
+          (await local.app.request(`/api/panes/${pane.id}`, { method: 'DELETE' })).status,
+        ).toBe(204);
+        expect(received).toContainEqual(
+          expect.objectContaining({
+            type: 'tab.updated',
+            workspace_id: workspace.id,
+            tab: expect.objectContaining({ id: tab.id, done: true, corpus_live: false }),
+          }),
+        );
+      } finally {
+        await local.cleanup();
+      }
+    },
+  );
 
   it('creates a pane with defaults', async () => {
     const res = await test.app.request(`/api/tabs/${tabId}/panes`, {

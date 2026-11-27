@@ -129,3 +129,38 @@ export function cardFreshness(
   // period exists to be tolerant of.
   return Math.max(0, Math.min(1, 1 - age / card.every_ms));
 }
+
+/**
+ * A card with the chat that owns it — what the CARDS PAGE lists.
+ *
+ * A card is pinned inside one conversation, which is right for reading it in
+ * context and wrong for the question "what is true right now". Seven cards on
+ * this install live in seven different chats: a quota card refreshing hourly
+ * and a backup card every fifteen minutes, both invisible unless you happen to
+ * open those two chats. The page exists to answer that question in one place,
+ * and every row has to be able to take you back to where the card lives — so
+ * the chat travels with the card rather than being looked up per row.
+ *
+ * `retired` is the one piece of chat state the page acts on. A card whose chat
+ * has left the live list is almost always litter — two of the seven here were
+ * last written in October — and it belongs in its own group, not mixed in with
+ * the values you are actually watching.
+ */
+export interface CardChat {
+  tabId: string;
+  /** The chat's name, or '' if it never got one. */
+  name: string;
+  /** The chat's emoji, or null if it never got one — the page falls back to
+   *  `fallbackTabIcon`, the same stable per-id stand-in the rail uses, so a
+   *  card from an unlabelled chat is still identifiable by shape. */
+  icon: string | null;
+  slug: string;
+  workspaceSlug: string;
+  workspaceName: string;
+  /** Has this chat left the live list? */
+  retired: boolean;
+}
+
+export interface CardWithChat extends ChatCard {
+  chat: CardChat;
+}

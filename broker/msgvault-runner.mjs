@@ -22,6 +22,49 @@ import { assertProtectedPath } from './protected-path.mjs';
  * call, not at the next restart. This runs once per approved request, which
  * is a human-paced rate.
  */
+/**
+ * TURN msgvault's OPAQUE REFUSALS INTO SOMETHING A READER CAN ACT ON.
+ *
+ * The refusals are returned verbatim on purpose — "query is not available in
+ * agent-delegated mode" tells an agent exactly what to do instead. But one of
+ * them tells nobody anything, and it has cost more of the owner's time than
+ * any other failure in this system: `draft_disabled`.
+ *
+ * What agents did with it, repeatedly, across sessions in the archive: they
+ * reported "the mail tool keeps rejecting new drafts with draft_disabled;
+ * only you can re-enable drafts" and stopped. There is no such switch. The
+ * actual meaning, measured against the installed binary, is that msgvault
+ * composes a NEW email only into an IMAP source, and the configured mailbox
+ * is a Gmail (API) source — so compose is refused for everyone, always,
+ * while `draft-reply` works fine because replying needs no IMAP.
+ *
+ * An error nobody can act on is worse than a missing feature: the owner was
+ * asked four times to flip a switch that does not exist. So the verbatim text
+ * is kept — it is still the ground truth — and what it MEANS is added after
+ * it, including the one thing that would change the answer.
+ */
+export function explainRefusal(action, detail) {
+  if (!/draft_disabled/i.test(detail)) return detail;
+  return [
+    detail,
+    '',
+    'What this means: msgvault will not write a draft into this archive at all.',
+    'MEASURED 2026-11-27, through the broker, on a real message: draft-REPLY',
+    'fails with this too, not only draft-compose. Do not repeat the older claim',
+    'that replies still work — they do not, and that claim cost the owner several',
+    'sessions of being told to retry something that could never have worked.',
+    '',
+    'There is no "drafts" switch. DO NOT ask the owner to re-enable drafts; the',
+    'thing agents have asked him for four times does not exist.',
+    '',
+    'What is actually missing: msgvault writes drafts into an IMAP source and',
+    'this archive has none — its mailbox is a Gmail (API) source. Only the owner',
+    'can add one (the archive CLI add-imap verb, run as the service account,',
+    'with an app password). Until then no verb here creates a draft: offer to',
+    'write the text into the chat so it can be pasted instead.',
+  ].join('\n');
+}
+
 export function msgvaultRunner({
   declarationPath = '/Library/muxpad/integrations.json',
   io = { readFileSync, assertProtectedPath },
@@ -451,7 +494,7 @@ export function msgvaultRunner({
             const detail = String(stderr || err.message)
               .trim()
               .split('\n')[0];
-            reject(new Error(detail.slice(0, 300) || 'msgvault failed'));
+            reject(new Error(explainRefusal(action, detail.slice(0, 300) || 'msgvault failed')));
             return;
           }
           const text = String(stdout);

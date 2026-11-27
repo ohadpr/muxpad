@@ -78,10 +78,39 @@ export function clockIndex(db: Database.Database): ClockIndex {
 export interface ClockSnapshot {
   index: ClockIndex;
   now: number;
+  /**
+   * PARENT → ITS CHILDREN'S IDS, built once with the index.
+   *
+   * `liveChildTabs` answered "which children of this tab are live" by walking
+   * the WHOLE index, and it is called once per row while decorating a list.
+   * On this install that is 1,149 rows × 1,549 indexed tabs — about 1.8
+   * million iterations per request, each a string compare plus a clock
+   * resolve. Measured by review: 17.6 ms CPU for one workspace's rows, against
+   * 0.34 ms to build this map and answer every row from it.
+   *
+   * It is quadratic in the number of chats EVER CREATED, which is the number
+   * that grows forever here (~25/day), so it got worse every day on its own.
+   */
+  childrenOf: Map<string, string[]>;
+}
+
+/** Group the index by `spawned_by` in one pass. Tabs with no parent are not
+ *  keyed: most chats spawned nothing, and an empty entry each would be a map
+ *  the size of the table for nothing. */
+function childIndex(index: ClockIndex): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const row of index.values()) {
+    if (!row.spawned_by) continue;
+    const list = out.get(row.spawned_by);
+    if (list) list.push(row.id);
+    else out.set(row.spawned_by, [row.id]);
+  }
+  return out;
 }
 
 export function clockSnapshot(db: Database.Database, now: number = Date.now()): ClockSnapshot {
-  return { index: clockIndex(db), now };
+  const index = clockIndex(db);
+  return { index, now, childrenOf: childIndex(index) };
 }
 
 /** What the row publishes: whether this chat is out of the live list, and why. */
@@ -333,8 +362,13 @@ export function childrenOf(index: ClockIndex, tabId: string): string[] {
  * today, but the rule for what `done` means belongs in one place, and a pinned
  * child (never done) has to keep counting.
  */
-export function liveChildCount(index: ClockIndex, tabId: string, now: number): number {
-  return liveChildTabs(index, tabId, now).length;
+export function liveChildCount(
+  index: ClockIndex,
+  tabId: string,
+  now: number,
+  childrenOf?: Map<string, string[]>,
+): number {
+  return liveChildTabs(index, tabId, now, childrenOf).length;
 }
 
 /**
@@ -346,8 +380,21 @@ export function liveChildCount(index: ClockIndex, tabId: string, now: number): n
  * reports only its own pane's state is a chat with two agents working under
  * it and no indication anywhere on screen.
  */
-export function liveChildTabs(index: ClockIndex, tabId: string, now: number): string[] {
+export function liveChildTabs(
+  index: ClockIndex,
+  tabId: string,
+  now: number,
+  /** The snapshot's `childrenOf`. Without it this walks the whole index — see
+   *  ClockSnapshot.childrenOf for what that costs on a list. */
+  childrenOf?: Map<string, string[]>,
+): string[] {
   const out: string[] = [];
+  if (childrenOf) {
+    for (const id of childrenOf.get(tabId) ?? []) {
+      if (!resolveTabClock(index, id, now).done) out.push(id);
+    }
+    return out;
+  }
   for (const row of index.values()) {
     if (row.spawned_by !== tabId) continue;
     if (!resolveTabClock(index, row.id, now).done) out.push(row.id);

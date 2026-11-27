@@ -1,0 +1,73 @@
+/* ──────────────────────────────────────────────────────────────────────
+   ActivityView — the desktop Activity destination.
+
+   The rows are the phone list's (ChatPreviewList → MobileNav.css), sized
+   there for a thumb; this re-scales them for a pointer and a reading column,
+   under this page's root only, so the phone is untouched.
+   ────────────────────────────────────────────────────────────────────── */
+
+.activity-view .mcl-scroll {
+  overflow: visible;
+  padding-block: 0;
+  border-top: 1px solid var(--border);
+}
+/* SAME IA AS THE PHONE'S LIST, re-scaled for a pointer — see the "A LIST,
+   NOT A BLOCK" note in MobileNav.css. A separator BETWEEN rows, inset to the
+   text column so the emoji is a margin; this had a border-bottom on every
+   row including the last, which draws a line under the list rather than
+   between its rows. */
+.activity-view .mcl-row {
+  padding: 12px;
+  border-bottom: 0;
+  border-radius: 0;
+}
+.activity-view .mcl-row + .mcl-row::before {
+  /* 12px of padding + 24px of emoji + 12px of gap on this surface. */
+  inset-inline-start: 48px;
+}
+/* Hover is handled in MobileNav.css for both surfaces now — including taking
+   the underline off, which the sheet's `a:hover` was putting on every piece
+   of text in the row. This only adds the desktop's own rounding: a pointer
+   surface reads better as a soft block than as a full-bleed band. */
+.activity-view .mcl-row:hover {
+  border-radius: 10px;
+}
+.activity-view .mcl-row-emoji {
+  flex-basis: 24px;
+  font-size: 18px;
+  line-height: 24px;
+}
+/* A STEP ABOVE THE PREVIEW. It was 0.9375rem over a 0.875rem preview - one
+   pixel apart, so the name and the message read as a single paragraph and
+   there was no layer to scan by. */
+.activity-view .mcl-row-name {
+  font-size: 1rem;
+}
+.activity-view .mcl-row-meta {
+  font-size: 0.75rem;
+}
+.activity-view .mcl-row-preview {
+  font-size: 0.875rem;
+  -webkit-line-clamp: 2;
+}
+/* A chat on another machine: said as a fact, in the quiet ink, with a small
+   monitor — not italic like a fallback, and not red like a failure.
+   `display: flex` here REPLACED the preview's clamp box, so this one row lost
+   the two-line height every other row reserves and sat at a different
+   rhythm — visible in the list as a short row with its text pushed down.
+   Inline-flex keeps the icon beside the words without taking the box away.
+   QUIET IS --fg-dim: this line is the ONLY thing the row says about that chat
+   (there is no preview to fall back to), and --fg-faint measures 2.76–4.69:1
+   on the page ground — under 4.5:1 in ten of the eleven themes. Found by
+   review; swept in themes.test.ts now. */
+.activity-view .mcl-row-preview[data-elsewhere="true"] {
+  display: block;
+  font-style: normal;
+  color: var(--fg-dim);
+}
+.activity-view .mcl-row-elsewhere-icon {
+  flex: 0 0 auto;
+}
+.activity-view .mcl-empty {
+  padding-top: 64px;
+}

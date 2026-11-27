@@ -544,6 +544,62 @@ describe('msgvault goes through the broker, holding nothing', () => {
     expect([...called].filter((v) => /^(send|post|invite)/.test(v as string))).toEqual([]);
   });
 
+  /**
+   * THE CONFIGURED CALENDAR HAS TO BE REACHABLE, or it is not a default.
+   *
+   * The broker falls back to `msgvault.defaultCalendar` when no account is
+   * given — and an agent CANNOT give one, because the accounts listing is
+   * refused to delegated callers. A review found all three layers demanding
+   * the thing only the owner knows: this CLI refused before making a request,
+   * the route's schema required it, and so the broker's fallback had never
+   * once executed. That is the shape of "there is always something else that
+   * prevents it from working", and it is why this test goes through the CLI
+   * rather than calling the resolver directly.
+   */
+  it('lets the calendar verbs go out with no --account, so the configured one is used', () => {
+    const run = (verb: string, args: string) =>
+      spawnSync(
+        'bash',
+        [
+          '-c',
+          `
+      require_jq() { :; }
+      # The funnel's far end: print the body instead of making the request.
+      slack_call() { printf '%s' "$3"; }
+      MUXPAD_PANE_ID=pane MUXPAD_PANE_KEY=key
+      ${SRC.slice(SRC.indexOf('cmd_msgvault() {'), SRC.indexOf('\n}\n', SRC.indexOf('cmd_msgvault() {')) + 3)}
+      cmd_msgvault ${verb} ${args}
+    `,
+        ],
+        { encoding: 'utf8' },
+      );
+
+    const window = '--start=2026-11-26T09:00 --end=2026-11-26T18:00 --tz=America/Los_Angeles';
+    for (const [verb, args] of [
+      ['calendar-freebusy', window],
+      ['calendar-conflicts', window],
+      ['calendar-create', `--summary=Lunch ${window}`],
+      ['calendar-delete', '--event=abc'],
+      ['calendar-update', '--event=abc --summary=Moved'],
+    ] as const) {
+      const r = run(verb, args);
+      expect(r.stderr).not.toMatch(/needs --account/);
+      expect(r.status).toBe(0);
+      // Absent, not invented, and not sent blank: the key is omitted, which
+      // is the absence the broker's fallback looks for. What must never
+      // happen is this CLI choosing an account on the owner's behalf.
+      expect(JSON.parse(r.stdout)).not.toHaveProperty('account');
+    }
+
+    // Given one, it travels.
+    const named = run('calendar-delete', '--event=abc --account=owner@example.com');
+    expect(JSON.parse(named.stdout).account).toBe('owner@example.com');
+
+    // And it is still refused where a value IS required.
+    expect(run('calendar-freebusy', '--tz=America/Los_Angeles').stderr).toMatch(/needs --start/);
+    expect(run('calendar-delete', '').stderr).toMatch(/needs --event/);
+  });
+
   it('says in its own help that each call is approved', () => {
     const usage = CODE.slice(CODE.indexOf('msgvault_usage() {'));
     expect(usage.slice(0, usage.indexOf('\n}\n'))).toMatch(/approve/i);

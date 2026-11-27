@@ -1,8 +1,10 @@
 import { Outlet, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useAppTheme } from '../lib/app-theme';
+import { currentWorkspaceSlug } from '../lib/chat-sections';
 import { isEmbedded, shellChrome } from '../lib/embed';
 import { MOBILE_BREAKPOINT } from '../lib/mobile-layout';
+import { isChatListPath, rendersAppBody, usesChatList } from '../lib/mobile-nav';
 import { keepsShell } from '../lib/shell-routes';
 import { SIDENAV_MIN_WIDTH, updateSettings, useSettings } from '../settings';
 import { useMediaQuery } from '../use-media-query';
@@ -10,12 +12,12 @@ import { useWindowAttention } from '../use-window-attention';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 import { Brand } from './Brand';
 import { CommandPalette } from './CommandPalette';
-import { MobileNavSwitcher } from './MobileNavSwitcher';
+import { DestinationRail } from './DestinationRail';
+import { MobileChatHeader, MobileChatList, MobileChatSectionBar, useBackToList } from './MobileNav';
 import { MoveUndoToast } from './MoveUndoToast';
 import { NavTree, RailSearchButton } from './NavTree';
 import { NoticeToast } from './NoticeToast';
 import { SettingsMenu } from './SettingsMenu';
-import { ThemeSwitch } from './ThemeSwitch';
 import { UpdateBanner } from './UpdateBanner';
 import { WorkspaceShell } from './WorkspaceLayout';
 
@@ -26,9 +28,11 @@ const REPO_URL = 'https://github.com/ohadpr/muxpad';
  *
  * Desktop, inside a workspace: a persistent left NavTree sidebar is the only
  * navigator; it absorbs the top bar entirely (brand at its head, build +
- * settings at its foot). Mobile gets the MobileNavSwitcher breadcrumb +
- * drop-down panel in a top bar. The workspace picker ('/') has no workspace to
- * host a sidebar, so it keeps a slim brand + build + settings top bar.
+ * settings at its foot). Mobile navigates in two levels instead (see
+ * lib/mobile-nav): the full-screen list at `/chats` is the root, and a chat
+ * is the second level, whose top bar is its header — back, state, name. The
+ * workspace picker ('/') has no workspace to host a sidebar, so it keeps a
+ * slim brand + build + settings top bar.
  */
 export function AppLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -75,7 +79,7 @@ export function AppLayout() {
   const shellRoute = keepsShell(pathname);
   const chrome = shellChrome({ isMobile, inWorkspace: !!wsSlug || shellRoute, embedded });
   const sidebarMode = chrome.sidebar;
-  const sidenavRef = useRef<HTMLElement>(null);
+  const sidenavRef = useRef<HTMLDivElement>(null);
   const [visitedWsSlugs, setVisitedWsSlugs] = useState<Set<string>>(() => new Set());
   /**
    * WHICH WORKSPACE THE RAIL SHOULD LOOK LIKE on a destination route.
@@ -89,7 +93,17 @@ export function AppLayout() {
    * Last visited, falling back to the first visible workspace for a cold open
    * straight to `/artifacts` (a bookmark, a published link's sibling tab).
    */
-  const lastWsSlug = [...visitedWsSlugs].at(-1) ?? visibleWorkspaces(workspaces)[0]?.slug ?? '';
+  // The workspace you were last IN — not the last one first visited, which is
+  // what `[...visitedWsSlugs].at(-1)` was: a Set keeps first-insertion order,
+  // so going back to an earlier workspace never moved it to the end. It feeds
+  // the rail's "which group is open, which row is marked" on a destination
+  // route, which should be the workspace you were actually just in.
+  const [lastSeenWs, setLastSeenWs] = useState<string | null>(null);
+  const currentWs = currentWorkspaceSlug(wsSlug, lastSeenWs, visibleWorkspaces(workspaces));
+  const lastWsSlug = currentWs ?? '';
+  useEffect(() => {
+    if (wsSlug) setLastSeenWs(wsSlug);
+  }, [wsSlug]);
   useEffect(() => {
     if (!wsSlug) return;
     setVisitedWsSlugs((prev) => {
@@ -104,7 +118,32 @@ export function AppLayout() {
   // brand moves to the sidebar's head, build + settings to its foot.
   // The bar still renders on the workspace picker ('/'), where there is
   // no sidebar to host them.
-  const showTopBar = chrome.topBar;
+
+  // ── THE PHONE'S LIST ──────────────────────────────────────────────────
+  // Mounted on its first visit and KEPT while you are in a chat, the same
+  // treatment the workspace hosts get — see MobileNav. `chatList` is false on
+  // desktop and in an embed, where `/chats` is not a destination at all (its
+  // route bounces to `/`).
+  const chatList = usesChatList({ isMobile, embedded });
+  const onChatList = chatList && isChatListPath(pathname);
+  // ONE row of chrome on the phone's list: its own bar (title, search,
+  // settings) is the top bar there, so this one does not render at all.
+  const showTopBar = chrome.topBar && !onChatList;
+  const [listVisited, setListVisited] = useState(false);
+  // The chat you came FROM, so the list marks where you were — the same honest
+  // rendering the rail gives a destination route (see lastWsSlug).
+  const [lastTabSlug, setLastTabSlug] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeTabSlug) setLastTabSlug(activeTabSlug);
+  }, [activeTabSlug]);
+  useEffect(() => {
+    if (onChatList) setListVisited(true);
+  }, [onChatList]);
+  // The second level is every mobile page that is not the root.
+  const onRoot = onChatList || pathname === '/';
+  const backToList = useBackToList();
+  // The pages hidden while a destination that is not a workspace is showing.
+  const hostsHidden = shellRoute || onChatList;
 
   return (
     <div className="app-layout" data-embed={embedded ? 'true' : undefined}>
@@ -115,12 +154,20 @@ export function AppLayout() {
       <CommandPalette />
       {showTopBar && (
         <header className="ws-tabbar">
-          <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
-          {activeWorkspace && isMobile && (
-            // Single merged trigger on mobile: workspace + tab breadcrumb
-            // opening the drop-down NavTree panel. The top bar only ever hosts
-            // navigation on mobile now — desktop lives in the sidebar.
-            <MobileNavSwitcher activeWorkspaceSlug={activeWorkspace.slug} />
+          {chatList && !onRoot ? (
+            // THE SECOND LEVEL'S HEADER, in place of the brand: back to the
+            // list, the chat's state, its name. Not a second row — a phone's
+            // vertical space is the budget this bar exists to protect.
+            <MobileChatHeader
+              workspace={activeWorkspace ?? null}
+              tabSlug={activeTabSlug}
+              title={destinationTitle(pathname)}
+              onBack={backToList}
+            />
+          ) : (
+            // `/` on its way somewhere. (The list itself, the real root, has no
+            // bar here at all — its own bar is the top bar; see showTopBar.)
+            <Brand asLink={true} responsive={true} markOnly={!!activeWorkspace} />
           )}
           {/* Slot the active terminal's face switch paints into via portal —
               see TabView. Keeps it in the top bar so mobile spends no second
@@ -129,7 +176,7 @@ export function AppLayout() {
           {activeWorkspace && isMobile && (
             <div className="mobile-pane-chrome" id="mobile-pane-chrome" />
           )}
-          {!activeWorkspace && <span className="ws-tabbar-spacer" />}
+          {(!chatList || onRoot) && !activeWorkspace && <span className="ws-tabbar-spacer" />}
           <a
             className="brand-text-side"
             href={REPO_URL}
@@ -142,40 +189,55 @@ export function AppLayout() {
           <SettingsMenu />
         </header>
       )}
-      {wsSlug || (shellRoute && sidebarMode) ? (
+      {rendersAppBody({ wsSlug, shellRoute, sidebarMode, chatList, onChatList }) ? (
         <div className="app-body">
+          {/* ── THE LEFT SIDE: ONE HEADER OVER TWO STRIPS ─────────────────────
+              "muxpad top header should extend all the way to the left
+              including the icon rail as well." So the brand row is the head
+              of the WHOLE left side — the destination rail (Home, Unread,
+              Activity, Artifacts, Apps) and the chat list beside it both start
+              under it — rather than a label for the chat list's column with a
+              cut-off corner beside it.
+
+              The outer <aside> is `.sidenav`, the rail's token ISLAND (ink,
+              surface, seam), so the header, the destination rail and the list
+              all wear the rail's tokens from one rule. The chat list's own
+              column (`.sidenav-list`) holds the WIDTH you drag: the resize
+              grip measures and persists it, exactly as it did the old aside,
+              so a saved sidebarWidth still means the chat list's width. */}
           {sidebarMode && (
-            <aside
-              className="sidenav"
-              ref={sidenavRef}
-              style={{ flexBasis: `${settings.sidebarWidth}px` }}
-            >
+            <aside className="sidenav sidenav-with-rail">
               <div className="sidenav-brand">
                 {/* Search rides the brand row rather than owning one of its
                     own — see RailSearchButton. The spacer on the other side
-                    keeps the wordmark optically centred. */}
+                    keeps the wordmark optically centred — now over the whole
+                    left side, so it reads as the app's, not one column's. */}
                 <RailSearchButton />
                 <Brand asLink={true} responsive={false} />
                 <span className="sidenav-brand-spacer" aria-hidden="true" />
               </div>
-              <NavTree
-                variant="sidebar"
-                activeWorkspaceSlug={wsSlug ?? lastWsSlug}
-                activeTabSlug={activeTabSlug}
-              />
-              <SidenavResizeHandle asideRef={sidenavRef} />
-              <div className="sidenav-footer">
-                <a
-                  className="sidenav-build"
-                  href={REPO_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`muxpad — build ${__MUXPAD_VERSION__}`}
+              <div className="sidenav-body">
+                <DestinationRail lastWsSlug={lastWsSlug} />
+                <div
+                  className="sidenav-list"
+                  ref={sidenavRef}
+                  style={{ flexBasis: `${settings.sidebarWidth}px` }}
                 >
-                  {__MUXPAD_VERSION__}
-                </a>
-                <ThemeSwitch />
-                <SettingsMenu />
+                  <NavTree
+                    variant="sidebar"
+                    activeWorkspaceSlug={wsSlug ?? lastWsSlug}
+                    activeTabSlug={activeTabSlug}
+                  />
+                  <SidenavResizeHandle asideRef={sidenavRef} />
+                  {/* ── NO FOOT ON THE LIST ────────────────────────────────
+                      The build stamp, the theme picker and the gear used to
+                      close this column with a `--chrome-h` bar. They are the
+                      APP's controls, not any conversation's, and the list is
+                      the one column that is entirely about conversations — so
+                      they sit at the foot of the destination rail now, which
+                      had the room and was already where the app's own places
+                      are listed. The list gets the row of height back. */}
+                </div>
               </div>
             </aside>
           )}
@@ -208,7 +270,14 @@ export function AppLayout() {
                 <Outlet />
               </div>
             )}
-            <div className="workspace-hosts" hidden={shellRoute} aria-hidden={shellRoute}>
+            {chatList && (listVisited || onChatList) && (
+              <MobileChatList
+                visible={onChatList}
+                activeWorkspaceSlug={wsSlug ?? lastWsSlug}
+                activeTabSlug={activeTabSlug ?? lastTabSlug}
+              />
+            )}
+            <div className="workspace-hosts" hidden={hostsHidden} aria-hidden={hostsHidden}>
               {[...visitedWsSlugs].map((slug) => (
                 <div
                   key={slug}
@@ -220,6 +289,21 @@ export function AppLayout() {
                 </div>
               ))}
             </div>
+            {/* ─── THE RIBBON STAYS, INSIDE A CHAT ──────────────────────────
+                "Maintain the bottom ribbon bar in chat windows as well, not
+                just in the chat list." It lived inside MobileChatList, so
+                opening a chat took the whole of the app's navigation off the
+                screen and left exactly one way out — Back, into the list, and
+                only then anywhere else.
+                LAST CHILD, after the hosts: the hosts take `flex: 1` of this
+                column, so anything before them is pushed to the top — which
+                is where this first landed, measured at y=46 directly under
+                the header. Beside them rather than inside, because the hosts
+                are kept alive per workspace and the bar belongs to the phone.
+                Hidden on the list itself, which renders its own; the section
+                travels through sessionStorage rather than props (see
+                MobileChatSectionBar). */}
+            {chatList && !onChatList && <MobileChatSectionBar onLeave={backToList} />}
           </div>
         </div>
       ) : (
@@ -238,6 +322,16 @@ export function AppLayout() {
       <UpdateBanner />
     </div>
   );
+}
+
+/** The header's name for a phone destination that is not a chat. */
+function destinationTitle(pathname: string): string {
+  if (pathname.startsWith('/unread')) return 'Unread';
+  if (pathname.startsWith('/cards')) return 'Cards';
+  if (pathname.startsWith('/artifacts')) return 'Artifacts';
+  if (pathname.startsWith('/activity')) return 'Activity';
+  if (pathname.startsWith('/apps') || pathname.startsWith('/hosted')) return 'Apps';
+  return '';
 }
 
 /**

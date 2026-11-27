@@ -103,6 +103,7 @@ export class PaneStore {
       face,
       face_url: null,
       unread: false,
+      parked: false,
       mode,
       created_at: now,
       // `create()` builds its OWN response rather than re-reading the row, so
@@ -492,6 +493,7 @@ export class PaneStore {
       face: x.face ?? 'terminal',
       face_url: x.face_url ?? null,
       unread: !!x.unread,
+      parked: x.parked_at !== null,
       // Anything unrecognized (a NULL from before the column existed, a
       // pre-rename 'do'/'deep' written by an older build someone downgraded
       // to and back) reads through the tolerant coercion, then falls to the

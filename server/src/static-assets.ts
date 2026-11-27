@@ -155,7 +155,21 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
   const serveIndexHtml = (c: Context) => {
     const file = join(webRoot, 'index.html');
     const v = validators(file);
-    c.header('Cache-Control', 'no-cache');
+    // ── `no-store`, NOT `no-cache` ──────────────────────────────────────
+    //
+    // `no-cache` means "revalidate before use", which is correct and which the
+    // INSTALLED iOS app does not honour: after the Liquid Glass fix shipped,
+    // a home-screen app — deleted and re-added from a refreshed Safari tab —
+    // went on serving the previous shell for an hour, while the same URL in a
+    // Safari tab served the new one. The shell is ~2.6KB and names only hashed
+    // assets, so there is nothing to save by caching it and a whole class of
+    // "why am I still seeing the old build" to lose.
+    //
+    // It also matters more than usual here: the shell carries the iOS
+    // status-bar meta, which iOS reads when the app is ADDED to the home
+    // screen. A stale shell at that moment bakes a stale window chrome into
+    // the install until it is added again.
+    c.header('Cache-Control', 'no-store');
     // ── THE BROWSER'S CREDENTIAL RIDES THE SHELL ────────────────────────
     //
     // This is the only way the web UI can ever hold one. The alternative —
@@ -183,6 +197,66 @@ export function mountStaticWeb(app: Hono, webRoot: string): void {
       return c.text('not found', 404);
     }
   };
+  /**
+   * THE MANIFEST, WITH A START URL THAT HAS NEVER BEEN FETCHED.
+   *
+   * An installed iOS app launches at `start_url` and has no address bar, so if
+   * the response for that URL is in the webview's store, the install is frozen
+   * on it — through deleting the icon and adding it again, because deleting an
+   * icon does not clear the origin's data. Measured the hard way: a phone kept
+   * launching a shell from before the iOS status-bar meta was removed, so every
+   * re-add read the OLD meta and kept the Liquid Glass blur, while the same URL
+   * in a Safari tab served the new shell.
+   *
+   * Stamping the build into `start_url` makes each deploy's launch URL a cache
+   * key nothing has ever stored, so a new install cannot inherit an old one.
+   * The query is ignored by the router — `/` is `/` — and it costs one
+   * generated file at add-to-home-screen time.
+   *
+   * `no-store` for the same reason as the shell: a cached manifest would hand
+   * out a cached start URL, which is the whole problem one level up.
+   */
+  app.get('/manifest.webmanifest', (c) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Content-Type', 'application/manifest+json');
+    try {
+      const raw = JSON.parse(readFileSync(join(webRoot, 'manifest.webmanifest'), 'utf-8'));
+      // STAMPED WITH THE SHELL'S OWN VALIDATOR, not the server's build id.
+      // `currentBuildId()` measures server/dist and shared/dist, so a WEB-only
+      // deploy — which is most of them, and every one of the fixes that could
+      // not reach his phone — left the start URL unchanged and a new install
+      // could inherit the cached response again. The shell's ETag changes
+      // whenever the shell does, which is exactly the question being asked.
+      const stamp = validators(join(webRoot, 'index.html'))?.etag.replace(/\W/g, '') ?? 'x';
+      // NO `theme_color` IN THE MANIFEST, and that is the point of stripping
+      // it here rather than editing the file. For an INSTALLED app iOS prefers
+      // the manifest's colour over the page's `<meta name="theme-color">`, and
+      // the manifest's is necessarily a constant chosen at install time —
+      // `#1e1e2e`, from when muxpad had one dark palette. Measured on his
+      // phone: the page meta read `#e0e0e0` (the chrome grey of the theme in
+      // force) and the status bar was drawn near-black anyway.
+      //
+      // Dropping it makes the META authoritative, and the meta is kept in step
+      // with the theme at runtime (web/src/lib/status-bar-tint.ts). There are
+      // eleven themes and the user switches between them; a colour frozen at
+      // install time cannot be right for more than one of them.
+      //
+      // `background_color` stays: it paints the SPLASH, which is shown before
+      // any page exists to have a theme, so a constant is the only thing it
+      // could be.
+      const { theme_color: _dropped, ...rest } = raw as Record<string, unknown>;
+      // AN EXPLICIT, CONSTANT `id`, because `start_url` is not one. With no
+      // `id` the manifest identity algorithm falls back to `start_url`
+      // (w3.org/TR/appmanifest/#id-member) — and this one carries the build
+      // stamp, so every deploy minted a new application identity and an
+      // installed muxpad could be treated as a different app from the one
+      // already on the home screen. Found by review; not install-tested, but
+      // the spec is unambiguous and a stable id costs nothing.
+      return c.body(JSON.stringify({ ...rest, id: '/', start_url: `/?b=${stamp}` }));
+    } catch {
+      return c.text('not found', 404);
+    }
+  });
   app.get('/', serveIndexHtml);
   // Direct /index.html requests must not slip through to serveStatic either —
   // that would hand the shell back without the no-cache header, the exact trap

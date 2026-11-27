@@ -322,6 +322,41 @@ describe('report delivery — the join', () => {
       expect(sent[1]?.text).toContain('and then I did the other thing');
     });
 
+    // THE COUNTS DESCRIBE WHAT WAS SENT, not what was offered. A mixed batch
+    // sends the news and settles the repeat, and `delivered` is the number of
+    // rounds that went — 1, not the 2 that were pending. (The settled repeat
+    // is counted nowhere: `abandoned` is the abandon() path, and these are
+    // deliberately silent. That is a reporting gap, not a retry risk — their
+    // `delivered_at` is stamped, which the test above pins.)
+    //
+    // Added because a refactor of exactly this arithmetic — removing a
+    // parameter reassignment the repo's linter refuses — could not be
+    // distinguished from the wrong version by any existing test.
+    it('counts what went, not what was offered', () => {
+      const p = parent('P');
+      const c = child('C', p);
+      const other = child('D', p);
+      make().onReport(c);
+      make().onReport(other);
+      sent.length = 0;
+
+      // One worker repeats itself; the other has something new.
+      db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(`r2-${c}`, c, NOW + 5000, NOW + 6000, `report from ${c}`, 'ok');
+      db.prepare(
+        `INSERT INTO spawn_rounds (id, tab_id, started_at, ended_at, report, report_state)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(`r2-${other}`, other, NOW + 5000, NOW + 6000, 'something genuinely new', 'ok');
+      clock = NOW + 7000;
+
+      expect(make().sweep()).toEqual({ delivered: 1, abandoned: 0, held: 0 });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain('something genuinely new');
+      expect(sent[0]?.text).not.toContain(`report from ${c}`);
+    });
+
     it('and two real failures are still two failures', () => {
       // "(no report)" twice is two things that went wrong. Swallowing the
       // second as a duplicate would hide one.

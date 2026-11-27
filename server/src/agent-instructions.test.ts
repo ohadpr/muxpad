@@ -8,6 +8,7 @@ import {
   AGENT_INSTRUCTIONS_SEED,
   ALL_INSTRUCTION_TEXT,
   INSTRUCTIONS_MIGRATION,
+  INSTRUCTION_TOPICS,
   SHIPPED_INSTRUCTIONS_DEFAULTS,
   agentInstructionsPath,
   readAgentInstructions,
@@ -415,5 +416,62 @@ describe('the archive section teaches the shape of the data', () => {
   it('says contacts cannot be read AT ALL, rather than implying they are missing', () => {
     expect(policy).toMatch(/no contact lookup/i);
     expect(policy).toMatch(/the archive holds the user's contacts/i);
+  });
+});
+
+describe('the calendar account trap', () => {
+  /**
+   * Written wrongly TWICE in one day, and the second time was mine.
+   *
+   * v1 named the flag and not the shape, so agents guessed. v2 said the bare
+   * address "always comes back 403" and demanded an account/calendar form —
+   * then an audit of the archive found that every calendar call which has
+   * ever WORKED used the bare account, and every failure used a different
+   * address with no calendar control. Both versions were written from one
+   * failure each, by someone who had not looked at the successes.
+   *
+   * So what is pinned here is NOT a form. It is that the document must not
+   * teach one: the rule is "an account with calendar control", the agent
+   * cannot discover which that is, and the honest instruction is to ask.
+   */
+  const doc = INSTRUCTION_TOPICS.msgvault ?? '';
+
+  it('states the rule as CONTROL, not as a string shape', () => {
+    expect(doc).toMatch(/calendar control/i);
+  });
+
+  it('does not DEMAND a specific account form', () => {
+    // The v2 mistake. Either form may work; what decides it is the account's
+    // permissions, and this document has been wrong in both directions
+    // already. The phrase it got wrong still appears — in quotation marks,
+    // recounting the error — so this checks for the DEMAND, not the words.
+    expect(doc).not.toMatch(/Pass the bare|is not a calendar at all/);
+    expect(doc).toMatch(/do not infer the form/i);
+  });
+
+  // v3's fix, and the reason the first three versions all read as "there is
+  // always something else in the way": the broker has ALWAYS had a configured
+  // default, and every layer in front of it — this CLI, the route's schema —
+  // required the one value an agent cannot discover, so the default had never
+  // once been used. The instruction now names the call that works.
+  it('tells the agent to OMIT the flag and use the configured account', () => {
+    expect(doc).toMatch(/OMIT\s+`--account` ENTIRELY/);
+    expect(doc).toMatch(/no accounts listing/i);
+    // And not to pass one it has guessed — only one the owner named in words.
+    expect(doc).toMatch(/owner has told you/i);
+  });
+
+  it('does not tell the agent to interrupt the owner for it', () => {
+    // The v2 instruction was "ask the owner which account to use", which is a
+    // question about plumbing the owner should never have been asked: the
+    // answer was already in their config file.
+    expect(doc).not.toMatch(/ASK the\s+owner which account/i);
+  });
+
+  it('explains what the 403 actually means', () => {
+    // So the next agent reads it as "this account cannot drive a calendar"
+    // rather than as a permissions failure to escalate or work around.
+    expect(doc).toMatch(/403 calendar operation denied/);
+    expect(doc).toMatch(/reads like a permissions problem and is not one/);
   });
 });

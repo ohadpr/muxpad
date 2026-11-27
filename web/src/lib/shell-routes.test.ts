@@ -13,6 +13,7 @@ describe('keepsShell', () => {
   it('keeps the rail for the two destination lists', () => {
     expect(keepsShell('/artifacts')).toBe(true);
     expect(keepsShell('/apps')).toBe(true);
+    expect(keepsShell('/activity')).toBe(true);
   });
 
   it('tolerates a trailing slash', () => {
@@ -49,6 +50,6 @@ describe('keepsShell', () => {
     const src = readFileSync(join(__dirname, '../components/AppLayout.tsx'), 'utf8');
     expect(src).toContain('keepsShell(pathname)');
     // …and the shell branch has to consider it, not just compute it.
-    expect(src).toMatch(/wsSlug \|\| \(shellRoute && sidebarMode\)/);
+    expect(src).toMatch(/rendersAppBody\(\{ wsSlug, shellRoute, sidebarMode/);
   });
 });

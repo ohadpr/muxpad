@@ -174,3 +174,52 @@ describe('a draft reaches the approval funnel with what you will be shown', () =
     expect(res.status).toBe(403);
   });
 });
+
+/**
+ * THE CALENDAR'S CONFIGURED DEFAULT, THROUGH THE REAL ROUTE.
+ *
+ * The broker falls back to `msgvault.defaultCalendar` when no account is
+ * given, and an agent cannot give one — the accounts listing is refused to
+ * delegated callers. A review found every layer in front of that fallback
+ * requiring the value: the CLI refused before making a request, and this
+ * schema required it, so the fallback had never run. Asserting it here as
+ * well as at the CLI is deliberate: either layer alone can make the owner's
+ * configured calendar unreachable, and both have.
+ */
+describe('a calendar call with no account reaches the broker', () => {
+  const window = {
+    start: '2026-11-26T09:00',
+    end: '2026-11-26T18:00',
+    tz: 'America/Los_Angeles',
+  };
+
+  it('forwards it with no account at all, for every calendar verb', async () => {
+    const h = harness();
+    for (const [path, extra] of [
+      ['/calendar-freebusy', window],
+      ['/calendar-conflicts', window],
+      ['/calendar-create', { ...window, summary: 'Lunch' }],
+      ['/calendar-update', { event: 'abc', summary: 'Moved' }],
+      ['/calendar-delete', { event: 'abc' }],
+    ] as const) {
+      const res = await post(h.archive, path, { pane: h.pane.id, key: h.key, ...extra });
+      expect(res.status, path).toBe(202);
+      const sent = await sentTo();
+      expect(sent.action, path).toBe(`msgvault.calendar-${path.split('-')[1]}`);
+      // Absent, not blank-and-invented: muxpad never chooses an account.
+      expect(sent.payload.account, path).toBeUndefined();
+    }
+  });
+
+  it('still forwards the account when the owner names one', async () => {
+    const h = harness();
+    const res = await post(h.archive, '/calendar-freebusy', {
+      pane: h.pane.id,
+      key: h.key,
+      account: 'owner@example.com',
+      ...window,
+    });
+    expect(res.status).toBe(202);
+    expect((await sentTo()).payload.account).toBe('owner@example.com');
+  });
+});

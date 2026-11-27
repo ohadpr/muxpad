@@ -16,6 +16,7 @@ import {
 import { MAX_OUTPUT_RESULTS, type OutputMatch, rankOutputs } from '../lib/output-search';
 import { cachedOutputs, loadOutputs, subscribeOutputs } from '../lib/outputs-corpus';
 import { requestSearchJump } from '../lib/search-jump';
+import { mergeTabGroups, rankLiveThenHistory, useTabLookup } from '../lib/tab-lookup';
 import { cachedTabsFor } from '../tabs';
 import { useWorkspaces, visibleWorkspaces } from '../workspaces';
 
@@ -134,17 +135,22 @@ export function useSessionSearch(
   // could repair it. Subscribing makes this one more reader of the one corpus;
   // it does not fetch, so the search stays lazy until opened.
   useEffect(() => subscribeAllTabs(setRemote), []);
-  const corpus = useMemo<SearchableTab[]>(() => {
-    const groups: WorkspaceTabs[] =
+  const liveGroups = useMemo<WorkspaceTabs[]>(
+    () =>
       remote ??
       visibleWorkspaces(allWorkspaces).map((w) => ({
         id: w.id,
         slug: w.slug,
         name: w.name,
-        tabs: cachedTabsFor(w.id),
-      }));
-    return toSearchableTabs(groups);
-  }, [remote, allWorkspaces]);
+        // The sidebar's per-workspace cache still carries finished rows (its
+        // done group needs them). The LIVE tier must not: history is the
+        // lookup's, ranked below — so the fallback takes the same membership
+        // the server's corpus does. Absent on an older server = live.
+        tabs: cachedTabsFor(w.id).filter((t) => t.corpus_live !== false),
+      })),
+    [remote, allWorkspaces],
+  );
+  const liveCorpus = useMemo(() => toSearchableTabs(liveGroups), [liveGroups]);
 
   // STABLE, so a caller can list it as an effect dependency honestly. Recreated
   // per render it was a dependency nobody could declare without refetching the
@@ -166,34 +172,6 @@ export function useSessionSearch(
       else if (groups.length > 0) setRemote(groups);
     });
   }, []);
-
-  // ── Tier 1 ─────────────────────────────────────────────────────────────
-  const ranked = useMemo(
-    () => rankTabs(corpus, query, { limit: MAX_TAB_RESULTS }),
-    [corpus, query],
-  );
-  // ── Tier 1b: the things you made ───────────────────────────────────────
-  // FOLLOWED, not snapshotted, for the same reason the tab corpus is: the
-  // first keystroke can arrive before the fetch lands, and a tier that only
-  // read its cache at mount would stay empty for the whole session that
-  // triggered the load.
-  const [outputs, setOutputs] = useState(() => cachedOutputs() ?? []);
-  useEffect(() => subscribeOutputs(setOutputs), []);
-  const outputRows = useMemo(
-    () => rankOutputs(outputs, query, { limit: MAX_OUTPUT_RESULTS }),
-    [outputs, query],
-  );
-
-  // ── Tier 0: the empty query ────────────────────────────────────────────
-  // Where recency lives now that the rail's duplicate "Recently active" band
-  // is gone (see `recentTabs`). It is the SAME row type and the same array as
-  // the ranked results, deliberately: the palette's cursor, Enter and row ids
-  // are the part of this that is easy to get subtly wrong, and a second list
-  // beside them would be a second copy of all three.
-  const exclude = opts?.exclude;
-  const recents = useMemo(() => recentTabs(corpus, { exclude }), [corpus, exclude]);
-  const showingRecents = query.trim().length === 0 && recents.length > 0;
-  const tabMatches = showingRecents ? recents : ranked;
 
   // ── Tier 2 ─────────────────────────────────────────────────────────────
   // `available` latches false on the first 404: /api/search is mounted only
@@ -250,6 +228,81 @@ export function useSessionSearch(
     return () => window.clearTimeout(timer);
   }, [query, messagesAvailable]);
 
+  // ── Tier 1c: finished history ─────────────────────────────────────────
+  // The live corpus no longer carries finished chats (lib/tab-lookup). Two
+  // things still need them, and both are asked for, bounded: a NAME typed
+  // here (debounced, below the instant tier — never in front of it), and the
+  // chat behind an archive hit whose pane the live corpus does not hold, which
+  // would otherwise be dropped as "nowhere to go".
+  const livePanes = useMemo(() => paneIndex(liveCorpus), [liveCorpus]);
+  const unresolvedPanes = useMemo(() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const hit of hits) {
+      const p = hit.session?.pane_id;
+      if (!p || seen.has(p) || livePanes.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+    }
+    return out;
+  }, [hits, livePanes]);
+  const lookup = useTabLookup({ query, paneIds: unresolvedPanes });
+  const corpus = useMemo(
+    () =>
+      lookup.groups.length === 0
+        ? liveCorpus
+        : toSearchableTabs(mergeTabGroups(liveGroups, lookup.groups)),
+    [liveCorpus, liveGroups, lookup.groups],
+  );
+
+  // Only the rows the live corpus does NOT hold — a chat in both is live, and
+  // ranks (and is drawn) from its live row.
+  const history = useMemo(() => {
+    if (lookup.groups.length === 0) return [] as SearchableTab[];
+    const live = new Set(liveCorpus.map((t) => t.tabId));
+    return toSearchableTabs(lookup.groups).filter((t) => !live.has(t.tabId));
+  }, [liveCorpus, lookup.groups]);
+
+  // ── Tier 1 ─────────────────────────────────────────────────────────────
+  // LIVE FIRST, history strictly under it. Ranked separately rather than over
+  // the merged corpus: one ranking would let a finished chat with a better name
+  // match land above a live one, and a debounced answer would then REORDER rows
+  // the user is already reading — the instant tier's whole promise is that
+  // what it showed on the keystroke stays where it was.
+  const ranked = useMemo(
+    () =>
+      rankLiveThenHistory(
+        liveCorpus,
+        history,
+        (pool) => rankTabs(pool, query, { limit: MAX_TAB_RESULTS }),
+        (m) => m.tab.tabId,
+        MAX_TAB_RESULTS,
+      ),
+    [liveCorpus, history, query],
+  );
+  // ── Tier 1b: the things you made ───────────────────────────────────────
+  // FOLLOWED, not snapshotted, for the same reason the tab corpus is: the
+  // first keystroke can arrive before the fetch lands, and a tier that only
+  // read its cache at mount would stay empty for the whole session that
+  // triggered the load.
+  const [outputs, setOutputs] = useState(() => cachedOutputs() ?? []);
+  useEffect(() => subscribeOutputs(setOutputs), []);
+  const outputRows = useMemo(
+    () => rankOutputs(outputs, query, { limit: MAX_OUTPUT_RESULTS }),
+    [outputs, query],
+  );
+
+  // ── Tier 0: the empty query ────────────────────────────────────────────
+  // Where recency lives now that the rail's duplicate "Recently active" band
+  // is gone (see `recentTabs`). It is the SAME row type and the same array as
+  // the ranked results, deliberately: the palette's cursor, Enter and row ids
+  // are the part of this that is easy to get subtly wrong, and a second list
+  // beside them would be a second copy of all three.
+  const exclude = opts?.exclude;
+  const recents = useMemo(() => recentTabs(liveCorpus, { exclude }), [liveCorpus, exclude]);
+  const showingRecents = query.trim().length === 0 && recents.length > 0;
+  const tabMatches = showingRecents ? recents : ranked;
+
   const panes = useMemo(() => paneIndex(corpus), [corpus]);
   const tabNames = useMemo(() => new Map(corpus.map((t) => [t.tabId, t.tabName])), [corpus]);
   const messageRows = useMemo<MessageRow[]>(() => {
@@ -278,7 +331,7 @@ export function useSessionSearch(
     outputRows,
     tabNames,
     messageRows,
-    searching,
+    searching: searching || lookup.searching,
     active: query.trim().length > 0,
     rowCount: tabMatches.length + outputRows.length + messageRows.length,
     loadCorpus,

@@ -5,6 +5,7 @@ import { bootPending, bootTabs } from './boot-prefetch';
 import { subscribe, subscribeReconnect } from './events';
 import { mergeWorkspaceTabs, refreshCorpusForTab } from './lib/all-tabs';
 import { unreadRowPatch } from './lib/tab-unread';
+import { mergeUnreadWorkspace } from './lib/unread-tabs';
 import { refreshWorkspaces, refreshWorkspacesSoon } from './workspaces';
 
 /**
@@ -88,6 +89,9 @@ export async function refreshTabs(workspaceId: string): Promise<void> {
   // Only here, not in `applyTabRow`: see the note there. And a no-op unless a
   // corpus is actually held, so all-tabs' laziness is untouched.
   mergeWorkspaceTabs(workspaceId, next);
+  // …and into the inbox (lib/unread-tabs): this list is the whole workspace in
+  // stored order, so its unread rows ARE that store's group. No request.
+  mergeUnreadWorkspace(workspaceId, next);
 }
 
 /**
@@ -371,6 +375,7 @@ export function applyTabOrder(workspaceId: string, ids: string[]): void {
   caches.set(workspaceId, next);
   const subs = listenersByWs.get(workspaceId);
   if (subs) for (const fn of subs) fn(next);
+  mergeUnreadWorkspace(workspaceId, next);
 }
 
 /**
@@ -435,6 +440,9 @@ export function applyTabUnread(tabId: string, unread: boolean): void {
     caches.set(wsId, next);
     const subs = listenersByWs.get(wsId);
     if (subs) for (const fn of subs) fn(next);
+    // The inbox takes the flip on the same frame — marking read drops the row,
+    // marking unread places it where this list's order says.
+    mergeUnreadWorkspace(wsId, next);
   }
 }
 

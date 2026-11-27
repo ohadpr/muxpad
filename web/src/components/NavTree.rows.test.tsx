@@ -36,6 +36,11 @@ vi.mock('@tanstack/react-router', () => ({
     <span className={className}>{children}</span>
   ),
   useNavigate: () => () => {},
+  // NavTree reads the path to decide whether a view PAGE owns the list's view
+  // (railViewFor). These suites render beside a chat, which is the path that
+  // leaves the stored view in charge.
+  useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
+    select({ location: { pathname: '/w/w1/t/a' } }),
 }));
 
 vi.mock('../tabs', () => ({
@@ -422,18 +427,34 @@ describe('a working chat carries the unread weight', () => {
     // The gap a DOM-only test leaves: the attribute can render correctly and
     // style nothing. Both surfaces have their own weight rule, and the sheet
     // one was already a separate block — so both are checked.
-    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8');
-    // ANCHORED TO THE LINE START. A bare `includes` of the sidebar selector
-    // also matches inside the sheet's, so deleting the sidebar rule left the
-    // test green — which it did, on the first attempt.
-    for (const [label, re] of [
-      ['sidebar', /^\.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m],
+    const css = readFileSync(join(__dirname, 'NavTree.css'), 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    );
+    // EXACT SELECTORS, not substrings, and not line anchors.
+    //
+    // A bare `includes` of the sidebar selector also matches inside the
+    // sheet's, so deleting the sidebar rule left this test green — which it
+    // did, on the first attempt. The fix for that was a `^...$/m` anchor,
+    // which traded one wrong answer for another: it also asserts the
+    // FORMATTING, and biome wraps a long selector across lines. That made the
+    // repo's own formatter and this test contradict each other, and CI's lint
+    // job was the thing that lost — red for days, on a disagreement about
+    // where a newline goes.
+    //
+    // So: split every rule's selector list, normalise whitespace, and ask for
+    // exact membership. Substrings cannot pass, and neither can a deletion.
+    const selectors = [...css.matchAll(/([^{}]+)\{/g)].flatMap((m) =>
+      (m[1] as string).split(',').map((sel) => sel.replace(/\s+/g, ' ').trim()),
+    );
+    for (const [label, sel] of [
+      ['sidebar', '.navtree-tab-row[data-working="true"] .navtree-name-text'],
       [
         'sheet',
-        /^\.navtree\[data-variant="sheet"\] \.navtree-tab-row\[data-working="true"\] \.navtree-name-text/m,
+        '.navtree[data-variant="sheet"] .navtree-tab-row[data-working="true"] .navtree-name-text',
       ],
     ] as const)
-      expect(re.test(css), label).toBe(true);
+      expect(selectors, label).toContain(sel);
   });
 
   it('is independent of the unread mark — a row can be both', () => {

@@ -268,12 +268,13 @@
 }
 .chat-drawer__block[data-heat="1"] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 8%, var(--d-surface));
-  --mark-ink: color-mix(in srgb, var(--d-dim) 80%, var(--d-faint));
+  --mark-ink: var(--d-dim);
   --mark-edge: color-mix(in srgb, var(--d-ink) 6%, transparent);
 }
 .chat-drawer__block[data-heat="0"] {
   --mark-bg: color-mix(in srgb, var(--d-ink) 5%, var(--d-surface));
-  --mark-ink: var(--d-faint);
+  /* --d-dim: the same ink carries the section's COUNT, which is text. */
+  --mark-ink: var(--d-dim);
   --mark-edge: transparent;
 } /* The age, at the end of the line it belongs to. `auto` rather than a
    justify rule so the NAME keeps the slack and truncates first — the time is
@@ -281,7 +282,8 @@
 .chat-drawer__row-sub {
   flex: 0 0 auto;
   margin-inline-start: auto;
-  color: var(--d-faint);
+  /* --d-dim: the age is text, 12px, and --d-faint measured 2.62–4.44:1. */
+  color: var(--d-dim);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -411,7 +413,10 @@
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--d-faint);
+  /* --d-dim, not --d-faint: the faint token measured 2.62–4.44:1 on the
+     panel on ten of eleven themes, for 11px caps — the heading that groups
+     the whole list was the quietest thing in it. */
+  color: var(--d-dim);
 }
 /* A PILL, because a bare number inherits the heading's tracking and
    "YESTERDAY 10" renders as "YESTERDAY |0" in a slab face. A count has to look
@@ -423,7 +428,9 @@
   /* The same step as the block's mark, so the heading and its rows are
      obviously one thing. */
   background: var(--mark-bg);
-  color: var(--mark-ink);
+  /* Cut with the panel's ink: the count is 10px text, and the heat ladder's
+     quietest ink on its own plate measured 4.27:1 on acme-dark's panel. */
+  color: color-mix(in srgb, var(--mark-ink) 60%, var(--d-ink));
   font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0;
@@ -501,15 +508,25 @@
 
    Still green, because green is the rail's own "finished, waiting for you"
    and that is what a delivered worker's report is. Just not shouting. */
+/* EVERY CHIP'S INK is its hue cut with the panel's own ink (--status-ink-mix,
+   the same mix StateChip uses). Raw, the status hues are tuned for a mark on
+   the rail, not for 9px type on a pale plate: WORKING measured 3.56–3.85:1
+   and DONE 4.07–4.42 on five light panels. The mix darkens the ink on a light
+   panel and lifts it on a dark one, so it holds on every theme without a
+   value per theme. */
 .chat-drawer__row-live[data-state="delivered"] {
-  --state-ink: var(--status-ready, var(--d-accent));
   --state-plate: color-mix(in srgb, var(--status-ready, var(--d-accent)) 11%, transparent);
+  --state-ink: color-mix(
+    in srgb,
+    var(--status-ready, var(--d-accent)) var(--status-ink-mix, 55%),
+    var(--d-ink)
+  );
 }
 /* Archived, or decayed without ever delivering. Both say DONE to a reader
    scanning the list, which is honest — the hue is what separates a result
    that arrived from a chat that merely stopped. */
 .chat-drawer__row-live[data-state="done"] {
-  --state-ink: var(--d-faint);
+  --state-ink: var(--d-dim);
   --state-plate: color-mix(in srgb, var(--d-ink) 7%, transparent);
 }
 /* THE EXCEPTIONS, a step louder, because they are the rows you might act on.
@@ -519,21 +536,33 @@
    channel has a colour for exactly this and it does not move with the
    theme. */
 .chat-drawer__row-live[data-state="working"] {
-  --state-ink: var(--status-working, var(--d-accent));
   --state-plate: color-mix(in srgb, var(--status-working, var(--d-accent)) 16%, transparent);
+  --state-ink: color-mix(
+    in srgb,
+    var(--status-working, var(--d-accent)) var(--status-ink-mix, 55%),
+    var(--d-ink)
+  );
   font-weight: 600;
 }
 /* One that stopped to ask you something — the only row here that is waiting
    on a human. */
 .chat-drawer__row-live[data-state="blocked"],
 .chat-drawer__row-live[data-state="awaiting"] {
-  --state-ink: var(--status-blocked, var(--danger, var(--d-accent)));
+  --state-ink: color-mix(
+    in srgb,
+    var(--status-blocked, var(--danger, var(--d-accent))) var(--status-ink-mix, 55%),
+    var(--d-ink)
+  );
   --state-plate: color-mix(in srgb, var(--status-blocked, var(--d-accent)) 15%, transparent);
   font-weight: 600;
 }
 /* And one that crashed. */
 .chat-drawer__row-live[data-state="failed"] {
-  --state-ink: var(--status-dead, var(--danger, var(--d-accent)));
+  --state-ink: color-mix(
+    in srgb,
+    var(--status-dead, var(--danger, var(--d-accent))) var(--status-ink-mix, 55%),
+    var(--d-ink)
+  );
   --state-plate: color-mix(in srgb, var(--status-dead, var(--d-accent)) 15%, transparent);
   font-weight: 600;
 }
@@ -674,4 +703,108 @@
 .chat-drawer__artifact-acts button.-armed {
   border-color: var(--status-dead, var(--danger));
   color: var(--status-dead, var(--danger));
+}
+
+/* ═══ EVERY THEME'S OWN DRAWER ══════════════════════════════════════════════
+   "color of right pop up for sub chats / artifacts is not colored well, too
+   dull." It took --chat-panel, which is --bg-chrome everywhere, under a 12px
+   radius and a soft shadow: the same rounded grey card on every theme, and on
+   the dark ones the same colour as the transcript it floats over. So each
+   theme says what this panel IS in its own language. */
+
+/* The dark themes and the plain light ones: their own RAISED surface and a
+   real edge, so the panel lifts off the transcript instead of matching it. */
+:is(
+    [data-theme="tokyo-night"],
+    [data-theme="dracula"],
+    [data-theme="acme-dark"],
+    [data-theme="alucard"],
+    [data-theme="github-light"],
+    [data-theme="acme"]
+  )
+  :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-elev, var(--bg-elev));
+  --d-border: var(--chat-border-strong, var(--border-strong));
+}
+
+/* wokintosh — a WINDOW over the desktop, worn the way every other window in
+   the theme wears it: the paper, a 1.5px black frame, the hard unblurred
+   shadow, square corners, and the tabs in a grey title bar with a black rule
+   under it. The selected tab is a white plate in a black frame. */
+[data-theme="wokintosh"] :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-bg, var(--bg));
+  --d-border: var(--d-ink);
+}
+[data-theme="wokintosh"] .chat-drawer {
+  border: 1.5px solid var(--d-ink);
+  border-radius: 0;
+  box-shadow: 3px 4px 0 #000000d9;
+}
+[data-theme="wokintosh"] .chat-drawer__head {
+  background: var(--chat-panel, var(--bg-chrome));
+  border-bottom: 1.5px solid var(--d-ink);
+}
+[data-theme="wokintosh"]
+  :is(
+    .chat-drawer__tab,
+    .chat-drawer__row,
+    .chat-drawer__group-count,
+    .chat-drawer__row-live,
+    .chat-drawer__mark
+  ) {
+  border-radius: 0;
+}
+[data-theme="wokintosh"] .chat-drawer__tab[aria-selected="true"] {
+  background: var(--chat-elev, var(--bg-elev));
+  box-shadow: inset 0 0 0 1px var(--d-ink);
+}
+
+/* demoscene — a CRT window: square, a phosphor edge and its glow, the edge
+   repeated under the tabs. */
+[data-theme="demoscene"] :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-elev, var(--bg-elev));
+  --d-border: color-mix(in srgb, var(--d-accent) 55%, transparent);
+}
+[data-theme="demoscene"] .chat-drawer {
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #000, 0 0 22px -4px color-mix(in srgb, var(--d-accent) 40%, transparent);
+}
+
+/* blueprint — a drawing sheet: square, ruled with the drafting border's
+   double line (an outer rule and an inner one 3px in). */
+[data-theme="blueprint"] :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-elev, var(--bg-elev));
+  --d-border: color-mix(in srgb, var(--d-ink) 55%, transparent);
+}
+[data-theme="blueprint"] .chat-drawer {
+  border-radius: 0;
+  box-shadow: inset 0 0 0 3px var(--d-surface), inset 0 0 0 4px
+    color-mix(in srgb, var(--d-ink) 30%, transparent), 0 10px 30px -12px rgb(0 0 0 / 0.6);
+}
+
+/* riso — a printed card: square, a 2px rule in the key ink, and the second
+   drum's pink landing a few pixels out of register as its shadow. */
+[data-theme="riso"] :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-elev, var(--bg-elev));
+  --d-border: var(--d-ink);
+}
+[data-theme="riso"] .chat-drawer {
+  border: 2px solid var(--d-ink);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--d-accent) 60%, transparent);
+}
+
+/* memphis — a sticker, like every bubble and the composer: 3px of ink and
+   the hard magenta offset shadow. */
+[data-theme="memphis"] :is(.chat-drawer, .chat-drawer-open) {
+  --d-surface: var(--chat-elev, var(--bg-elev));
+  --d-border: var(--d-ink);
+}
+[data-theme="memphis"] .chat-drawer {
+  border: 3px solid var(--d-ink);
+  border-radius: 0;
+  box-shadow: 6px 6px 0 var(--d-accent);
+}
+[data-theme="memphis"] :is(.chat-drawer__tab, .chat-drawer__row) {
+  border-radius: 0;
 }

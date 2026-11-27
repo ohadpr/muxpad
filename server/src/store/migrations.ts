@@ -1932,6 +1932,157 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    // ── THE BACKLOG WAS LEFT OLDEST-FIRST ──────────────────────────────────
+    //
+    // Creation used to be `MAX(position) + 1` — append — which put every new
+    // chat at the BOTTOM of a list people read from the top. That was fixed to
+    // `MIN(position) - 1` (TabStore.create), but only FORWARD: on this install
+    // the 1,146 rows that predate the fix still sit in append order, so the
+    // sidebar reads 2026-05 at the top and today's work 1,100 rows down, and
+    // the two halves of the list disagree about which way time runs.
+    //
+    // One rewrite, once, per workspace:
+    //
+    //   · PINNED rows keep their manual order and stay at the front. They are
+    //     the one block the user arranged by hand, and `sortSidebarTabs` draws
+    //     its divider at the count of them, so they have to stay contiguous.
+    //   · everything else goes NEWEST-FIRST by creation — the same order the
+    //     creation rule produces from now on, so the join between old and new
+    //     rows is invisible instead of being a reversal in the middle.
+    //
+    // Creation, not activity: the stable-order work deliberately took recency
+    // OUT of the sidebar (shared/src/tab-order.ts has the measurements), and
+    // ⌘K is where "what was I just doing" lives now. A backfill that ordered
+    // by last touch would be reintroducing the key that file exists to remove.
+    //
+    // Dense from 0 up, so the next created chat lands at -1 and the invariant
+    // continues. Nothing is hidden or deleted: a retired chat keeps its place
+    // in the collapsed section it was already in.
+    version: 59,
+    apply: (db) => {
+      const workspaces = db.prepare('SELECT DISTINCT workspace_id AS id FROM tabs').all() as Array<{
+        id: string;
+      }>;
+      const setPos = db.prepare('UPDATE tabs SET position = ? WHERE id = ?');
+      for (const ws of workspaces) {
+        // The published read order (TabStore.listByWorkspace) for the pinned
+        // half, so a hand-arranged block comes out exactly as it went in, and
+        // created_at DESC for the rest.
+        const rows = db
+          .prepare(
+            `SELECT id FROM tabs WHERE workspace_id = ?
+             ORDER BY pinned DESC,
+                      CASE WHEN pinned = 1 THEN position END ASC,
+                      CASE WHEN pinned = 1 THEN created_at END ASC,
+                      CASE WHEN pinned = 0 THEN created_at END DESC,
+                      id ASC`,
+          )
+          .all(ws.id) as Array<{ id: string }>;
+        rows.forEach((r, i) => setPos.run(i, r.id));
+      }
+    },
+  },
+  {
+    // ── A TASK THAT OUTLIVES THE TURN THAT STARTED IT ──────────────────────
+    //
+    // chat/TaskStore.ts carries the reasoning and the five dated requests this
+    // answers. The schema note is the lifecycle: one row per declared task,
+    // written by the agent through `muxpad task`, and the only state muxpad
+    // acts on is `open`.
+    //
+    //   continuations    how many times this task has been handed back. A
+    //                    budget, reset when a human speaks in the chat.
+    //   continued_from   `updated_at` as of the last continuation, so "did
+    //                    anything move since" is answerable without a second
+    //                    table. The anti-loop reads it, and it is the reason
+    //                    a stuck agent stops after one retry rather than six.
+    //
+    // No backfill: a chat with no task behaves exactly as it does today, which
+    // is the whole safety property. Autonomy is opt-in per task, by the agent
+    // writing one down.
+    version: 60,
+    apply: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+        request TEXT NOT NULL,
+        criteria TEXT,
+        next_step TEXT,
+        state TEXT NOT NULL DEFAULT 'open',
+        evidence TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        continuations INTEGER NOT NULL DEFAULT 0,
+        continued_from INTEGER
+      )`);
+      // The read the turn-done hook makes on EVERY turn of every chat, so it
+      // is the one that has to be free: partial on the only state that matters.
+      db.exec("CREATE INDEX IF NOT EXISTS tasks_open_by_tab ON tasks(tab_id) WHERE state = 'open'");
+    },
+  },
+  {
+    // Keep candidate selection independent of archived transcripts and expired
+    // root chats. SQLite cannot index an EXISTS over panes, so maintain this
+    // content marker at the same transaction boundary as pane mutations.
+    version: 61,
+    apply: (db) => {
+      const columns = db.pragma('table_info(tabs)') as { name: string }[];
+      if (!columns.some((c) => c.name === 'corpus_has_agent')) {
+        db.exec('ALTER TABLE tabs ADD COLUMN corpus_has_agent INTEGER NOT NULL DEFAULT 0');
+      }
+      db.exec(`UPDATE tabs SET corpus_has_agent = EXISTS (
+        SELECT 1 FROM panes WHERE tab_id = tabs.id AND startup_cmd LIKE 'muxpad agent%');
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_insert AFTER INSERT ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = NEW.tab_id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id = NEW.tab_id;
+      END;
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_delete AFTER DELETE ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = OLD.tab_id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id = OLD.tab_id;
+      END;
+      CREATE TRIGGER IF NOT EXISTS corpus_pane_update AFTER UPDATE OF tab_id, startup_cmd ON panes BEGIN
+        UPDATE tabs SET corpus_has_agent = EXISTS (
+          SELECT 1 FROM panes WHERE tab_id = tabs.id AND startup_cmd LIKE 'muxpad agent%')
+          WHERE id IN (OLD.tab_id, NEW.tab_id);
+      END;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_pinned ON tabs(id) WHERE pinned = 1;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_clock ON tabs(clock_started_at) WHERE retired_at IS NULL;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_children ON tabs(spawned_by) WHERE retired_at IS NULL AND spawned_by IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_nonagent ON tabs(id) WHERE retired_at IS NULL AND corpus_has_agent = 0;
+      CREATE INDEX IF NOT EXISTS tabs_corpus_unread ON tabs(id) WHERE unread = 1;
+      CREATE INDEX IF NOT EXISTS panes_corpus_unparked ON panes(tab_id) WHERE parked_at IS NULL;
+      CREATE INDEX IF NOT EXISTS panes_corpus_unread ON panes(tab_id) WHERE unread = 1;
+      CREATE INDEX IF NOT EXISTS spawn_rounds_corpus_owed ON spawn_rounds(tab_id) WHERE delivered_at IS NULL;`);
+    },
+  },
+  {
+    version: 62,
+    /**
+     * WHO DECIDED THIS TASK EXISTED — the agent, or the autopilot?
+     *
+     * They are not the same commitment and must not be handed back the same
+     * way. An agent-declared task is its own plan and survives anything. An
+     * autopilot task is an INFERENCE about what the owner wanted, written by
+     * the gate when a chat tried to yield.
+     *
+     * Observed in the Kalshi chat: the gate opened a reconciliation task, the
+     * agent did it, then the owner said something else entirely — a standing
+     * rule about liquidating positions — and the chat answered that. The old
+     * reconciliation task was handed back on the very next turn, dragging the
+     * chat back to finished work and making it restate an answer it had
+     * already given. The owner's words outrank the gate's guess about them.
+     */
+    apply: (db) => {
+      const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'origin')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'");
+      }
+    },
+  },
 ];
 
 /** Highest version in the migration list. Exported so a test can assert the

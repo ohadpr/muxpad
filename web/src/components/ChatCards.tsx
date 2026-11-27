@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { req } from '../api';
 import { subscribe, subscribeResync } from '../events';
 import { type CardWriter, changeRequestDraft, removalFollowUp } from '../lib/card-actions';
-import { cardColorScheme } from '../lib/card-frame';
+import { cardColorScheme, measureCardSurface } from '../lib/card-frame';
 import { cardLineMarkdown, cardLineText } from '../lib/card-line';
 import { isCardOpen, toggleCardOpen, useCardOpen } from '../lib/card-open';
 import './ChatCards.css';
@@ -30,7 +30,9 @@ import { Markdown } from './ChatMarkdown';
  *  the thing you are reading off the screen. */
 const CARD_MAX_H = 600;
 
-function shortAge(ms: number): string {
+/** Exported for the cards PAGE, which answers the same question about the
+ *  same value and must not answer it in different words. */
+export function shortAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 45) return `${s}s`;
   const m = Math.round(s / 60);
@@ -266,8 +268,13 @@ function HtmlCard({
   // phone looked fine. So the frame is inserted ONCE, with its final srcdoc.
   const [paint, setPaint] = useState<{ theme: string; surface: string } | null>(null);
   useLayoutEffect(() => {
-    const el = slot.current?.closest('.chat-card');
-    setPaint({ theme, surface: el ? getComputedStyle(el).backgroundColor : 'transparent' });
+    // NOT `closest('.chat-card')`, which named the only container that
+    // existed when this was written and silently returned null once the cards
+    // PAGE put the same component in `.cards-tile` — surface `transparent`,
+    // and every card on that page a black slab on a machine set to dark.
+    // See CARD_CONTAINERS: it walks up for a painted ancestor rather than
+    // trusting a list to stay complete.
+    setPaint({ theme, surface: measureCardSurface(slot.current) ?? 'transparent' });
   }, [theme]);
   // `paint.theme` is never read here, and it does not have to be: a new
   // `paint` object IS the signal that themeBlock() would now return different
@@ -396,7 +403,12 @@ function HtmlCard({
   );
 }
 
-function CardBody({
+/**
+ * Exported for the cards PAGE. The page lists the same cards this component
+ * pins, and a second renderer for them would be two things to keep agreeing
+ * about an html card's sandbox — which is the part that must never drift.
+ */
+export function CardBody({
   card,
   peek,
   onFoldable,

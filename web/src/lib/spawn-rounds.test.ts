@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NO_ROUNDS, loadSpawnRounds, resetSpawnRoundsCache } from './spawn-rounds';
+import {
+  NO_ROUNDS,
+  loadSpawnRounds,
+  resetSpawnRoundsCache,
+  spawnRoundsCacheSize,
+} from './spawn-rounds';
 
 /**
  * One request per CONVERSATION, and never a blank log when it fails.
@@ -97,5 +102,65 @@ describe('loadSpawnRounds', () => {
     expect(await loadSpawnRounds('p')).toEqual(NO_ROUNDS);
     expect(await loadSpawnRounds('other')).toEqual(NO_ROUNDS);
     expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the CHILDREN on the map, as the corpus would have drawn them', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        rounds: {},
+        children: [
+          {
+            id: 'ws',
+            slug: 'ws',
+            name: 'Work',
+            tabs: [
+              {
+                id: 'kid',
+                slug: 'kid',
+                name: 'card-summary',
+                layout: '',
+                spawned_by: 'p',
+                done: true,
+                spawn_task: 'Audit the lane',
+                spawn_report: 'whole',
+                spawn_report_state: 'ok',
+                spawn_report_at: 9,
+              },
+            ],
+          },
+        ],
+      }),
+    }));
+    const answer = await loadSpawnRounds('p');
+    const kid = answer.children?.[0];
+    expect([kid?.tabId, kid?.parentId, kid?.task, kid?.done, kid?.report?.text]).toEqual([
+      'kid',
+      'p',
+      'Audit the lane',
+      true,
+      'whole',
+    ]);
+  });
+
+  it('an older server with no `children` leaves the cards to the corpus', async () => {
+    vi.stubGlobal('fetch', async () => ok({ kid: [] }));
+    expect((await loadSpawnRounds('p')).children).toBeUndefined();
+  });
+
+  // ONE ENTRY IS EVERY CHILD'S ROUNDS AND EVERY CHILD'S ROW — the 519-child
+  // coordinator measured at 1.41 MB was a single one. Held per parent the
+  // session had ever opened, with no eviction, that is a leak the 4 s TTL
+  // does nothing about. Found by review.
+  it('holds a bounded number of parents, newest kept', async () => {
+    vi.stubGlobal('fetch', async () => ok({ kid: [] }));
+    for (let i = 0; i < 40; i++) await loadSpawnRounds(`parent${i}`);
+    expect(spawnRoundsCacheSize()).toBeLessThanOrEqual(12);
+    // And the one you are on is still a cache HIT, not a re-ask.
+    const f = vi.fn(async () => ok({ kid: [] }));
+    vi.stubGlobal('fetch', f);
+    await loadSpawnRounds('parent39');
+    expect(f).not.toHaveBeenCalled();
   });
 });

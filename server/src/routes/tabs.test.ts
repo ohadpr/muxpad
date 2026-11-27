@@ -297,7 +297,12 @@ describe('tabs routes', () => {
       if (added?.type === 'tab.added') {
         expect(added.workspace_id).toBe(ws.id);
         expect(added.tab.id).toBe(created.id);
+        expect(added.tab.corpus_live).toBe(true);
       }
+      expect(updated).toMatchObject({
+        workspace_id: ws.id,
+        tab: { id: created.id, corpus_live: true },
+      });
       if (removed?.type === 'tab.removed') {
         expect(removed.workspace_id).toBe(ws.id);
         expect(removed.tab_id).toBe(created.id);

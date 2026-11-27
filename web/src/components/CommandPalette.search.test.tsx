@@ -289,3 +289,54 @@ describe('recents, before anything is typed', () => {
     expect(host.querySelector('.cmdk-empty')?.textContent).toContain('Type to find a chat');
   });
 });
+
+/**
+ * A TAP ON A RESULT MUST NOT BE SPENT DISMISSING THE KEYBOARD.
+ *
+ * Reported: "search results don't even respond, can't click them" — on the
+ * phone, where the keyboard is up because you just typed the query.
+ *
+ * The mechanism, confirmed in the browser before this test was written: the
+ * input holds focus, a result row is `tabIndex=-1`, and nothing prevented the
+ * press's default — so the press moves focus off the input. On iOS that focus
+ * change IS the keyboard dismissing, and the tap is spent doing it rather
+ * than picking the row. Worse, the dismissal relayouts the list (the results
+ * reserve `--chat-keyboard-inset` at their foot), so the row you aimed at has
+ * moved by the time you try again.
+ *
+ * The fix is the one every combobox uses: the listbox refuses the focus
+ * change, so focus stays in the input and the click lands. It is invisible on
+ * a desktop — which is why it was never noticed — and it is the whole
+ * difference on a phone.
+ */
+describe('pressing a result keeps the keyboard up', () => {
+  const listbox = () => host.querySelector('.cmdk-results') as HTMLElement;
+
+  it('refuses the focus change that a press would otherwise cause', async () => {
+    await open();
+    type('zzz');
+    expect(options().length).toBeGreaterThan(0);
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    options()[0]?.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('refuses it anywhere in the list, not only on a row', async () => {
+    // A thumb lands in the gaps between rows too, and the same focus change
+    // happens there.
+    await open();
+    type('zzz');
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    listbox().dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('still picks the row — refusing focus must not refuse the click', async () => {
+    await open();
+    type('zzz');
+    act(() => {
+      options()[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(navigate).toHaveBeenCalled();
+  });
+});

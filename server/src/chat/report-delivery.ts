@@ -9,6 +9,7 @@ import type Database from 'better-sqlite3';
 import { PaneStore } from '../store/PaneStore.js';
 import { type SpawnRound, SpawnRoundStore } from '../store/SpawnRoundStore.js';
 import { TabStore } from '../store/TabStore.js';
+import { TaskStore } from './TaskStore.js';
 
 /**
  * THE JOIN — a finished child's result, into its parent's conversation.
@@ -429,11 +430,13 @@ export class ReportDelivery {
       );
     }
     if (fresh.length === 0) return { delivered: 0, abandoned: repeats.length, held: 0 };
-    pending = fresh;
+    // `fresh` from here down, not a reassigned parameter: everything below is
+    // about the rounds being SENT, and the ones held back above are not.
+    const sending = fresh;
 
-    const entries = this.entriesFor(pending);
+    const entries = this.entriesFor(sending);
     const text = renderSpawnDelivery(entries);
-    const ids = pending.map((r) => r.id);
+    const ids = sending.map((r) => r.id);
 
     // STAMP FIRST, then send, and revert if it was refused. Of the two ways a
     // send that is not in the transaction can go wrong, a batch delivered twice
@@ -448,7 +451,7 @@ export class ReportDelivery {
     // worker, described two opposite ways, with the reassuring version on the
     // thing the user actually looks at.
     rounds.markStateIfSilent(
-      pending.filter((r) => !r.report_state && !r.report).map((r) => r.id),
+      sending.filter((r) => !r.report_state && !r.report).map((r) => r.id),
       'failed',
     );
     let res: SubmitSendResult;
@@ -457,7 +460,7 @@ export class ReportDelivery {
     } catch (err) {
       rounds.undeliver(ids, stampedAt);
       console.error('[report-delivery] send threw', err);
-      return { delivered: 0, abandoned: 0, held: pending.length };
+      return { delivered: 0, abandoned: 0, held: sending.length };
     }
     if (res.status === 'queued' && typeof res.id === 'string') {
       this.rememberQueued(res.id, ids, stampedAt);
@@ -472,15 +475,15 @@ export class ReportDelivery {
       if (!this.refusalLogged.has(parentTabId)) {
         this.refusalLogged.add(parentTabId);
         console.warn(
-          `[report-delivery] ${parentTabId} refused ${pending.length} report(s): ` +
+          `[report-delivery] ${parentTabId} refused ${sending.length} report(s): ` +
             `${res.reason ?? 'no reason given'} — will retry`,
         );
       }
-      return { delivered: 0, abandoned: 0, held: pending.length };
+      return { delivered: 0, abandoned: 0, held: sending.length };
     }
     // A parent that accepts again is worth hearing about next time it does not.
     this.refusalLogged.delete(parentTabId);
-    return { delivered: pending.length, abandoned: 0, held: 0 };
+    return { delivered: sending.length, abandoned: 0, held: 0 };
   }
 
   /**
@@ -538,8 +541,7 @@ export class ReportDelivery {
     }
     if (n > 0) {
       console.warn(
-        `[report-delivery] ${n} worker report(s) went back in the queue: ` +
-          'their send was dropped before the parent read it',
+        `[report-delivery] ${n} worker report(s) went back in the queue: their send was dropped before the parent read it`,
       );
     }
     return n;
@@ -670,6 +672,17 @@ export class ReportDelivery {
       report: round.report,
       artifacts: round.artifacts,
       rounds: new SpawnRoundStore(this.db).roundCount(round.tab_id),
+      // THE WORKER'S OWN RECORD, carried beside the model's description of it.
+      // A delivery once read "run complete, report published, task marked
+      // done" while the task was open with a next step recorded and a lock
+      // held by a live PID; the parent nearly relayed that completion. The
+      // summary is written by a model reading a transcript and can say
+      // anything — the task is written by the worker through `muxpad task`.
+      // When they disagree, the reader is shown both.
+      ...(() => {
+        const open = new TaskStore(this.db).openFor(round.tab_id);
+        return open ? { openTask: { nextStep: open.next_step } } : {};
+      })(),
       // Only when it will actually be clipped — a path beside a report you
       // have read in full is noise, and teaches a parent to open the file
       // every time.

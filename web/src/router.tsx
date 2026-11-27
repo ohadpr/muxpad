@@ -2,10 +2,14 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppLayout } from './components/AppLayout';
 import { WorkspaceLayout } from './components/WorkspaceLayout';
 import { noticeCaptureNonce } from './lib/slack-notice-diagnostic';
+import { ActivityView } from './pages/ActivityView';
+import { CardsView } from './pages/CardsView';
+import { ChatListFallback } from './pages/ChatListFallback';
 import { DocView } from './pages/DocView';
 import { AppsView, ArtifactsView, HostedAppView } from './pages/HostedView';
 import { PopoutView } from './pages/PopoutView';
 import { RootRedirect } from './pages/RootRedirect';
+import { UnreadView } from './pages/UnreadView';
 
 const rootRoute = createRootRoute();
 
@@ -17,11 +21,23 @@ const appLayoutRoute = createRoute({
   component: AppLayout,
 });
 
-// Root: just redirects (to first workspace, or auto-creates one).
+// Root: just redirects. On a phone to the chat list (/chats); on desktop to
+// the first workspace, or auto-creates one. See lib/mobile-nav.
 const rootRedirectRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/',
   component: RootRedirect,
+});
+
+// /chats — the phone's root: every workspace and its chats, full screen.
+// AppLayout renders the list ITSELF, beside the kept-alive workspace hosts and
+// never through this route's Outlet, so the list survives a trip into a chat.
+// The component only ever renders where the list is not a destination (desktop,
+// an embed), and sends you to `/`.
+const chatListRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/chats',
+  component: ChatListFallback,
 });
 
 // /w/$wsSlug — workspace layout. Loads workspace, redirects to first tab
@@ -93,10 +109,38 @@ const docRoute = createRoute({
 // the URL is in transcripts, in published reports and in muscle memory, and a
 // 404 on it would teach nothing. It lands on Artifacts because that is the
 // half people arrive looking for ("link to the thing I made").
+// /cards — every pinned value on the install, across every chat. The fourth
+// workspace-less destination, built exactly as Artifacts and Apps are
+// (lib/shell-routes). See pages/CardsView for why a card needs a page at all.
+// /unread — the rail's Unread view as a real destination, so the rail entry
+// can be an anchor. See pages/UnreadView for why the page and the view both
+// exist and how they stay the same list.
+const unreadRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/unread',
+  component: UnreadView,
+});
+
+const cardsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/cards',
+  component: CardsView,
+});
+
 const artifactsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/artifacts',
   component: ArtifactsView,
+});
+
+// /activity — recent chats with their last message. The third destination
+// that belongs to no workspace, beside Artifacts and Apps and built the same
+// way (lib/shell-routes). Reached from the desktop rail's foot; the phone has
+// it as a tab of its list instead.
+const activityRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/activity',
+  component: ActivityView,
 });
 
 const appsRoute = createRoute({
@@ -128,8 +172,12 @@ const hostedAppRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     rootRedirectRoute,
+    chatListRoute,
+    unreadRoute,
+    cardsRoute,
     artifactsRoute,
     appsRoute,
+    activityRoute,
     hostedRedirectRoute,
     hostedAppRoute,
     workspaceLayoutRoute.addChildren([tabRoute]),

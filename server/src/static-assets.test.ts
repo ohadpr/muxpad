@@ -31,7 +31,13 @@ beforeAll(() => {
   // human-authored name that a deploy CAN change in place.
   writeFileSync(join(root, 'assets', 'logo-unhashed.svg'), '<svg/>');
   writeFileSync(join(root, 'sw.js'), 'self.addEventListener("push", () => {});');
-  writeFileSync(join(root, 'manifest.webmanifest'), '{"name":"muxpad"}');
+  // Shaped like the real one: the route strips `theme_color` and keeps
+  // `background_color`, so the fixture has to carry both for that to mean
+  // anything.
+  writeFileSync(
+    join(root, 'manifest.webmanifest'),
+    '{"name":"muxpad","theme_color":"#1e1e2e","background_color":"#1e1e2e"}',
+  );
   writeFileSync(join(root, 'favicon.svg'), '<svg/>');
   app = new Hono();
   mountStaticWeb(app, root);
@@ -94,13 +100,22 @@ describe('if-none-match', () => {
 });
 
 describe('serving', () => {
-  it('serves the HTML shell no-cache, with a validator so reloads cost a 304', async () => {
+  it('serves the HTML shell NO-STORE, so an installed app cannot keep an old one', async () => {
+    // Was `no-cache` — "revalidate before use", which is correct and which the
+    // installed iOS app does not honour: after a shell change it went on
+    // serving the previous one through a delete-and-re-add, while a Safari tab
+    // on the same URL served the new one. The shell is ~2.6KB and names only
+    // hashed assets, so caching it saves nothing and costs a class of bug.
+    //
+    // It matters most at INSTALL time: the shell carries the iOS status-bar
+    // meta, which iOS reads when the app is added to the home screen, so a
+    // stale shell bakes stale window chrome into the install.
     const res = await get('/');
-    expect(res.headers.get('cache-control')).toBe('no-cache');
-    const etag = res.headers.get('etag');
-    expect(etag).toBeTruthy();
-    const again = await get('/', { 'if-none-match': etag as string });
-    expect(again.status).toBe(304);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    // The validator is still sent — it costs nothing and a client that asks
+    // with it still gets a correct answer — but it must NEVER be the reason a
+    // stale shell is reused.
+    expect(res.headers.get('etag')).toBeTruthy();
   });
 
   it('serves the brotli artifact when the client accepts it', async () => {
@@ -144,11 +159,66 @@ describe('serving', () => {
     expect(res.headers.get('content-type')).toMatch(/text\/plain/);
   });
 
-  it('serves the no-cache shell for SPA routes', async () => {
+  it('stamps the build into the manifest start_url, and never caches it', async () => {
+    // An installed iOS app launches at start_url with no address bar. If that
+    // URL's response is in the webview's store the install is FROZEN on it —
+    // through deleting the icon and re-adding, because deleting an icon does
+    // not clear the origin's data. A phone spent an hour launching a shell
+    // from before the status-bar meta was removed for exactly this reason.
+    const res = await get('/manifest.webmanifest');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const m = JSON.parse(await res.text()) as Record<string, unknown> & {
+      start_url: string;
+      name: string;
+    };
+    expect(m.start_url).toMatch(/^\/\?b=.+/);
+    // Stamped from the SHELL's validator, so a web-only deploy moves it. The
+    // server's build id does not: it measures server/dist and shared/dist, and
+    // every fix that failed to reach his phone was web-only.
+    // Everything else is still the file's.
+    expect(m.name).toBe('muxpad');
+    // …EXCEPT `theme_color`, which is stripped. For an installed app iOS
+    // prefers the manifest's colour over the page's meta, and the manifest's
+    // is frozen at install time — so with eleven switchable themes it can only
+    // ever be right for one. Dropping it makes the runtime meta authoritative.
+    // Measured: the meta read #e0e0e0 and the status bar was drawn near-black.
+    expect(m).not.toHaveProperty('theme_color');
+    // The splash colour stays: it paints before a page exists to have a theme.
+    expect(m).toHaveProperty('background_color');
+    // AND THE APP'S IDENTITY IS CONSTANT. With no `id` the manifest identity
+    // algorithm falls back to `start_url` — which carries the build stamp
+    // above, so every deploy would mint a new application identity and the
+    // installed app could be treated as a different one. Found by review.
+    expect(m.id).toBe('/');
+  });
+
+  it('keeps the same app identity across two builds that move start_url', async () => {
+    const first = JSON.parse(await (await get('/manifest.webmanifest')).text()) as {
+      id: string;
+      start_url: string;
+    };
+    // A new shell: a different validator, so a different stamp. Put the
+    // fixture back afterwards — the whole file shares one temp root.
+    const shell = '<!doctype html><title>muxpad</title>';
+    writeFileSync(join(root, 'index.html'), '<!doctype html><title>muxpad v2</title>');
+    try {
+      const second = JSON.parse(await (await get('/manifest.webmanifest')).text()) as {
+        id: string;
+        start_url: string;
+      };
+      expect(second.start_url).not.toBe(first.start_url);
+      expect(second.id).toBe(first.id);
+    } finally {
+      writeFileSync(join(root, 'index.html'), shell);
+    }
+  });
+
+  it('serves the no-store shell for SPA routes too', async () => {
+    // Same shell, same reason: a deep link is how the installed app launches.
     const res = await get('/w/dev/t/muxpad');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toMatch(/text\/html/);
-    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
   it('keeps /api and /ws 404s machine-readable', async () => {

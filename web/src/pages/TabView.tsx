@@ -1,6 +1,6 @@
 import type { LayoutNode, PaneSpec } from '@muxpad/shared';
 import { collectLayoutLeaves, isAgentPane, rowNounTitle } from '@muxpad/shared';
-import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ApiError, type TabWithPanes, api } from '../api';
@@ -86,6 +86,13 @@ function collectPaneIds(layout: Layout): string[] {
 }
 
 export interface TabViewProps {
+  /**
+   * The workspace this tab belongs to — from the host that mounts it, NOT the
+   * route. A TabView stays mounted (hidden) while the URL is somewhere with no
+   * workspace in it — the phone's chat list, Artifacts — and reading the slug
+   * off `/_app/w/$wsSlug` there throws, which took the whole app down.
+   */
+  wsSlug: string;
   /** Stable slug for this instance — one TabView per tab in WorkspaceLayout. */
   tabSlug: string;
   /** False while the tab is mounted but hidden during a tab switch. */
@@ -107,8 +114,7 @@ function MobilePaneChrome({ children }: { children: React.ReactNode }) {
   return host ? createPortal(children, host) : null;
 }
 
-export function TabView({ tabSlug, isActive }: TabViewProps) {
-  const { wsSlug } = useParams({ from: '/_app/w/$wsSlug' });
+export function TabView({ wsSlug, tabSlug, isActive }: TabViewProps) {
   const navigate = useNavigate();
   const { workspaces } = useWorkspaces();
   const workspace = workspaces.find((w) => w.slug === wsSlug);

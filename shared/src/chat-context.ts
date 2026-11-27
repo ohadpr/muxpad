@@ -86,3 +86,16 @@ export function stripMentionContext(text: string): string {
 export function hasMentionContext(text: string): boolean {
   return CONTEXT_OPEN.test(text);
 }
+
+/** Recover exact references before display normalization removes the envelope. */
+export function parseMentionContext(text: string): MentionedChat[] {
+  const block = CONTEXT_OPEN.exec(text)?.[0];
+  if (!block) return [];
+  const out: MentionedChat[] = [];
+  for (const line of block.split('\n')) {
+    const match = /^- @(.+?) — tabId (\S+?), (?:paneIds? (.+)|no paneId\b.*)$/.exec(line.trim());
+    if (!match?.[1] || !match[2]) continue;
+    out.push({ name: match[1], tabId: match[2], paneIds: match[3]?.trim().split(/\s+/) ?? [] });
+  }
+  return out;
+}

@@ -1,6 +1,7 @@
-import { CHAT_DECAY_DAYS, type Tab } from '@muxpad/shared';
+import { CHAT_DECAY_DAYS, type MuxpadEvent, type Tab } from '@muxpad/shared';
 import { api } from '../api';
 import { subscribe, subscribeResync } from '../events';
+import { corpusTabs, isCorpusLive } from './corpus-tabs';
 import type { WorkspaceTabs } from './nav-search';
 
 /**
@@ -75,22 +76,65 @@ import type { WorkspaceTabs } from './nav-search';
 let cache: WorkspaceTabs[] | null = null;
 let settledAt = 0;
 let inFlight: Promise<WorkspaceTabs[]> | null = null;
-/**
- * Bumped by everything that knows something NEWER than a request already in
- * flight: a push, a merged workspace list, a status edge. (A resync has its own
- * queue below and needs none of this.)
- *
- * ─── AN OLDER ANSWER MUST NOT OVERWRITE A NEWER ONE ──────────────────────────
- * `/tabs/all` issued before a push can land after it, carrying the pre-push row.
- * `loadAllTabs` used to publish it regardless and call the corpus fresh — the
- * renamed chat got its old name back, a retired one went back to `working`, on
- * every chip and card, and nothing healed it (no poll; and a status-edge fetch
- * fired meanwhile simply JOINED the stale request). The per-workspace cache in
- * `tabs.ts` guards its fetches with versions for exactly this; the corpus had no
- * equivalent. So a request remembers the generation it was issued at, and a
- * landing that finds it moved is not published — the next fetch is, instead.
- */
+/** Status edges cannot be replayed from a row and still require a fresh read.
+ * Row pushes and landed workspace lists are replayed instead: a boot measured
+ * two 2.82 MB responses because its own sidebar list invalidated the first. */
 let generation = 0;
+let refreshNeeded = false;
+type CorpusChange = (groups: WorkspaceTabs[]) => WorkspaceTabs[];
+let inFlightChanges: CorpusChange[] | null = null;
+// A hung request must not retain an unlimited stream of pushed rows. On
+// overflow use the existing bounded supersession retry instead of replaying.
+const MAX_IN_FLIGHT_CHANGES = 4096;
+function rememberChange(change: CorpusChange): void {
+  if (!inFlightChanges) return;
+  if (inFlightChanges.length === MAX_IN_FLIGHT_CHANGES) {
+    generation++;
+    inFlightChanges = null;
+  } else inFlightChanges.push(change);
+}
+
+type RowEvent = Extract<MuxpadEvent, { type: 'tab.updated' | 'tab.added' | 'tab.removed' }>;
+function upsertWorkspace(event: RowEvent): string | undefined {
+  if (event.type === 'tab.removed' || !isCorpusLive(event.tab)) return undefined;
+  if (event.type === 'tab.added') return event.workspace_id;
+  // Placement is optional. Without it, a missing live row needs a bounded
+  // corpus refresh; neither done/status nor a workspace guess can place it.
+  return event.tab.corpus_live === true
+    ? ((event.tab as Tab & { workspace_id?: string }).workspace_id ??
+        (event as { workspace_id?: string }).workspace_id)
+    : undefined;
+}
+
+function replayRow(groups: WorkspaceTabs[], event: RowEvent): WorkspaceTabs[] {
+  const id = event.type === 'tab.removed' ? event.tab_id : event.tab.id;
+  const row = event.type === 'tab.removed' || !isCorpusLive(event.tab) ? null : event.tab;
+  const workspaceId = upsertWorkspace(event);
+  let changed = false;
+  const next = groups.map((g) => {
+    const index = g.tabs.findIndex((t) => t.id === id);
+    if (index >= 0) {
+      if (row && workspaceId && g.id !== workspaceId) {
+        changed = true;
+        return { ...g, tabs: g.tabs.filter((t) => t.id !== id) };
+      }
+      if (event.type === 'tab.added' && row) return g;
+      if (g.tabs[index] === row) return g;
+      changed = true;
+      const tabs = [...g.tabs];
+      if (row) tabs[index] = row;
+      else tabs.splice(index, 1);
+      return { ...g, tabs };
+    }
+    if (row && g.id === workspaceId) {
+      changed = true;
+      return { ...g, tabs: [...g.tabs, row] };
+    }
+    return g;
+  });
+  return changed ? next : groups;
+}
+
 const listeners = new Set<(groups: WorkspaceTabs[]) => void>();
 
 function publish(next: WorkspaceTabs[]): void {
@@ -115,76 +159,62 @@ export function subscribeAllTabs(fn: (groups: WorkspaceTabs[]) => void): () => v
 /**
  * Splice a server-pushed row into the corpus, if we are holding one.
  *
- * Nothing is FETCHED here, by design: the corpus is lazy, and a `tab.updated`
- * for a workspace nobody has asked about must not turn into a request. A row we
- * do not hold is simply not our business yet — the next `loadAllTabs` gets it.
+ * Historical pushes do not wake the corpus. An excluded row is ejected;
+ * an explicitly live row re-enters using placement when provided, otherwise
+ * a bounded refresh discovers it. Workspace metadata still comes from /all.
  */
+/**
+ * Workspaces `/all` has answered WITHOUT, so we stop asking it to explain them.
+ *
+ * `/all` excludes hidden workspaces — the system container holds muxpad's own
+ * app tabs — and a live app tab there emits `tab.updated` with its placement.
+ * The absent group read as "metadata we have not fetched yet", so every such
+ * update scheduled a refresh, and the answer never contained that workspace:
+ * one request per app-tab update, forever, at the 2 s floor. Found by review.
+ *
+ * Learned from the answers rather than assumed: a workspace later unhidden
+ * simply arrives in a response, and this set is rebuilt from what landed.
+ */
+const unplaceable = new Set<string>();
+
+function missingLivePlacement(groups: WorkspaceTabs[], event: RowEvent): boolean {
+  if (event.type !== 'tab.updated' || event.tab.corpus_live !== true) return false;
+  const workspaceId = upsertWorkspace(event);
+  if (workspaceId)
+    return !groups.some((g) => g.id === workspaceId) && !unplaceable.has(workspaceId);
+  return !groups.some((g) => g.tabs.some((t) => t.id === event.tab.id));
+}
+
+/** A landed corpus settles which workspaces it is willing to describe. */
+function notePlaced(groups: readonly WorkspaceTabs[]): void {
+  for (const g of groups) unplaceable.delete(g.id);
+}
+
 const unsubscribeLive = subscribe((e) => {
-  if (!cache) {
-    // Nothing to patch — but a FIRST fetch may be travelling, and it was asked
-    // before this event happened. Mark it superseded so its answer is not
-    // served as current (see `generation`). Still no fetch of our own.
-    if (
-      inFlight &&
-      (e.type === 'tab.updated' || e.type === 'tab.added' || e.type === 'tab.removed')
-    )
+  if (e.type !== 'tab.updated' && e.type !== 'tab.added' && e.type !== 'tab.removed') return;
+  const workspaceId = upsertWorkspace(e);
+  rememberChange((groups) => {
+    // Preserve the existing add backstop. Revivals without placement use the
+    // shared request floor instead of superseding every in-flight response.
+    if (e.type === 'tab.added' && workspaceId && !groups.some((g) => g.id === workspaceId))
       generation++;
-    return;
-  }
-  if (e.type === 'tab.updated') {
-    let hit = false;
-    const next = cache.map((g) => {
-      const i = g.tabs.findIndex((t) => t.id === e.tab.id);
-      if (i < 0) return g;
-      hit = true;
-      const tabs = [...g.tabs];
-      tabs[i] = e.tab;
-      return { ...g, tabs };
-    });
-    // Order is NOT touched. This corpus is ranked per query (rankMentions /
-    // rankTabs) rather than displayed in its stored order, so re-sorting it
-    // would be work with no reader — and `sortSidebarTabs` is the sidebar's
-    // business, applied to the sidebar's own cache.
-    if (hit) {
-      generation++;
-      publish(next);
-    }
-    return;
-  }
-  if (e.type === 'tab.added') {
-    const has = cache.some((g) => g.tabs.some((t) => t.id === e.tab.id));
-    if (has) return;
-    let hit = false;
-    const next = cache.map((g) => {
-      if (g.id !== e.workspace_id) return g;
-      hit = true;
-      return { ...g, tabs: [...g.tabs, e.tab] };
-    });
-    // A workspace we are not holding: leave it to the next fetch rather than
-    // inventing a group out of an id and no name. But STOP CALLING THE CORPUS
-    // FRESH — we have just been told, by the server, about a chat that is not
-    // in it, so the next `loadAllTabs` must actually ask instead of being
-    // short-circuited by FRESH_MS. This costs no request of its own; it only
-    // declines to serve a known-incomplete answer as a current one. (Reachable
-    // whenever a workspace is created after the corpus was fetched.)
-    generation++;
-    if (hit) publish(next);
-    else settledAt = 0;
-    return;
-  }
-  if (e.type === 'tab.removed') {
-    let hit = false;
-    const next = cache.map((g) => {
-      if (!g.tabs.some((t) => t.id === e.tab_id)) return g;
-      hit = true;
-      return { ...g, tabs: g.tabs.filter((t) => t.id !== e.tab_id) };
-    });
-    if (hit) {
-      generation++;
-      publish(next);
-    }
+    if (missingLivePlacement(groups, e)) scheduleCorpusRefresh();
+    return replayRow(groups, e);
+  });
+  if (!cache) return;
+  const missing = missingLivePlacement(cache, e);
+  const next = replayRow(cache, e);
+  if (next !== cache) publish(next);
+  else if (workspaceId && !cache.some((g) => g.id === workspaceId)) settledAt = 0;
+  if (missing) {
+    pendingPlacement.add(workspaceId ?? '');
+    scheduleCorpusRefresh();
   }
 });
+
+/** Workspace ids a refresh was asked for. A landing that still does not carry
+ *  one is the server saying it never will — see `unplaceable`. */
+const pendingPlacement = new Set<string>();
 
 /**
  * A workspace's rows, reduced to what its readers can actually SEE change.
@@ -220,8 +250,28 @@ function signatureReplacer(key: string, value: unknown): unknown {
     : value;
 }
 
-function rowsSignature(tabs: readonly Tab[]): string {
-  return JSON.stringify(tabs, signatureReplacer);
+/** Compare wire values without allocating two corpus-sized JSON strings.
+ * Stop at the first change; shared rows and report strings compare by identity.
+ * Undefined object fields are omitted, just as on the JSON wire. */
+function sameRows(a: unknown, b: unknown, key = ''): boolean {
+  if (a === b) return true;
+  if (key === 'fill') return signatureReplacer(key, a) === signatureReplacer(key, b);
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, i) => sameRows(value, b[i]))
+    );
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left).filter((k) => left[k] !== undefined);
+  return (
+    keys.length === Object.keys(right).filter((k) => right[k] !== undefined).length &&
+    keys.every((k) => Object.hasOwn(right, k) && sameRows(left[k], right[k], k))
+  );
 }
 
 /**
@@ -239,10 +289,16 @@ function rowsSignature(tabs: readonly Tab[]): string {
  * enough; React compares by reference.
  */
 function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
-  if (cache && JSON.stringify(cache, signatureReplacer) === JSON.stringify(next, signatureReplacer))
-    return cache;
-  publish(next);
-  return next;
+  // What this answer places, and what it has now refused to place twice over.
+  notePlaced(next);
+  for (const id of pendingPlacement) {
+    if (id && !next.some((g) => g.id === id)) unplaceable.add(id);
+  }
+  pendingPlacement.clear();
+  const live = next.map((g) => ({ ...g, tabs: corpusTabs(g.tabs) }));
+  if (cache && sameRows(cache, live)) return cache;
+  publish(live);
+  return live;
 }
 
 /**
@@ -263,17 +319,52 @@ function publishFetched(next: WorkspaceTabs[]): WorkspaceTabs[] {
  * anyway.
  *
  * Both routes decorate through `orderedForWorkspace` (server/src/routes/tabs.ts),
- * so a group spliced in here is what `/api/tabs/all` would have returned for it.
+ * so a group spliced in here is what `/api/tabs/all` would have returned for
+ * it — WITH ONE EXCEPTION, which this function now repairs.
+ *
+ * `GET /api/tabs?workspaceId=` omits `spawn_report`'s TEXT (server/src/
+ * tab-list.ts, stripReportText): it was 56.5% of a 1.19 MB answer on the route
+ * the sidebar re-polls after every status edge. `/api/tabs/all` still carries
+ * it, because the corpus is what renders a spawn card.
+ *
+ * So a merge of the slim rows would overwrite the fat ones and every finished
+ * worker's card would quietly fall back to "Finished with nothing to report" —
+ * the text would be gone and nothing would say it had ever been there. The
+ * merge therefore KEEPS the text it already holds when the incoming row has
+ * none. Everything else about the row is taken from the fresh list, which is
+ * the whole point of merging it.
  *
  * NO FETCH, and no group invented — same rule as the push handlers above. A
  * corpus nobody has asked for stays unasked-for.
  */
+/**
+ * A fresh row, wearing the report text the corpus already had for it.
+ *
+ * Only when the fresh row has none: a row that genuinely carries text is
+ * newer, and a row whose report was DELETED keeps `spawn_report_state` null,
+ * so there is no case where this resurrects something that is gone.
+ *
+ * Takes the held rows AS A MAP. The caller builds it once; this used to take
+ * the array and scan it, which made the merge quadratic.
+ */
+function keepReportText(fresh: Tab, heldById: Map<string, Tab>): Tab {
+  if (fresh.spawn_report) return fresh;
+  const before = heldById.get(fresh.id);
+  return before?.spawn_report ? { ...fresh, spawn_report: before.spawn_report } : fresh;
+}
+
 export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): void {
-  if (!cache) {
-    // A list that landed while the first corpus fetch travels is newer than it.
-    if (inFlight) generation++;
-    return;
-  }
+  // Workspace history is deliberately wider than /all. Filter BEFORE recording
+  // the snapshot too, or a first-load replay would refill the structural corpus.
+  const liveTabs = corpusTabs(tabs);
+  rememberChange((groups) =>
+    groups.map((g) => {
+      if (g.id !== workspaceId) return g;
+      const held = new Map(g.tabs.map((t) => [t.id, t]));
+      return { ...g, tabs: liveTabs.map((t) => keepReportText(t, held)) };
+    }),
+  );
+  if (!cache) return;
   const group = cache.find((g) => g.id === workspaceId);
   // A workspace outside the corpus we hold — nothing to merge into. Same
   // reasoning as `tab.added` above: an id with no name is not a group.
@@ -283,9 +374,15 @@ export function mergeWorkspaceTabs(workspaceId: string, tabs: readonly Tab[]): v
   // anything moved, and every corpus reader would re-render on that interval —
   // including `ChatPane`, which is a transcript. That is exactly the poll-on-
   // everything this module exists to avoid, arriving through the back door.
-  if (rowsSignature(group.tabs) === rowsSignature(tabs)) return;
-  generation++;
-  publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: [...tabs] } : g)));
+  // ONE MAP, NOT A SCAN PER ROW. This was `held.find(...)` inside the map —
+  // O(n²), up to ~1.4 million comparisons per landing on a 1,200-row
+  // workspace, measured by review at 20–30 ms each time, on a merge that runs
+  // every time a workspace poll lands. The same mistake as the quadratic
+  // child scan fixed in 0aff773b, written by me one commit after fixing it.
+  const heldById = new Map(group.tabs.map((t) => [t.id, t]));
+  const merged = liveTabs.map((t) => keepReportText(t, heldById));
+  if (sameRows(group.tabs, merged)) return;
+  publish(cache.map((g) => (g.id === workspaceId ? { ...g, tabs: merged } : g)));
 }
 
 /** Coalesce a burst of status edges into one corpus refetch. Matches the 250ms
@@ -333,7 +430,14 @@ export function refreshCorpusForTab(tabId: string): void {
   // mount will fetch anyway. This is what keeps an idle page silent.
   if (listeners.size === 0) return;
   if (!cache.some((g) => g.tabs.some((t) => t.id === tabId))) return;
-  if (edgeTimer !== null) return;
+  scheduleCorpusRefresh();
+}
+
+/** Shared by status edges and live rows whose workspace placement is unknown. */
+function scheduleCorpusRefresh(): void {
+  refreshNeeded = true;
+  settledAt = 0;
+  if (listeners.size === 0 || edgeTimer !== null) return;
   // Held rather than dropped: a stream of edges still gets its refetch, just on
   // the floor's schedule instead of its own.
   const since = Date.now() - lastEdgeFetchAt;
@@ -440,23 +544,33 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
   if (cache && Date.now() - settledAt < FRESH_MS) return cache;
   if (inFlight) return inFlight;
   const issuedAt = generation;
+  // A refresh queued behind a slow read starts only now. Anchor the floor to
+  // that actual request, not the earlier timer that merely joined inFlight.
+  if (refreshNeeded) lastEdgeFetchAt = Date.now();
+  refreshNeeded = false;
+  const changes: CorpusChange[] = [];
+  inFlightChanges = changes;
   let superseded = false;
   inFlight = api
     .listAllTabs()
     .then((res) => {
+      let next = res.workspaces;
+      if (generation === issuedAt) {
+        for (const change of changes) next = change(next);
+      }
       if (generation !== issuedAt) {
         // Something newer than this answer arrived while it travelled (see
         // `generation`). Keep what we hold, do NOT mark it fresh, and go again
         // once this request has cleared. With nothing held (a first fetch), an
         // old answer beats none — the retry corrects it.
         superseded = true;
-        return cache ?? publishFetched(res.workspaces);
+        return cache ?? publishFetched(next);
       }
       supersededRetries = 0;
-      settledAt = Date.now();
+      settledAt = refreshNeeded ? 0 : Date.now();
       // Landing is what makes the corpus fresh; publishing is only what tells
       // the readers, and an answer identical to the one they hold is not news.
-      return publishFetched(res.workspaces);
+      return publishFetched(next);
     })
     .catch((err: unknown) => {
       // 404 = the route isn't there (older server). Anything else is a blip
@@ -466,6 +580,7 @@ export async function loadAllTabs(): Promise<WorkspaceTabs[]> {
     })
     .finally(() => {
       inFlight = null;
+      inFlightChanges = null;
       if (superseded && supersededRetries < MAX_SUPERSEDED_RETRIES) {
         supersededRetries++;
         void loadAllTabs();
@@ -479,14 +594,18 @@ export function resetAllTabsCache(): void {
   cache = null;
   settledAt = 0;
   inFlight = null;
+  inFlightChanges = null;
   unsupported = false;
   refetchQueued = false;
   generation = 0;
+  refreshNeeded = false;
   supersededRetries = 0;
   if (edgeTimer !== null) {
     clearTimeout(edgeTimer);
     edgeTimer = null;
   }
   lastEdgeFetchAt = 0;
+  unplaceable.clear();
+  pendingPlacement.clear();
   listeners.clear();
 }

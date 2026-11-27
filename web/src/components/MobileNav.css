@@ -1,0 +1,652 @@
+/* ──────────────────────────────────────────────────────────────────────
+   MobileNav — the phone's two levels (see lib/mobile-nav).
+
+   The list fills the column the chat would; the chat's header is the top
+   bar itself, so the second level costs no row the old breadcrumb did not.
+   ────────────────────────────────────────────────────────────────────── */
+
+.mobile-chat-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* ─── THE PHONE'S LIST IS THE RAIL ─────────────────────────────────────
+     Same NavTree, different container — so the same SURFACE and the same INK.
+     It was painted --bg-chrome under the pane's ink, which on a theme whose
+     rail has an identity of its own (wokintosh's teal desktop, riso's
+     ultramarine, memphis's black) threw that identity away on exactly the
+     surface where the list is the whole screen: "the chat list view in mobile
+     doesn't use the green background in wokintosh".
+     These are .sidenav's rebinds, verbatim, for the same reason they exist
+     there: everything in here — the header, the tree, the tab bar — reads
+     --fg/--fg-dim/--border directly. Kept identical to .sidenav by
+     themes.test.ts, so the two islands cannot drift. */
+  --fg: var(--rail-ink);
+  --bg-elev: var(--rail-elev);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  background: var(--rail-surface);
+  color: var(--fg);
+}
+.mobile-chat-list[hidden] {
+  display: none;
+}
+
+/* ─── The chat's header, in the top bar ─────────────────────────────── */
+
+.mobile-chat-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.mobile-chat-back {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* ─── THE MOST-PRESSED BUTTON, AND IT WAS STILL HARD TO HIT ───────────
+     It was 44px, which clears Apple's 44pt minimum — and "I often find it
+     hard to tap that back button" was still right, because the number is
+     not the whole story when the target is in a CORNER. The box ran from
+     x=0, so the chevron inside it sat 13–31px from the left edge: you aim
+     at the glyph, the glyph hugs the edge, and a thumb coming in from the
+     left lands half of itself off the screen. The left edge is also where
+     iOS watches for its own interactive-pop gesture.
+     58px keeps the box starting at x=0 — no dead strip between the screen
+     edge and the button, which would be worse — and moves the GLYPH to
+     20–38px, clear of the edge, while making the box half again as large.
+     The title beside it is flex:1 and truncates, so the 14px comes out of
+     a name that was being cut off anyway. */
+  width: 58px;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.mobile-chat-back:active {
+  background: var(--bg-hover);
+}
+.mobile-chat-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline-end: 8px;
+  /* The chat's name in the list's face and at the list's scale: --ui-font,
+     17px bold, as it was a moment ago as a row in the list. 13px of the
+     chrome face (a monospace on most themes) made the two bars read as two
+     products as much as the colours did. */
+  font-family: var(--ui-font);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+.mobile-chat-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+.mobile-chat-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ─── ONE CHROME ACROSS THE LIST AND THE CHAT ─────────────────────────
+   "The bar at the top of the chat should have some similarities to the full
+   screen chat list — the two views feel like they use completely separate
+   palettes." Measured before: the list's header is the rail (its surface,
+   its ink); the chat's top bar was --bg-tabbar in the pane's ink — near-black
+   against a mid-dark rail on the dark themes, and PALE against a deep rail on
+   alucard, github-light, acme, riso and memphis, which is the whole split he
+   saw. So the chat's bar joins the rail: the same island as the list
+   (.sidenav's rebinds, kept equal by themes.test.ts) on the same surface, and
+   moving between the two views changes the content under one band of chrome,
+   the way Slack's does. The pane below is untouched.
+   Scoped by .mobile-chat-head, which only renders in the phone layout — the
+   same bar on the desktop's '/' picker is not this one. */
+.ws-tabbar:has(.mobile-chat-head) {
+  --fg: var(--rail-ink);
+  --bg-elev: var(--rail-elev);
+  --fg-dim: var(--rail-ink-dim);
+  --fg-faint: var(--rail-ink-faint);
+  --bg-hover: var(--rail-hover);
+  --border: var(--rail-border);
+  --border-strong: var(--rail-border);
+  --accent: var(--rail-accent);
+  --status-ready: var(--rail-status-ready);
+  --status-working: var(--rail-status-working);
+  --status-blocked: var(--rail-status-blocked);
+  --status-dead: var(--rail-status-dead);
+  background: var(--rail-surface);
+  color: var(--fg);
+}
+
+/* ─── The list's header: muxpad, new chat, settings — ONE row ───────── */
+
+.mcl-head {
+  flex: 0 0 52px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding-inline: 14px 12px;
+  color: var(--fg);
+}
+.mcl-head > .brand {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.mcl-head-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.1875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.mcl-head-icon,
+.mcl-head .icon-btn {
+  flex: 0 0 auto;
+  inline-size: 40px;
+  block-size: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline: -4px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.mcl-head-icon:active,
+.mcl-head .icon-btn:active {
+  background: var(--bg-hover);
+}
+.mcl-head .settings-wrap {
+  flex: 0 0 auto;
+  height: auto;
+  align-items: center;
+}
+
+/* ─── Sections: each kept mounted, only the current one shown ─────────── */
+
+.mcl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-section[hidden] {
+  display: none;
+}
+.mcl-section > .navtree {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 4px 12px;
+}
+
+/* ─── A row in Unread / Activity: name over its last message ──────────── */
+
+/* ─── A LIST, NOT A BLOCK ────────────────────────────────────────────────
+   "It's a bit like a big block right now." It was: rows butted straight
+   against each other on one flat ground, with a 15px preview under a 17px
+   name in the SAME ink as the timestamp. Nothing receded, so there was no
+   layer to scan by and the eye had to read every line to find a row.
+   Three changes, none of them a new colour — the preview and the time are
+   both held at 4.5:1 by the theme sweep and dimming them further would fail
+   it on the tighter palettes:
+     · a hairline BETWEEN rows, inset to the text column so the emoji gutter
+       reads as a margin rather than a cell (the iOS/Slack convention);
+     · the preview a step down from the name, so name-then-preview is a
+       hierarchy rather than two sentences;
+     · more air between rows than inside one, which is what makes a row read
+       as a unit at a glance. */
+.mcl-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--fg);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Between rows only — never above the first or below the last, where it
+   would read as a border on the list itself. Mixed from the surrounding ink
+   so it follows every theme, and kept faint: this is a separator, not a
+   rule, and at full strength eleven of them become the loudest thing on a
+   screen whose content is text.
+   DRAWN AS A PSEUDO-ELEMENT so it can start at the TEXT column (14px of
+   padding + 28px of emoji gutter + 12px of gap = 54px) and leave the emoji
+   column reading as a margin, which is the iOS and Slack convention. The
+   first attempt insetted the row itself with a margin and pulled the emoji
+   back with a negative one; that moves the row, and a separator must never
+   be able to move anything. */
+.mcl-row {
+  position: relative;
+}
+.mcl-row + .mcl-row::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 54px;
+  inset-inline-end: 0;
+  top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+  pointer-events: none;
+}
+/* ─── HOVER IS A SURFACE, NEVER AN UNDERLINE ─────────────────────────────
+   The row is an <a>, so the sheet's `a:hover { text-decoration: underline }`
+   applied to everything inside it: the name, the "Personal · now" meta and
+   both lines of the preview all picked up a rule at once — "text underline
+   for everything on hover sucks", and the screenshot is three underlined
+   paragraphs in a box. A row is not a link in a sentence; what says "this
+   one" is the row lighting up.
+
+   The hovered row also drops the separator above it AND the one below, so
+   the lit surface has clean edges instead of a line crossing it. */
+.mcl-row:hover,
+.mcl-row:focus-visible {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.mcl-row:hover::before,
+.mcl-row:hover + .mcl-row::before {
+  border-top-color: transparent;
+}
+.mcl-row:active {
+  background: var(--bg-hover);
+}
+.mcl-row-emoji {
+  flex: 0 0 28px;
+  font-size: 22px;
+  line-height: 28px;
+  text-align: center;
+}
+.mcl-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mcl-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.mcl-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* 17px, like a chat name in the list — the same name on the same surface. */
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.mcl-row[data-unread="true"] .mcl-row-name {
+  font-weight: 800;
+}
+.mcl-row-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-self: center;
+}
+.mcl-row-meta {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  padding-inline-start: 8px;
+  /* Smaller than the preview, not fainter: it is held at 4.5:1 by the sweep,
+     so the recession has to come from size. Workspace and time are metadata
+     about the row; the preview is the row's content. */
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.mcl-row-preview {
+  /* A STEP BELOW THE NAME. It was 0.9375rem under a 1.0625rem name — close
+     enough that the two read as one paragraph, which is what made the list a
+     block. 0.875rem keeps it comfortably readable while letting the name be
+     the thing you scan. */
+  font-size: 0.875rem;
+  line-height: 1.35;
+  color: var(--fg-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  /* ─── TWO LINES' WORTH OF ROOM, WHETHER OR NOT THERE ARE TWO ────────────
+     The second line arrives after the row does: the list paints with each
+     chat's headline (one line, usually) and the real last message replaces it
+     when `/api/tabs/previews` lands. Clamped at two lines and sized by its
+     content, that re-flowed every row the moment the text arrived — "the
+     lists load and then like 200-500ms later they add text descriptions which
+     make each chat taller etc not good."
+     Reserving the clamp's own height makes the row a fixed size from its
+     first paint, so the text lands INTO the space already held for it and
+     nothing below it moves. The cost is an empty line under a one-line
+     preview, which is the cheap side of the trade: a list that does not jump
+     is worth more than the 19px. */
+  min-height: calc(2 * 1.35em);
+}
+/* The monitor sits ON the line, before the words — `vertical-align` rather
+   than a flex row, so the preview keeps the clamp box (and with it the height
+   every other row reserves). */
+.mcl-row-elsewhere-icon {
+  vertical-align: -2px;
+  margin-inline-end: 6px;
+}
+.mcl-row-preview[data-fallback="true"] {
+  font-style: italic;
+  color: var(--fg-dim);
+}
+
+/* ─── Empty states ────────────────────────────────────────────────────── */
+
+.mcl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 96px 32px 0;
+  text-align: center;
+  color: var(--fg-dim);
+}
+.mcl-empty svg {
+  color: var(--accent, var(--fg-dim));
+  margin-bottom: 6px;
+}
+.mcl-empty-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+.mcl-empty-sub {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* ─── Search: the ⌘K body, inline ─────────────────────────────────────── */
+
+.mcl-search {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mcl-search .cmdk-field {
+  margin: 4px 12px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* --bg-elev, which the list's island points at the rail's raised box. It was
+     --bg — the PANE's ground, which this island does not rebind — so on a
+     deep rail the query was typed in rail ink on the pane's paper: white on
+     cream in wokintosh. */
+  background: var(--bg-elev);
+}
+.mcl-search .cmdk-input {
+  /* 16px or iOS zooms the page when the field takes focus. */
+  font-size: 16px;
+}
+.mcl-search .cmdk-results {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  /* THE KEYBOARD'S HEIGHT, RESERVED — so the results below its line can be
+     SCROLLED to. The layout viewport does not shrink for a software keyboard
+     (iOS, and Chrome since 108), so without this the scroller's content fits
+     its full-screen box, there is no overflow at all, and those rows are
+     unreachable rather than merely off-screen. Measured on the old sheet:
+     5 of 12 results hidden with `scrollHeight === clientHeight`. The variable
+     is written on `.mobile-chat-list` by trackKeyboardInset and is 0px
+     everywhere there is no keyboard. */
+  padding-bottom: var(--chat-keyboard-inset, 0px);
+}
+
+/* ─── The bottom tab bar ──────────────────────────────────────────────── */
+
+.mcl-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  /* ─── A BAR THE LIST SCROLLS UNDER, NOT THE LIST'S LAST ROW ──────────────
+     "Make it a bit more distinct visually — it blends with the list too
+     much." It was --rail-surface under a 1px --border: once the list moved
+     onto the rail too, the two grounds were the same colour and a hairline
+     was the whole of the separation — teal on teal in wokintosh.
+
+     Three moves, all in the rail's own family so no theme gets a foreign
+     object: the rail's own ground RAISED by a mix of its ink (below); a top edge
+     drawn in the rail's ink rather than a border the colour of the ground;
+     and a soft shadow cast UPWARD, so a row passing out of view reads as
+     passing beneath. Stacked above the list so the shadow lands on its rows.
+
+     Flat, full width, same height. Not a floating pill: Slack carries one on
+     a white, flat list, and on demoscene's scanlines or riso's ultramarine
+     it would read as a stray sticker. */
+  position: relative;
+  z-index: 1;
+  /* 8% of the rail's ink over the rail, not --rail-elev's 6%: at 6% the lift
+     was there and hard to see at arm's length. 8% is the ceiling — at 10%
+     tokyo-night's resting label (the dimmest pairing) measured 4.37:1, and the
+     tree sweep in themes.test.ts, which holds every theme's labels on THIS
+     ground, failed it. The edge and the shadow carry the rest.
+     Declared as --bg-elev so the badge's ring and anything else inside the bar
+     reads the bar's ground, and so a theme can replace it (wokintosh does). */
+  --bg-elev: color-mix(in srgb, var(--rail-ink) 8%, var(--rail-surface));
+  background: var(--bg-elev);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+  box-shadow: 0 -12px 22px -10px rgb(0 0 0 / 0.6);
+  /* ─── THE HOME INDICATOR, AND HOW MUCH OF IT TO CLEAR ────────────────────
+     The raised ground runs to the screen's edge under the indicator. The
+     CONTENT used to clear the whole inset (`padding-bottom: env(…)`), which on
+     a phone with a home indicator is ~34px: "bottom bar icons too high in the
+     bar" — the labels sat in the top half with an empty band of the bar's
+     ground under them nearly as deep as the icons. Invisible headless, where
+     the inset is 0.
+
+     The indicator strip is a region apps may draw under — the system paints
+     its pill over it — so the content clears the PILL, not the strip: the
+     inset less 20px. At 34px that is 14px, which with the tab's own 6px puts
+     the labels' baseline ~20px above the edge and ~7px above the pill, the
+     proportion of Slack's bar. At an inset of 0 (a browser, a desktop PWA,
+     Android without gesture nav) max() leaves it 0 — the bar as it was.
+     The tap target is the tab, which this does not touch: 52px tall.
+
+     Through a custom property so the inset can be simulated in a browser by
+     setting --mcl-inset on the bar — the formula under test is the shipped
+     one. */
+  --mcl-inset: env(safe-area-inset-bottom, 0px);
+  padding-bottom: max(0px, calc(var(--mcl-inset) - 20px));
+}
+/* ─── …AND WHEN THE INSET IS A LIE ────────────────────────────────────────
+   The formula above is right and it assumed `env(safe-area-inset-bottom)`
+   tells the truth. It stopped doing so when `viewport-fit=cover` was removed
+   from the viewport meta (see index.html — it was half of the iOS 26 Liquid
+   Glass fix): without `cover` the insets report 0, and measured on his phone
+   the web view is 812 tall inside an 874 screen — 62px taken at the TOP and
+   nothing at the bottom. So the bar sits flush against an edge the home
+   indicator still crosses, and the pill lands on the labels: "bottom bar still
+   too clipped on mobile".
+
+   A floor, in standalone only. 14px is what the formula above produces at the
+   34px inset it was tuned against, so the bar looks the same on a phone that
+   reports its inset and on one that does not. A browser tab keeps 0 — there
+   the page is not under anything. A phone with no home indicator spends 14px
+   of the bar's own ground, which is the cheap side of the trade. */
+@media (display-mode: standalone) {
+  .mcl-tabs {
+    /* 8px, not 14. 14 was what the inset formula produced at the 34px it was
+       tuned against, and with the tab's own padding it put 20px of the bar's
+       ground under the labels — "too much of a margin at the bottom. It's too
+       tall." 8px keeps the labels off the home-indicator pill (which the
+       system draws about 8px up from the edge) and takes 6px off the bar.
+       Below about 6px the pill starts to cross the labels, which is the
+       complaint this floor was added for in the first place. */
+    padding-bottom: max(8px, calc(var(--mcl-inset) - 20px));
+  }
+}
+/* THE LIST'S SECONDARY INK IS --fg-dim, NEVER --fg-faint. These four (the tab
+   labels, a row's time, a fallback preview, the empty state) were --fg-faint,
+   and once the list moved onto the rail they measured 3.26–4.40:1 on ten of
+   eleven themes — 11px text. Dim is the quiet rung every theme holds at 4.5:1
+   or better (themes.test.ts, the tree sweep). */
+.mcl-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  /* 6/4, not 7/6. "The bottom bar has too much of a margin at the bottom,
+     it's too tall." Measured: 54px of bar in a browser and 68px in the
+     installed app, where the floor below adds 14 more. Three px come out of
+     the tab's own box here and six out of that floor; the tab is still 47px
+     tall, which clears the 44pt target without the bar carrying a band of
+     empty ground under the labels. */
+  padding: 6px 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mcl-tab[aria-current="page"] {
+  color: var(--fg);
+}
+/* ─── WHICH TAB YOU ARE ON, IN COLOUR ────────────────────────────────────
+   "The active indicator on that icon is really too subtle. We need some
+   color there or something." It was the label's ink stepping --fg-dim → --fg
+   and the glyph's stroke 2.0 → 2.6: true to the line-art set and far too
+   quiet on a bar you glance at.
+
+   A PILL TINTED WITH THE ACCENT, AND THE INK LEFT ALONE. Two stronger
+   versions were measured across all eleven themes and both break somewhere:
+
+     glyph in `--accent-fg` on a FILLED accent pill — fails in six themes
+     (1.15:1 in wokintosh, 1.41 in memphis), because the list rebinds
+     --accent to --rail-accent and nothing rebinds the ink that pairs with it;
+
+     glyph in the bar's own ground punched out of a filled pill — fails in
+     riso (2.49:1) and wokintosh (1.15:1), whose rail accents are pale enough
+     that the bar's ground is no darker than they are.
+
+   Every theme's rail accent is a LIGHT colour, so no single ink works on a
+   full fill. A 30% tint of the accent over the bar's own ground does: the
+   glyph keeps the ink the theme already guarantees, and the worst case over
+   the eleven is 3.26:1 (wokintosh) — above the 3:1 a meaningful glyph owes.
+   40% drops wokintosh to 2.77, so 30 is the ceiling, not a preference.
+
+   Plus a 1px inset ring mixed from the bar's ink, so the pill has an edge
+   even where the tint is close to the chrome, and the label goes bold. Three
+   signals, none of which depends on a theme getting its accent right. */
+.mcl-tab-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Wider than the 24px glyph so the pill reads as a pill, and the same
+     HEIGHT, so marking a tab cannot make the bar taller. */
+  width: 38px;
+  height: 24px;
+  border-radius: 999px;
+}
+.mcl-tab[aria-current="page"] .mcl-tab-icon {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-elev));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 22%, transparent);
+}
+.mcl-tab[aria-current="page"] .mcl-tab-label {
+  font-weight: 700;
+}
+/* The glyph carries FULL ink at rest AND on the current tab — see the pill
+   above for why its ink is the one thing that does not change. A glyph is not
+   text: its thin, anti-aliased stroke at the label's colour read fainter than
+   the word under it, so the others' icons are never dimmed to make the
+   current one stand out either. */
+.mcl-tab-glyph {
+  color: var(--fg);
+}
+.mcl-tab-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.mcl-tab-badge {
+  position: absolute;
+  top: -4px;
+  left: 15px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--danger, #e01e5a);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  /* The bar's own ground, so the ring reads as a cut-out, not a halo. */
+  box-shadow: 0 0 0 2px var(--bg-elev);
+}
+
+/* ─── THE SAME BAR, IN A CHAT ────────────────────────────────────────────
+   "Bottom bar colour scheme in chat view is not good in some themes."
+
+   `.mcl-tabs` builds its ground out of the RAIL's tokens — `--rail-ink` over
+   `--rail-surface` — which is right on the chat LIST, because the list sits
+   on the rail island and the bar's labels inherit the rail's ink from it.
+
+   In a chat there is no island. The bar's labels inherit the APP's `--fg`,
+   while its background is still mixed from the rail's palette, so ink and
+   ground come from two different families: on the themes where those
+   families diverge most (wokintosh's teal rail under a cream page, the dark
+   rails under a light pane) the result is a dark plate wearing dark text, or
+   a slab that reads as a foreign object dropped on the page.
+
+   So the chat's bar mixes the SAME RECIPE from the surroundings it actually
+   has. Not a second design — the identical 8% lift and the identical upward
+   shadow — just computed from `--fg` over `--bg` instead of the rail's pair,
+   so it belongs to the page it is sitting on and its labels are guaranteed
+   to be the ink of that page. */
+.mcl-tabs.-onchat {
+  --bg-elev: color-mix(in srgb, var(--fg) 8%, var(--bg));
+  background: var(--bg-elev);
+  /* The rail version draws its top edge in --fg at 30%, where --fg IS the
+     rail's ink. Here --fg is the page's, and 30% of it on an 8% lift is a
+     hard line; 18% reads as the same edge at the same strength. */
+  border-top-color: color-mix(in srgb, var(--fg) 18%, transparent);
+}

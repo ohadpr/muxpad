@@ -77,6 +77,26 @@ describe('the profile', () => {
 });
 
 describe('the launch spec as a whole', () => {
+  /**
+   * Chrome sizes its disk cache from the FREE DISK by default, and a driven
+   * browser earns nothing from a big one: it visits a handful of pages per
+   * session and rarely returns to them. Measured before the cap — one session
+   * browser held 1.2 GB of Cache, 79 MB of Code Cache and 55 MB of Service
+   * Worker, 1.3 GB for a single chat, out of 1.7 GB across every profile on
+   * the machine.
+   */
+  it('caps the disk cache, which is otherwise a fraction of the free disk', () => {
+    const argv = chromeArgv(OPTS);
+    const cap = Number(/--disk-cache-size=(\d+)/.exec(argv.join(' '))?.[1]);
+    expect(cap).toBeGreaterThan(0);
+    // Big enough for a heavy page, small enough that a forgotten profile
+    // cannot quietly become a gigabyte.
+    expect(cap).toBeLessThanOrEqual(256 * 1024 * 1024);
+    const media = Number(/--media-cache-size=(\d+)/.exec(argv.join(' '))?.[1]);
+    expect(media).toBeGreaterThan(0);
+    expect(media).toBeLessThanOrEqual(cap);
+  });
+
   it('names the app row after the profile it owns', () => {
     const spec = browserLaunchSpec(OPTS);
     expect(spec.slug).toBe('browser-shopping');

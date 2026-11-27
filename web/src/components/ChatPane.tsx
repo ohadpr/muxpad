@@ -101,6 +101,7 @@ import {
   threadSpawnPairs,
   toMentionChats,
   withContentRows,
+  withSpawnChildren,
 } from '../lib/chat-mention';
 import {
   actionRunExpanded,
@@ -141,6 +142,8 @@ import { documentVisible } from '../lib/seen-ack';
 import { composerAfterLateAck, watchdogVerdict } from '../lib/send-watchdog';
 import { NO_ROUNDS, loadSpawnRounds } from '../lib/spawn-rounds';
 import { subChatIsOpen, subChatsOf } from '../lib/sub-chats';
+import { mergeTabGroups, rankLiveThenHistory, useTabLookup } from '../lib/tab-lookup';
+import { onlyReferenced, transcriptRefs } from '../lib/transcript-mentions';
 import { uploadError } from '../lib/upload-error';
 import {
   type UploadItem,
@@ -813,6 +816,48 @@ function attachmentExtFromName(name: string): string | null {
  *  fresh `[]` every render would defeat that for the whole transcript. */
 const NO_TERMS: readonly string[] = [];
 
+/** How often a conversation with children re-reads its rounds when nothing
+ *  about its children has moved — see the safety-net effect in ChatPane. */
+export const SPAWN_ROUNDS_NET_MS = 60_000;
+
+/**
+ * WHAT THIS CHAT'S ROUNDS DEPEND ON, as one string: every field of a child's
+ * row that moves when one of its rounds opens, ends or gets its result.
+ *
+ *   lastUserAt                      a round OPENS on the send that hands it a job
+ *   status                          …and ENDS when that turn does
+ *   done / doneReason / doneAt      retiring, delivering, being revived
+ *   report state + at, artifacts, task   the result, and the job it answers
+ *
+ * Everything else — a headline, the busy chat across the install — stays out,
+ * because leaving it out is the point. Empty means no children: nothing to ask.
+ */
+export function spawnRoundsSignature(
+  corpus: readonly MentionChat[],
+  tabId: string | undefined | null,
+): string {
+  if (!tabId) return '';
+  return corpus
+    .filter((c) => c.parentId === tabId && c.tabId !== tabId)
+    .map((c) =>
+      [
+        c.tabId,
+        c.createdAt ?? '',
+        c.lastUserAt ?? '',
+        c.status ?? '',
+        c.done ? 1 : 0,
+        c.doneReason ?? '',
+        c.doneAt ?? '',
+        c.task ?? '',
+        c.report?.state ?? '',
+        c.report?.at ?? '',
+        c.artifacts?.join('\u0001') ?? '',
+      ].join('\u0002'),
+    )
+    .sort()
+    .join('\u0003');
+}
+
 /*
  * The row-measuring helpers — `ANCHOR_ATTR`, `anchorRows`, `captureAnchor`,
  * `anchorAt`, `findAnchorRow`, `firstVisibleRow` — used to live here, and are now
@@ -835,7 +880,10 @@ const NO_TERMS: readonly string[] = [];
  * is owned by the pane's Terminal/Chat toggle, so by the time chat is showing,
  * it is already the driver.
  */
-export function ChatPane({
+/** `transcriptRefs` of a transcript with nothing to look up, serialized. */
+const NO_TRANSCRIPT_REFS = JSON.stringify({ tabIds: [], paneIds: [], names: [], nameText: '' });
+
+export const ChatPane = memo(function ChatPane({
   paneId,
   tabId,
   active,
@@ -1158,6 +1206,10 @@ export function ChatPane({
 
   /** Which chat this pane belongs to — excluded from its own picker. */
   const myChat = useMemo(() => paneIndex(corpus).get(paneId), [corpus, paneId]);
+  // THIS CHAT'S OWN TAB, even when the corpus has dropped it: the live corpus
+  // carries live work only, so a finished chat you are reading has no row
+  // there. The pane's `tabId` prop still names it.
+  const ownTabId = myChat?.tabId ?? (tabId || undefined);
 
   // Browsers muxpad owns. The machinery lives in the hook; the CARDS are placed
   // in the log below, at the moment each thing happened.
@@ -1166,7 +1218,7 @@ export function ChatPane({
     open: openBrowser,
     answer: answerBrowser,
     modal: browserModal,
-  } = useBrowsers({ by: paneId, tabId: myChat?.tabId ?? '' });
+  } = useBrowsers({ by: paneId, tabId: ownTabId ?? '' });
   // A link tapped in a message opens in a sheet over the chat when the page can
   // be framed, and otherwise is left to its own target=_blank — the OS browser.
   // See lib/link-sheet.
@@ -1198,7 +1250,89 @@ export function ChatPane({
     paneId: null,
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const subChats = useMemo(() => subChatsOf(corpus, myChat?.tabId ?? ''), [corpus, myChat?.tabId]);
+  // ── THE ROUNDS — and, through them, every child this chat has spawned ──
+  // Read HERE, ahead of the drawer, because the drawer needs them too: the
+  // corpus carries live work only, and a finished worker's row now arrives
+  // with its parent's rounds. Comments on why each effect is shaped as it is
+  // stay with it below.
+  const myTabId = myChat?.tabId;
+  // THE PARENT IS KNOWN WITHOUT THE CORPUS. The corpus carries live work only,
+  // so a finished chat — and every child it delivered — may be absent from it;
+  // the pane's own `tabId` prop still names the conversation, and that is all
+  // the rounds request needs.
+  const spawnParent = ownTabId;
+  // KEYED BY PARENT, so switching conversations can never draw the previous
+  // one's cards for a frame (or for ever, if the new answer fails): an answer
+  // for any other parent reads as no answer at all.
+  const [roundsHeld, setRoundsHeld] = useState<{ parent: string; rounds: SpawnRoundsByChild }>({
+    parent: '',
+    rounds: NO_ROUNDS,
+  });
+  const spawnRounds = roundsHeld.parent === spawnParent ? roundsHeld.rounds : NO_ROUNDS;
+  // ONLY A CHANGE TO ONE OF THIS CHAT'S OWN CHILDREN TRIGGERS A READ. This
+  // effect used to run on every corpus change, and the corpus changes whenever
+  // ANY agent on the install changes state: measured on the live server, one
+  // idle viewer of a coordinator chat (192 children, 2 live) asked for its
+  // 237 KB of rounds 47 times a minute at 100–200 ms of server time each — on
+  // the single thread every chat open waits behind. The corpus is NOT a
+  // dependency here, deliberately: even unforced, every patch re-asked through
+  // a 4 s cache, which under forty busy agents is a real read every 4 s.
+  const childSignature = useMemo(
+    () => spawnRoundsSignature(corpus, spawnParent),
+    [corpus, spawnParent],
+  );
+  // Children the CORPUS knows of, or ones the last answer named — a parent
+  // whose workers have all finished has none of the first kind.
+  const hasChildren =
+    childSignature !== '' || spawnRounds.size > 0 || (spawnRounds.children?.length ?? 0) > 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: childSignature is the re-read trigger, not an input.
+  useEffect(() => {
+    // ASKED ONCE FOR EVERY KNOWN PARENT, children in the corpus or not: the
+    // corpus no longer carries finished work, so an empty signature no longer
+    // means "spawned nothing". After that, a moved signature (a live child's
+    // round starting or ending) re-asks, forced past the cache; the loader
+    // coalesces changes during a read into a trailing refresh (lib/spawn-rounds).
+    if (!spawnParent) return;
+    let live = true;
+    void loadSpawnRounds(spawnParent, true).then((r) => {
+      if (live) setRoundsHeld({ parent: spawnParent, rounds: r });
+    });
+    return () => {
+      live = false;
+    };
+  }, [spawnParent, childSignature]);
+  // THE NET UNDER IT: a round can change without its row moving — a silent
+  // round marked `failed` at delivery, an orphan closed by the sweep, a late
+  // report on a child that has already left the corpus — and no signature can
+  // see that. A slow re-ask catches it within a minute.
+  useEffect(() => {
+    // ONLY FOR THE CONVERSATION IN FRONT OF YOU. Every visited chat stays
+    // MOUNTED (AppLayout keeps the hosts alive), so with no `active` guard a
+    // session that had opened eight coordinators ran eight of these forever,
+    // each re-fetching every child's rounds a minute apart for a pane nobody
+    // was looking at. Found by review. The effect above still runs for a
+    // hidden pane — it is driven by a signature that actually moved, and it
+    // is what keeps the cards correct when you come back.
+    if (!spawnParent || !hasChildren || !active) return;
+    let live = true;
+    const timer = window.setInterval(() => {
+      void loadSpawnRounds(spawnParent).then((r) => {
+        if (live) setRoundsHeld({ parent: spawnParent, rounds: r });
+      });
+    }, SPAWN_ROUNDS_NET_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [spawnParent, hasChildren, active]);
+  // THE CORPUS AS THIS CONVERSATION'S CHILDREN SEE IT — live rows, plus the
+  // finished children the rounds answer put back. The drawer and the cards
+  // read the same list, so a worker cannot be in one and missing from the other.
+  const spawnCorpus = useMemo(() => withSpawnChildren(corpus, spawnRounds), [corpus, spawnRounds]);
+  const subChats = useMemo(
+    () => subChatsOf(spawnCorpus, spawnParent ?? ''),
+    [spawnCorpus, spawnParent],
+  );
   const runningSubs = subChats.filter(subChatIsOpen).length;
   /**
    * A CHILD CHAT IS ON SCREEN, IN THE DRAWER.
@@ -1213,28 +1347,78 @@ export function ChatPane({
 
   /** The query under the caret, trimmed — what everything below keys off. */
   const mentionQuery = mentionRun?.query.trim() ?? '';
-  const mentionNameRows = useMemo(
-    () =>
-      mentionRun
-        ? rankMentions(corpus, mentionRun.query, { excludeTabId: myChat?.tabId })
-        : ([] as MentionRow[]),
-    [corpus, mentionRun, myChat],
-  );
   // Only ever the hits for the query being shown. A previous query's results are
   // not "slightly stale", they are a row that sends work to an unrelated chat.
   const mentionHits = useMemo(
     () => hitsFor(mentionSearch, mentionQuery),
     [mentionSearch, mentionQuery],
   );
+  /**
+   * THE PICKER'S CORPUS: the live one, plus finished history asked for.
+   *
+   * The shared corpus carries live chats only (lib/tab-lookup says why), and
+   * `@` still has to reach a chat archived last month — by NAME (looked up,
+   * debounced, under the instant rows) and by what was SAID in it (an archive
+   * hit whose pane the live corpus does not hold). A chat you PICKED is kept
+   * after the query that found it closes — and refetched by its exact tab id
+   * after a reload, never by its (ambiguous) name: `runIsSettled` must still
+   * see its name, and `mentionedChats` must still resolve the pick's id at send.
+   *
+   * The picker, the composer's chips and the send read this. The LOG keeps
+   * `corpus`, so this pane's transcript is not redrawn by a lookup.
+   */
+  const mentionUnresolvedPanes = useMemo(() => {
+    const panes = paneIndex(corpus);
+    const out: string[] = [];
+    for (const hit of mentionHits) {
+      const p = hit.session?.pane_id;
+      if (p && !panes.has(p) && !out.includes(p)) out.push(p);
+    }
+    return out;
+  }, [corpus, mentionHits]);
+  const mentionPickIds = useMemo(() => livePicks.map((p) => p.tabId), [livePicks]);
+  const mentionLookup = useTabLookup({
+    query: mentionRun ? mentionQuery : '',
+    paneIds: mentionUnresolvedPanes,
+    tabIds: mentionPickIds,
+  });
+  const mentionCorpus = useMemo(
+    () =>
+      mentionLookup.groups.length === 0
+        ? corpus
+        : toMentionChats(mergeTabGroups(corpusGroups, mentionLookup.groups)),
+    [corpus, corpusGroups, mentionLookup.groups],
+  );
+  // The looked-up rows the live corpus does not hold, ranked UNDER the live
+  // ones (see rankLiveThenHistory) so a debounced answer never reorders
+  // the rows the keystroke already drew.
+  const mentionHistory = useMemo(() => {
+    if (mentionCorpus === corpus) return [] as MentionChat[];
+    const live = new Set(corpus.map((c) => c.tabId));
+    return mentionCorpus.filter((c) => !live.has(c.tabId));
+  }, [corpus, mentionCorpus]);
+  const mentionNameRows = useMemo(
+    () =>
+      mentionRun
+        ? rankLiveThenHistory(
+            corpus,
+            mentionHistory,
+            (pool) => rankMentions(pool, mentionRun.query, { excludeTabId: ownTabId }),
+            (r) => r.chat.tabId,
+            MAX_MENTION_ROWS,
+          )
+        : ([] as MentionRow[]),
+    [corpus, mentionHistory, mentionRun, ownTabId],
+  );
   const mentionRows = useMemo(
     () =>
       mentionRun
-        ? withContentRows(mentionNameRows, mentionHits, corpus, {
-            excludeTabId: myChat?.tabId,
+        ? withContentRows(mentionNameRows, mentionHits, mentionCorpus, {
+            excludeTabId: ownTabId,
             limit: MAX_MENTION_ROWS,
           })
         : ([] as MentionRow[]),
-    [mentionNameRows, mentionHits, corpus, mentionRun, myChat],
+    [mentionNameRows, mentionHits, mentionCorpus, mentionRun, ownTabId],
   );
   // Open only while there is something to choose. A query that matches nothing
   // must give Enter back to the composer rather than swallow it.
@@ -1246,7 +1430,6 @@ export function ChatPane({
   // event left behind — which on a phone is the value from before the
   // keyboard came up. One measure here costs a layout read on a keystroke
   // that was already going to re-render the list.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: measureRef is a stable ref; mentionOpen is the trigger.
   useEffect(() => {
     if (mentionOpen) measureRef.current();
   }, [mentionOpen]);
@@ -1326,7 +1509,7 @@ export function ChatPane({
 
   const syncMentionRun = (text: string, caret: number) => {
     if (mentionJustPicked.current) return;
-    const live = nextMentionRun(text, caret, corpus, mentionDismissed);
+    const live = nextMentionRun(text, caret, mentionCorpus, mentionDismissed);
     if (!live) {
       if (mentionRun) setMentionRun(null);
       // The `@` this dismissal belonged to is gone (deleted, or the caret left
@@ -1481,28 +1664,9 @@ export function ChatPane({
   // measured at five handovers against one pair. `spawnCards` draws a pair per
   // ROUND when it has them, and falls back to the tab pair when it does not
   // (the corpus arrives first, and an older server sends none).
-  const [spawnRounds, setSpawnRounds] = useState<SpawnRoundsByChild>(NO_ROUNDS);
-  const myTabId = myChat?.tabId;
-  useEffect(() => {
-    if (!myTabId) return;
-    // NOTHING TO ASK FOR when this chat has spawned nothing, which is most
-    // chats — and the corpus is how that is known, which is also why it belongs
-    // in the dependency list: a round starting or ending moves the child's tab
-    // row, so the corpus patch that lands for it is exactly the moment these go
-    // stale. Invalidate even a fresh or in-flight read; the loader coalesces
-    // changes during a read into a trailing refresh (lib/spawn-rounds).
-    if (!corpus.some((c) => c.parentId === myTabId)) return;
-    let live = true;
-    void loadSpawnRounds(myTabId, true).then((r) => {
-      if (live) setSpawnRounds(r);
-    });
-    return () => {
-      live = false;
-    };
-  }, [myTabId, corpus]);
   const spawnedCards = useMemo(
-    () => spawnCards(corpus, myChat?.tabId, MAX_SPAWN_CARDS, spawnRounds),
-    [corpus, myChat, spawnRounds],
+    () => spawnCards(corpus, spawnParent, MAX_SPAWN_CARDS, spawnRounds),
+    [corpus, spawnParent, spawnRounds],
   );
 
   useLayoutEffect(() => {
@@ -1585,9 +1749,93 @@ export function ChatPane({
   // exists: rows are drawn by a memoized component reached from several call
   // sites, and threading a map through all of them would be a prop on every
   // event shape in the file.
+  //
+  // THE LOG'S CORPUS: live chats, plus exactly the finished chats this OPEN
+  // transcript references — never global history, never the picker's search
+  // results. The live corpus no longer holds finished chats, so without this a
+  // chip, a sender's attribution or a card for one degrades to plain text or a
+  // bare name. Every handle is EXACT (lib/transcript-mentions):
+  //   · a sent mention's `<muxpad-context>` block       → its tabId
+  //   · an inbound message's recorded sender            → its tabId
+  //   · a directed card's target                        → its tabId
+  //   · a report / directive marker (records a pane)    → its paneId
+  // Bounded by the lookup's caps, and not asked until the live corpus has
+  // landed — before that every reference would look unknown.
+  const transcriptRefKey = useMemo(() => {
+    if (corpusGroups.length === 0) return NO_TRANSCRIPT_REFS;
+    const liveTabs = new Set(corpus.map((c) => c.tabId));
+    const livePanes = paneIndex(corpus);
+    // Only USER rows carry any of it: a mention, a delivered report or brief.
+    // `mentions` is the normalizer's EXACT record of what a message referenced
+    // (its context block is stripped before it gets here).
+    const messages: { text: string; mentions?: readonly { tabId: string }[] }[] = [];
+    for (const ev of events)
+      if (ev.kind === 'user')
+        messages.push(ev.mentions ? { text: ev.text, mentions: ev.mentions } : { text: ev.text });
+    // NEWEST FIRST, like the messages (the helper reverses those itself), so
+    // the 60-id budget keeps recent references rather than the oldest.
+    const extraTabIds: string[] = [];
+    for (const sender of [...inboundSenders].sort((x, y) => y.at - x.at))
+      if (sender.from_tab_id) extraTabIds.push(sender.from_tab_id);
+    for (const d of [...directed].sort((x, y) => y.at - x.at)) extraTabIds.push(d.tabId);
+    const liveNames = corpus.map((c) => c.tabName.toLowerCase());
+    const refs = transcriptRefs(
+      {
+        messages,
+        extraTabIds,
+        markerPane: (text) =>
+          parseReportMarker(text)?.marker.pane || parseDirectMarker(text)?.marker.pane || null,
+      },
+      {
+        tab: (id) => liveTabs.has(id),
+        pane: (id) => livePanes.has(id),
+        // Skip a fallback query ONLY when the message names a live chat in
+        // full: a live `quarterly-plan` must not hide an archived
+        // `quarterly-taxes` just because the two share a first word.
+        fullLiveName: (token, lower) =>
+          liveNames.some((n) => n.startsWith(token) && lower.includes(`@${n}`)),
+      },
+    );
+    // The fallback's answers are kept only for a chat whose FULL name the
+    // transcript mentions — so the texts that produced a token ride along.
+    const nameText =
+      refs.names.length === 0
+        ? ''
+        : messages
+            .filter((m) => refs.names.some((t) => m.text.toLowerCase().includes(`@${t}`)))
+            .map((m) => m.text)
+            .join('\n');
+    return JSON.stringify({ ...refs, nameText });
+  }, [events, corpus, corpusGroups, inboundSenders, directed]);
+  const transcriptRefList = useMemo(
+    () =>
+      JSON.parse(transcriptRefKey) as {
+        tabIds: string[];
+        paneIds: string[];
+        names: string[];
+        nameText: string;
+      },
+    [transcriptRefKey],
+  );
+  const transcriptLookup = useTabLookup({
+    query: '',
+    queries: transcriptRefList.names,
+    paneIds: transcriptRefList.paneIds,
+    tabIds: transcriptRefList.tabIds,
+  });
+  const transcriptCorpus = useMemo(() => {
+    const extra = onlyReferenced(transcriptLookup.groups, transcriptRefList);
+    return extra.length === 0 ? corpus : toMentionChats(mergeTabGroups(corpusGroups, extra));
+  }, [corpus, corpusGroups, transcriptLookup.groups, transcriptRefList]);
+  /** By tab id, from the transcript's corpus — how a directed card finds its target. */
+  const transcriptById = useMemo(
+    () =>
+      transcriptCorpus === corpus ? corpusById : new Map(transcriptCorpus.map((c) => [c.tabId, c])),
+    [transcriptCorpus, corpus, corpusById],
+  );
   const mentionContext = useMemo(
-    () => ({ corpus, open: openChat, inbound: inboundByEvent }),
-    [corpus, openChat, inboundByEvent],
+    () => ({ corpus: transcriptCorpus, open: openChat, inbound: inboundByEvent }),
+    [transcriptCorpus, openChat, inboundByEvent],
   );
   const spawnedLive = useMemo(
     () =>
@@ -2737,7 +2985,7 @@ export function ChatPane({
     // are guesswork the moment two chats are called "Main". Directing work is
     // still possible and is now something you ASK for; the agent has
     // `muxpad agent send`.
-    const mentioned = mentionedChats(input, corpus, livePicks);
+    const mentioned = mentionedChats(input, mentionCorpus, livePicks);
     const outgoing = withMentionContext(composeOutgoingMessage(text, attachmentPaths), mentioned);
     // THE SAME GESTURE, COUNTED TWICE, IS NOT TWO MESSAGES. See lib/one-send:
     // this draft is already gone, and the composer has not been edited since.
@@ -3531,9 +3779,18 @@ export function ChatPane({
    * Completion only: a launch card says the work started, which is not the
    * same claim as "its result is here".
    */
-  const cardedChildren = useMemo(
-    () => new Set(spawnedCards.filter((c) => c.kind === 'completion').map((c) => c.chat.tabId)),
+  // The voice pass reads membership only. A new corpus/card object must not
+  // reprocess the transcript when the same completion cards are still shown.
+  const cardedChildIds = useMemo(
+    () =>
+      [...new Set(spawnedCards.filter((c) => c.kind === 'completion').map((c) => c.chat.tabId))]
+        .sort()
+        .join('\0'),
     [spawnedCards],
+  );
+  const cardedChildren = useMemo(
+    () => new Set(cardedChildIds ? cardedChildIds.split('\0') : []),
+    [cardedChildIds],
   );
   const voiced = useMemo(
     // …then ONE chip per quiet stretch rather than one per fire. Last, because
@@ -5586,8 +5843,8 @@ export function ChatPane({
             </button>
             {drawerOpen ? (
               <ChatDrawer
-                tabId={myChat?.tabId ?? tabId}
-                corpus={corpus}
+                tabId={spawnParent ?? tabId}
+                corpus={spawnCorpus}
                 actions={chatActions}
                 tab={drawer.tab}
                 onTab={(t) => setDrawer({ tab: t, paneId: null })}
@@ -5814,7 +6071,7 @@ export function ChatPane({
                 // message had just revived its recipient, and a rename or a
                 // retirement never reached it either. The tab id is the durable
                 // handle; the snapshot is the fallback while there is no corpus.
-                const live = corpusById.get(d.tabId);
+                const live = transcriptById.get(d.tabId);
                 // A card that spins forever is the failure this state exists for:
                 // the answer is a MODEL doing as it was asked, so a target that
                 // was busy, misread the instruction, crashed, or simply answered
@@ -6161,10 +6418,13 @@ export function ChatPane({
                   // replaced — see `rebase`.
                   disabled={rebasing}
                   value={input}
-                  // The SAME corpus the log resolves a sent message against, so
-                  // the draft and the message cannot disagree about which `@Name`
-                  // is a chip — see draftNodes.
-                  corpus={corpus}
+                  // The PICKER'S corpus: the live one plus any finished chat you
+                  // picked (or the lookup found), so a chosen historical `@Name`
+                  // is a chip in the draft rather than reverting to plain text
+                  // the moment its query closes — the same rows `mentionedChats`
+                  // resolves at send. Identical to `corpus` whenever nothing has
+                  // been looked up, which is nearly always.
+                  corpus={mentionCorpus}
                   // The combobox arrangement the sidebar's search box uses: the
                   // FIELD keeps focus and points at the active row, so composing
                   // is never interrupted by a list taking the caret. Stated only
@@ -6483,7 +6743,7 @@ export function ChatPane({
       </div>
     </ChatMentionContext.Provider>
   );
-}
+});
 
 // Everything that draws an ALREADY-ARRIVED message — rows, bubbles, mention
 // chips, media, modals — now lives in ChatTranscript.tsx. It holds no socket,

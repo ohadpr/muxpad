@@ -38,6 +38,7 @@ import {
   spawnedChildren,
   toMentionChats,
   withContentRows,
+  withSpawnChildren,
 } from './chat-mention';
 import type { WorkspaceTabs } from './nav-search';
 
@@ -1747,5 +1748,81 @@ describe('the window floor comes from the transcript, not the rendered list', ()
       hasMoreOlder: true,
     });
     expect(out.filter((x) => x.kind === 'card')).toEqual([]);
+  });
+});
+
+/**
+ * THE LIVE CORPUS NO LONGER CARRIES FINISHED WORK — the rounds answer does.
+ *
+ * A delivered worker is absent from `/api/tabs/all`, and its card needs a name,
+ * a link and a report, none of which a round carries. The answer's `children`
+ * put it back; the corpus row wins wherever both exist, because it is live.
+ */
+describe('spawnCards — children carried by the rounds answer', () => {
+  const kid = (over: Partial<MentionChat> = {}) =>
+    chat({ tabName: 'card-summary', tabId: 'cs', parentId: 'p', createdAt: 100, ...over });
+  const finished = (over: Partial<MentionChat> = {}) =>
+    kid({
+      done: true,
+      doneReason: 'delivered',
+      doneAt: 900,
+      status: 'ready',
+      report: { text: 'Found two dead rules.', state: 'ok', at: 900 },
+      ...over,
+    });
+  const answer = (
+    children: MentionChat[],
+    rounds: Array<[string, SpawnRound[]]> = [],
+  ): ReadonlyMap<string, readonly SpawnRound[]> & { children: MentionChat[] } =>
+    Object.assign(new Map(rounds), { children });
+
+  it('draws a FINISHED child the corpus no longer has, with its tab-level pair', () => {
+    const cards = spawnCards([], 'p', 12, answer([finished()]));
+    expect(cards.map((c) => [c.kind, c.chat.tabId, c.at])).toEqual([
+      ['launch', 'cs', 100],
+      ['completion', 'cs', 900],
+    ]);
+    expect(cards[1]?.chat.report?.text).toBe('Found two dead rules.');
+  });
+
+  it('is the SAME list the old full corpus drew, rounds included', () => {
+    const r: SpawnRound = {
+      id: 'r1',
+      tab_id: 'cs',
+      started_at: 100,
+      ended_at: 900,
+      report: 'Found two dead rules.',
+      report_state: 'ok',
+      artifacts: [],
+    } as SpawnRound;
+    const old = spawnCards([finished()], 'p', 12, new Map([['cs', [r]]]));
+    expect(spawnCards([], 'p', 12, answer([finished()], [['cs', [r]]]))).toEqual(old);
+  });
+
+  it('lets the LIVE corpus row win over the snapshot', () => {
+    // Revived since the answer was fetched: the corpus says working.
+    const live = kid({ status: 'working', task: 'second job' });
+    const cards = spawnCards([live], 'p', 12, answer([finished({ task: 'first job' })]));
+    expect(cards.map((c) => c.kind)).toEqual(['launch']);
+    expect(cards[0]?.chat.task).toBe('second job');
+  });
+
+  it('keeps the report TEXT the corpus no longer carries (state and time only)', () => {
+    const excerpt = kid({ report: { text: null, state: 'ok', at: 900 }, done: true });
+    const merged = withSpawnChildren([excerpt], answer([finished()]));
+    expect(merged[0]?.report?.text).toBe('Found two dead rules.');
+    // …but never a DIFFERENT report: a newer one in the corpus stays as it is.
+    const newer = kid({ report: { text: null, state: 'ok', at: 1_000 }, done: true });
+    expect(withSpawnChildren([newer], answer([finished()]))[0]?.report?.text).toBeNull();
+  });
+
+  it('never draws another parent’s child from a snapshot', () => {
+    expect(spawnCards([], 'p', 12, answer([finished({ parentId: 'elsewhere' })]))).toEqual([]);
+  });
+
+  it('returns the corpus itself when the answer adds nothing', () => {
+    const corpus = [kid()];
+    expect(withSpawnChildren(corpus, new Map())).toBe(corpus);
+    expect(withSpawnChildren(corpus, undefined)).toBe(corpus);
   });
 });

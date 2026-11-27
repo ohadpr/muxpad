@@ -8,6 +8,7 @@ import {
   isMachineMessage,
   modeForBackend,
   parseCronMarker,
+  renderTaskContinuation,
   sanitizeAgentStatus,
 } from '@muxpad/shared';
 import type Database from 'better-sqlite3';
@@ -47,8 +48,10 @@ import {
   verifyCredential,
 } from './api-auth.js';
 import { readAttachmentForRelay } from './attachment-files.js';
+import { TaskStore } from './chat/TaskStore.js';
 import { TranscriptTail, identityNormalize, muxpadLocate } from './chat/TranscriptReader.js';
 import { agentPaneHasMessages } from './chat/has-messages.js';
+import { shouldContinue } from './chat/task-continue.js';
 import { remoteHostName } from './chat/transcript-access.js';
 import type { EventBus } from './events.js';
 import type { HostLinks } from './node-link/HostLinks.js';
@@ -83,12 +86,21 @@ import { tabLifecycle } from './tab-clock.js';
 export interface WsServerHandle {
   close(): Promise<void>;
   /**
+   * The ordinary send road, for a caller outside the socket layer — today the
+   * anti-yield gate (chat/YieldGate.ts). Exposed rather than re-implemented so
+   * a prod is indistinguishable from any other message: the same durable
+   * queue, the same one-per-turn drain, the same Stop button.
+   */
+  submitSend(paneId: string, text: string): { status: string; reason?: string };
+  /**
    * Run one dead-runner sweep now. Exposed so a test can drive the supervision
    * pass deterministically — its real cadence (20s sweep, 45s cooldown) makes
    * it untestable otherwise, and the ptyd-outage behaviour is exactly the part
    * that must not regress. Single-flight, same as the timer's call.
    */
   sweepDeadRunners(): Promise<void>;
+  /** Run parking deterministically without waiting for the production interval. */
+  sweepParkedPanes(): Promise<void>;
 }
 
 // Initial chat history window: only the last ~128 KB of the transcript ship on
@@ -618,6 +630,7 @@ export function attachWsServer(deps: {
    */
   const lifecycle = (): PaneOps => deps.paneOps ?? deps.ptyd;
   const tabs = new TabStore(deps.db);
+  deps.events.setTabWorkspaceResolver((id) => tabs.getWorkspaceId(id));
   // Living sidebar: bumps `tabs.last_activity_at`. Forced for discrete
   // moments (turn done, user send), throttled for raw pty chatter.
   const activity = deps.tabActivity ?? new TabActivity(deps.db);
@@ -627,6 +640,9 @@ export function attachWsServer(deps: {
   // feeding the agent even with no browser open; chat clients render the pending
   // bubbles from here, so they survive reloads and follow the user across devices.
   const queue = new AgentQueueStore(deps.db);
+  // Tasks that outlive a turn (chat/TaskStore.ts). Read on every turn-done of
+  // every chat, which is why its index is partial on `state = 'open'`.
+  const tasks = new TaskStore(deps.db);
   // Any headless writer / running status persisted by a previous process is a
   // turn that died with it (restart mid-turn) — clear it or panes look stuck.
   agents.reconcileStartup();
@@ -660,6 +676,12 @@ export function attachWsServer(deps: {
         pane: decoratePane(deps.cache, pane, deps.db),
       });
     }
+  };
+  // Parking changes corpus membership even when a retired tab remains in history.
+  const emitPaneTabUpdated = (paneId: string) => {
+    const pane = panes.getById(paneId);
+    const tab = pane && tabs.getById(pane.tab_id);
+    if (tab) deps.events.emit({ type: 'tab.updated', tab: decorateTab(deps.cache, deps.db, tab) });
   };
   /**
    * Has this pane's chat already left the live list?
@@ -926,11 +948,28 @@ export function attachWsServer(deps: {
      * the cron `quiet_mins` policy (don't barge into a live conversation).
      */
     lastHumanSendAt: number;
-    /** The message that started the turn in flight was a CRON FIRE. See the
-     *  push gate's note: a fire's prose is machinery, and this is the half of
-     *  that rule the SERVER can enforce without waiting for a runner to
-     *  respawn. */
-    turnFromCron: boolean;
+    /**
+     * The message that started the turn in flight was MACHINERY, not a person.
+     *
+     * It was `turnFromCron` and read only `parseCronMarker`, which is the
+     * narrow version of a mistake `shared/src/spawn-delivery.ts` predicted in
+     * writing: "every new injected message type after cron would have silently
+     * read as human". By the time it was audited there were four — a cron
+     * fire, a sub-chat's REPORT, a cron RESULT, a rebase briefing — plus the
+     * durable-task continuation added two days before. All but the first were
+     * treated as the user typing.
+     *
+     * The cost was not theoretical. `Build reading app for 4-year-old` went
+     * bold overnight because two of its retired children reported in; their
+     * parent was obliged to answer a message nobody had sent, and the owner
+     * was pulled into a sub-chat that is supposed to be its parent's business:
+     * "the whole idea is that they do not bother me".
+     *
+     * One predicate now, `isMachineMessage`, read off the message itself so it
+     * survives the durable queue and a restart — there is no in-memory flag to
+     * lose. See the push gate and the unread gate below for what it buys.
+     */
+    turnFromMachine: boolean;
     /**
      * When this pane's last EXPLICIT `notify` push actually went out (held and
      * dropped calls don't count — they spent none of the user's attention).
@@ -1570,6 +1609,7 @@ export function attachWsServer(deps: {
         // `unpark` answers "was it parked" and clears the flag in one statement,
         // so this cannot fire twice for one waking.
         if (panes.unpark(pane.id)) {
+          emitPaneTabUpdated(pane.id);
           bcastToPane(pane.id, { t: 'notice', message: 'waking this chat…' });
           emitPaneUpdated(pane.id);
           await spawnAgentPane(pane.id);
@@ -1671,6 +1711,7 @@ export function attachWsServer(deps: {
           // that wants it.
         }
         panes.park(c.pane.id, now);
+        emitPaneTabUpdated(c.pane.id);
         emitPaneUpdated(c.pane.id);
       }
     } catch (err) {
@@ -1754,7 +1795,7 @@ export function attachWsServer(deps: {
       conn.pendingSendText = next.text;
       conn.lastSendWasQueued = true;
       if (isHumanMessage(next.text)) conn.lastHumanSendAt = conn.lastSendAt;
-      conn.turnFromCron = parseCronMarker(next.text) !== null;
+      conn.turnFromMachine = isMachineMessage(next.text);
       deps.cache.setAgentBusy(paneId, true);
       emitOptimisticTurnStart(paneId, next.id);
       queue.remove(next.id, paneId);
@@ -1785,6 +1826,40 @@ export function attachWsServer(deps: {
       void sweepDeadRunners();
     }
   };
+  /**
+   * A HUMAN SPOKE IN THIS CHAT — what that does to its open task.
+   *
+   * Two things, and both are about who is in charge. The continuation budget
+   * starts over, because somebody engaging is the one event that makes further
+   * autonomous work reasonable again (without it a long-lived chat would spend
+   * its six once and never continue anything again). And a BLOCKED task goes
+   * back to open, because "blocked" means it stopped to ask the user something
+   * and the user has now said something — holding it shut would make the
+   * answer worthless.
+   *
+   * Machine sends are excluded by `isHumanMessage`: a cron fire, a sub-chat
+   * report or a continuation of this very task must not look like engagement,
+   * or the budget could never run out and the bound would be decorative.
+   */
+  const noteHumanForTasks = (tabId: string, text: string): void => {
+    if (!isHumanMessage(text)) return;
+    const open = tasks.openFor(tabId);
+    if (open) {
+      tasks.resetBudget(tabId);
+      return;
+    }
+    // THE OWNER'S WORDS RETIRE THE AUTOPILOT'S GUESS ABOUT THEM. An
+    // autopilot task is an inference written when a chat tried to yield; the
+    // moment he says something himself there is no inference left to serve.
+    // See TaskStore.settleAutopilotTasks for the chat this came from.
+    const retired = tasks.settleAutopilotTasks(tabId);
+    if (retired > 0)
+      console.log(`[task] ${tabId}: retired ${retired} autopilot task(s) — he spoke`);
+    // Only the chat's MOST RECENT task may come back — see
+    // TaskStore.reopenLatestBlocked for what reopening an older one did.
+    if (tasks.reopenLatestBlocked(tabId)) tasks.resetBudget(tabId);
+  };
+
   // Submit a user message. Idle + connected + nothing already waiting → start
   // the turn now. Otherwise persist to the queue (the drain loop feeds it when
   // the agent frees up / the runner returns). Only runner-owned agent panes
@@ -1807,12 +1882,13 @@ export function attachWsServer(deps: {
     if (conn && !conn.turnActive && queue.count(paneId) === 0) {
       if (sendToRunner(paneId, { t: 'send', text: t })) {
         activity.noteUserMessage(pane.tab_id);
+        noteHumanForTasks(pane.tab_id, t);
         conn.turnActive = true; // optimistic; runner's turn-start reaffirms
         conn.lastSendAt = Date.now();
         conn.pendingSendText = t;
         conn.lastSendWasQueued = false;
         if (isHumanMessage(t)) conn.lastHumanSendAt = conn.lastSendAt;
-        conn.turnFromCron = parseCronMarker(t) !== null;
+        conn.turnFromMachine = isMachineMessage(t);
         // Same D14 mirroring as drainQueue: turn state, pane status and the
         // bus must not disagree for the duration of the round trip.
         deps.cache.setAgentBusy(paneId, true);
@@ -1836,6 +1912,7 @@ export function attachWsServer(deps: {
       };
     const row = queue.enqueue(paneId, t);
     activity.noteUserMessage(pane.tab_id);
+    noteHumanForTasks(pane.tab_id, t);
     broadcastQueue(paneId);
     // Nudge delivery: if the runner is idle we lost a relay race (drain now);
     // if it's absent, a sweep is the best "is it back yet?" probe.
@@ -2162,7 +2239,7 @@ export function attachWsServer(deps: {
           status: null,
           lastSendAt: 0,
           lastHumanSendAt: 0,
-          turnFromCron: false,
+          turnFromMachine: false,
           lastExplicitNotifyAt: 0,
           pendingSendText: null,
           lastSendWasQueued: false,
@@ -2221,6 +2298,10 @@ export function attachWsServer(deps: {
             sid: conn.sid,
             backend: conn.backend,
             ...(background !== undefined ? { background } : {}),
+            // Stop is not advice, and the anti-yield gate subscribes to this
+            // bus — see the field's note in shared/types. Carried on `done`
+            // only: a start has nothing to have been stopped yet.
+            ...(phase === 'done' && conn.stoppedThisTurn ? { stopped: true } : {}),
           });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
@@ -2436,7 +2517,7 @@ export function attachWsServer(deps: {
             // A turn nobody sent carries no marker, which is exactly the
             // question `parseCronMarker` answers, so the stamp decides it: a
             // stamped cron turn is from a cron, anything else is not.
-            conn.turnFromCron = startedBy ? parseCronMarker(startedBy) !== null : false;
+            conn.turnFromMachine = startedBy ? isMachineMessage(startedBy) : false;
             bcast({ t: 'turn-start', ...(startedBy ? { text: startedBy } : {}) });
             emitTurn('start');
           } else if (frame.t === 'stream') {
@@ -2471,6 +2552,12 @@ export function attachWsServer(deps: {
             }
           } else if (frame.t === 'turn-done') {
             conn.turnActive = false;
+            // SNAPSHOT BEFORE THE CLEAR. The task continuation below must not
+            // hand work back to a chat that is waiting on a question, and the
+            // very next line destroys the only record that it was — which is
+            // not a hypothetical: the e2e for it failed on exactly this
+            // ordering, sending a continuation over an open question card.
+            const askedSomething = conn.pendingQuestions.size > 0;
             conn.pendingQuestions.clear();
             // Retire the correlation stamp with the turn. Normally turn-start
             // already consumed it, but a `turn-done` can arrive with NO
@@ -2619,7 +2706,7 @@ export function attachWsServer(deps: {
               // gate was unconditional and took the error notification with
               // it, which is the one thing a scheduled job most needs to be
               // able to send — nobody is watching it.
-              (!conn.turnFromCron || frame.ok === false) &&
+              (!conn.turnFromMachine || frame.ok === false) &&
               !chatClients.has(paneId) &&
               Date.now() - conn.lastHumanSendAt > INTERACTIVE_PUSH_SUPPRESS_MS
             ) {
@@ -2714,16 +2801,62 @@ export function attachWsServer(deps: {
             // said — the same exception the push gate makes, and for the same
             // reason: nobody is watching a scheduled job, so its errors are
             // the news it most needs to be able to deliver.
-            const cronSaidNothing =
-              conn.turnFromCron && frame.silent !== false && frame.ok !== false;
-            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true && !cronSaidNothing) {
+            // …AND THE SAME IS TRUE OF EVERY OTHER MACHINE-STARTED TURN.
+            // This was `cronSaidNothing` and the rule was right; its reach was
+            // not. A sub-chat's report arriving is WORK ARRIVING, not a person
+            // asking — the parent owes the child a review and owes the user
+            // nothing until it has something to say. The owner's principle,
+            // verbatim: "sub chats should be a technical detail of main
+            // chats… the whole idea is that they do not bother me and I
+            // interface with the main chats that utilize the sub chats as a
+            // way to get shit done and not to bug me."
+            const machineSaidNothing =
+              conn.turnFromMachine && frame.silent !== false && frame.ok !== false;
+            if (!chatHasLeftTheLiveList(paneId) && frame.silent !== true && !machineSaidNothing) {
               panes.setUnread(paneId, true);
               emitPaneUpdated(paneId);
             }
+            // ─── DID THIS CHAT SAY IT WAS NOT FINISHED? ────────────────
+            //
+            // Decided BEFORE the drain, deliberately: `queued > 0` is one of
+            // the stop conditions, so the decision has to see the queue as it
+            // was. If anything is waiting, that IS the next step and the drain
+            // below is what runs it — a continuation here would jump a human's
+            // place in the line.
+            //
+            // The whole rule is chat/task-continue.ts, pure and model-free.
+            // What happens here is only the two halves it cannot do: read the
+            // live turn's state, and put the message on the ordinary send road
+            // so a continuation is indistinguishable from any other message —
+            // same durable queue, same one-per-turn drain, same Stop button.
+            const openTask = tasks.openFor(panes.getById(paneId)?.tab_id ?? '');
+            const carryOn = shouldContinue(openTask, {
+              queued: queue.count(paneId),
+              blocked: askedSomething,
+              stopped: conn.stoppedThisTurn,
+              turnFailed: frame.ok === false,
+            });
             // Turn finished → feed the next queued message. This is the loop
             // that drains a batch with no browser open: turn-done → drain →
             // turn-start → … until the queue empties.
             drainQueue(paneId);
+            if (carryOn.continue && openTask) {
+              const text = renderTaskContinuation(
+                { id: openTask.id, attempt: carryOn.attempt, limit: carryOn.limit },
+                openTask,
+              );
+              // Stamp FIRST. A send that is relayed and then fails to record
+              // its own attempt is an unbounded loop — the budget would never
+              // move and `continued_from` would stay null, so every turn-done
+              // would hand the same task back forever. Spending the attempt
+              // before the send can only ever cost one continuation.
+              tasks.noteContinuation(openTask.id);
+              const out = submitSend(paneId, text);
+              if (out.status === 'rejected')
+                console.warn(
+                  `[task] pane ${paneId}: continuation ${carryOn.attempt} refused — ${out.reason}`,
+                );
+            }
           } else if (frame.t === 'question') {
             if (typeof frame.qid !== 'string' || !Array.isArray(frame.questions)) return;
             const firstOpen = conn.pendingQuestions.size === 0;
@@ -3769,6 +3902,11 @@ export function attachWsServer(deps: {
 
   return {
     sweepDeadRunners,
+    sweepParkedPanes,
+    /** The ordinary send road, for callers outside the socket layer — today
+     *  the anti-yield gate, so a prod is indistinguishable from any other
+     *  message: same durable queue, same drain, same Stop button. */
+    submitSend,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);

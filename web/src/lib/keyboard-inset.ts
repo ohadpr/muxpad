@@ -9,8 +9,8 @@
  * not shrink when the keyboard opens — only `visualViewport` does — so the
  * composer stays on the layout bottom, under the keyboard, and the scroller's
  * `clientHeight` never changes so the last turns are not reserved above it
- * either. `MobileInputBar` and the nav sheet already special-case exactly this
- * geometry (`sheet-viewport.ts`); chat did not.
+ * either. `MobileInputBar` (and the old drop-down nav sheet) special-cased exactly
+ * this geometry; chat did not.
  *
  * `MobileInputBar`'s standalone shortcut — "in an installed PWA, skip the JS,
  * iOS anchors `bottom: 0` to the keyboard on its own" — does NOT transfer here.
@@ -93,6 +93,46 @@ export function keyboardInset(opts: {
 }
 
 /**
+ * THE INSET AGAIN, CORRECTED BY WHERE THE COMPOSER ACTUALLY ENDED UP.
+ *
+ * Everything above computes the lift from INPUTS — the pane's box and the
+ * visual viewport's two numbers — and trusts the arithmetic. Reported anyway:
+ * "on mobile often the view doesn't scroll up and the keyboard hides the
+ * composer box." Both halves of that are one symptom, because the scroller's
+ * bottom reserve is `composer + 14px + this inset`: when the lift is short,
+ * the composer is under the keyboard AND the transcript does not make room.
+ *
+ * iOS cannot rescue this itself. Safari scrolls a focused field into view by
+ * scrolling its SCROLLABLE ANCESTORS, and `.chat-composer-wrap` is
+ * `position: absolute` inside a pane that does not scroll — there is nothing
+ * for the browser to move. (Nor can the viewport meta help: iOS ignores
+ * `interactive-widget` entirely. It is in WebKit, unshipped in Safari.)
+ *
+ * So measure the OUTCOME. If the composer's bottom is still below the visible
+ * band after the lift, add exactly the shortfall. It converges in one frame —
+ * moving the composer up by the residual makes the next residual zero — and
+ * it is correct whichever input was wrong, which matters on an engine none of
+ * this can be tested against from a desktop.
+ *
+ * Only while something focusable is focused: with no keyboard the composer is
+ * MEANT to sit at the pane's bottom, which may legitimately be below the
+ * visible band (a ribbon under it, a panned viewport).
+ */
+export function correctedInset(opts: {
+  /** What {@link keyboardInset} computed. */
+  base: number;
+  /** `.chat-composer-wrap`'s bottom, in layout-viewport coordinates. */
+  composerBottom: number;
+  /** `vv.offsetTop + vv.height` — the bottom of what the user can see. */
+  visibleBottom: number;
+  editableFocused: boolean;
+}): number {
+  if (!opts.editableFocused) return opts.base;
+  const shortfall = Math.round(opts.composerBottom - opts.visibleBottom);
+  return shortfall > 1 ? opts.base + shortfall : opts.base;
+}
+
+/**
  * `<input>` types that raise NO on-screen keyboard or picker on iOS. Everything
  * else — text, search, email, url, tel, number, date, time, and an input with
  * no type at all — does, so the list is the exclusions rather than the
@@ -154,6 +194,9 @@ const realClock: KeyboardClock = {
   cancelRaf: (h) => cancelAnimationFrame(h),
 };
 
+/** The element the lift exists to keep on screen (ChatPane.css). */
+const COMPOSER = '.chat-composer-wrap';
+
 export interface TrackKeyboardInsetDeps {
   /** `window.visualViewport`, or null where it is unsupported — in which case
    *  there is nothing to correct for and the property is never written. */
@@ -184,12 +227,25 @@ export function trackKeyboardInset(pane: HTMLElement, deps: TrackKeyboardInsetDe
   // recalculation on either.
   let last: string | null = null;
   const apply = () => {
-    const next = `${keyboardInset({
+    const editableFocused = raisesSoftKeyboard(getActive());
+    const base = keyboardInset({
       paneBottom: pane.getBoundingClientRect().bottom,
       vvOffsetTop: vv.offsetTop,
       vvHeight: vv.height,
-      editableFocused: raisesSoftKeyboard(getActive()),
-    })}px`;
+      editableFocused,
+    });
+    // …then check where that actually put the composer. See correctedInset.
+    const composer = pane.querySelector(COMPOSER);
+    const next = `${
+      composer
+        ? correctedInset({
+            base,
+            composerBottom: composer.getBoundingClientRect().bottom,
+            visibleBottom: vv.offsetTop + vv.height,
+            editableFocused,
+          })
+        : base
+    }px`;
     if (next === last) return;
     last = next;
     pane.style.setProperty('--chat-keyboard-inset', next);

@@ -191,7 +191,7 @@ export function WorkspaceShell({ wsSlug, isActive }: WorkspaceShellProps) {
             hidden={!tabActive}
             aria-hidden={!tabActive}
           >
-            <TabView tabSlug={t.slug} isActive={tabActive} />
+            <TabView wsSlug={wsSlug} tabSlug={t.slug} isActive={tabActive} />
           </div>
         );
       })}

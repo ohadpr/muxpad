@@ -68,6 +68,22 @@ export function cardWriters(
   }
 }
 
+/**
+ * EVERY card on the install, for the cards page.
+ *
+ * Its own router because it is mounted at `/api/cards` rather than under
+ * `/api/tabs/:tabId` — a page that spans every chat cannot be a child of one.
+ * Deliberately not `/api/tabs/cards`: that path would be a tab whose id is
+ * the literal string "cards", and a route that only works because no chat is
+ * called that is a route waiting to break.
+ */
+export function allCardsRoutes(deps: { db: Database.Database }): Hono {
+  const app = new Hono();
+  const cards = new TabCardStore(deps.db);
+  app.get('/', (c) => c.json({ cards: cards.listAll() }));
+  return app;
+}
+
 export function cardsRoutes(deps: { db: Database.Database; events?: EventBus | undefined }): Hono {
   const app = new Hono();
   const cards = new TabCardStore(deps.db);
