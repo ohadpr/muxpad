@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   KEYBOARD_TRACK_MS,
   type KeyboardViewport,
+  correctedInset,
   keyboardInset,
   raisesSoftKeyboard,
   trackKeyboardInset,
@@ -359,5 +360,45 @@ describe('trackKeyboardInset holds the composer up, then puts it back', () => {
     const dispose = trackKeyboardInset(pane, { viewport: null });
     expect(pane.style.getPropertyValue('--chat-keyboard-inset')).toBe('');
     dispose();
+  });
+});
+
+/**
+ * "On mobile often the view doesn't scroll up and the keyboard hides the
+ * composer box."
+ *
+ * Both halves are one symptom: the transcript's bottom reserve is
+ * `composer + 14px + this inset`, so a lift that comes up short hides the
+ * composer AND stops the log making room for it. Everything above computes
+ * that lift from inputs and trusts the arithmetic; this checks where the
+ * composer actually ended up, which is correct whichever input was wrong —
+ * and iOS is an engine none of this can be exercised against from a desktop.
+ */
+describe('correcting the lift by where the composer actually is', () => {
+  const base = { base: 100, composerBottom: 700, visibleBottom: 700, editableFocused: true };
+
+  it('adds exactly the shortfall when the composer is still under the keyboard', () => {
+    // The lift said 100; the composer's bottom is 40px below what you can see.
+    expect(correctedInset({ ...base, composerBottom: 740 })).toBe(140);
+  });
+
+  it('converges — once corrected, the next measurement adds nothing', () => {
+    const next = correctedInset({ ...base, composerBottom: 740 });
+    // The composer has moved up by the shortfall, so there is none left.
+    expect(correctedInset({ ...base, base: next, composerBottom: 700 })).toBe(next);
+  });
+
+  it('leaves a composer that is already visible alone', () => {
+    expect(correctedInset({ ...base, composerBottom: 660 })).toBe(100);
+    // And does not chase a sub-pixel rounding difference.
+    expect(correctedInset({ ...base, composerBottom: 700.6 })).toBe(100);
+  });
+
+  it('does NOTHING with no keyboard up, whatever the geometry says', () => {
+    // With nothing focused the composer is MEANT to sit at the pane's bottom,
+    // which can legitimately be below the visible band — under the phone's
+    // section ribbon, or on a panned viewport. Correcting there would shove
+    // the composer up the screen for no reason.
+    expect(correctedInset({ ...base, composerBottom: 900, editableFocused: false })).toBe(100);
   });
 });
