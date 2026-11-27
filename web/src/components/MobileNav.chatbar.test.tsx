@@ -82,3 +82,53 @@ describe('the chat view’s section ribbon', () => {
     expect([...host.querySelectorAll('button[aria-current="page"]')]).toEqual([]);
   });
 });
+
+/**
+ * THE SAME TAP-EATING FOCUS CHANGE, ON THE BAR.
+ *
+ * "Bottom bar doesn't always respond to taps" — and "always" is the tell. It
+ * responds fine until the software keyboard is up, which on this surface
+ * means you were in Search and reached for another tab. The tabs are real
+ * buttons, so pressing one takes focus; on iOS that focus change is the
+ * keyboard dismissing, and the tap is spent on it.
+ *
+ * Same answer as the results list: refuse the focus change, keep the click.
+ */
+describe('the bar when a keyboard is up', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    pathname = '/w/a/t/b';
+    sessionStorage.clear();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => {
+      root.render(<MobileChatSectionBar onLeave={() => {}} />);
+    });
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('refuses the focus change a press would cause', () => {
+    const tab = host.querySelector('.mcl-tab') as HTMLElement;
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    tab.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('still switches — refusing focus must not refuse the click', () => {
+    const onLeave = vi.fn();
+    act(() => {
+      root.render(<MobileChatSectionBar onLeave={onLeave} />);
+    });
+    const unread = [...host.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Unread'),
+    );
+    act(() => unread?.click());
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+});

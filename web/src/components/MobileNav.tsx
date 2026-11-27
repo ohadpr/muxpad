@@ -335,7 +335,23 @@ function SectionBar({
   onChat?: boolean;
 }) {
   return (
-    <nav className={`mcl-tabs${onChat ? ' -onchat' : ''}`} aria-label="Sections">
+    <nav
+      className={`mcl-tabs${onChat ? ' -onchat' : ''}`}
+      aria-label="Sections"
+      // ─── A TAP HERE MUST NOT BE SPENT DISMISSING THE KEYBOARD ──────────
+      //
+      // "Bottom bar doesn't always respond to taps", and `always` is the
+      // tell: it responds fine until a software keyboard is up, which on
+      // this surface means you were in Search and reached for another tab.
+      // The tabs are real buttons, so pressing one TAKES FOCUS — and on iOS
+      // that focus change is the keyboard dismissing, so the tap pays for
+      // the dismissal instead of the switch.
+      //
+      // Refusing the default here refuses only the focus move; the click
+      // still fires and the section still switches. Nothing on this bar
+      // wants focus afterwards — you are leaving for another view.
+      onMouseDown={(e) => e.preventDefault()}
+    >
       {CHAT_SECTIONS.map((s) => (
         <button
           key={s}

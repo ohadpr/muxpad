@@ -327,6 +327,25 @@ export function ChatSearch({
         role="listbox"
         tabIndex={-1}
         aria-label="Search results"
+        // ─── THE PRESS MUST NOT MOVE FOCUS OFF THE INPUT ─────────────────
+        //
+        // "Search results don't even respond, can't click them" — on the
+        // phone, where the keyboard is up because you just typed the query.
+        //
+        // A press on a row would otherwise take focus off the combobox (the
+        // rows are `tabIndex=-1`, so focus goes to the nearest focusable
+        // thing or to the body). On iOS that focus change IS the keyboard
+        // dismissing, and the tap is spent doing it instead of picking the
+        // row. The dismissal then relayouts the list — the results reserve
+        // `--chat-keyboard-inset` at their foot — so the row you aimed at has
+        // moved by the time you tap again.
+        //
+        // Refusing the default here is what every combobox does, and it is
+        // the whole reason this never showed on a desktop: there, losing
+        // focus costs nothing visible. It does NOT refuse the click; the row
+        // still picks, and keyboard navigation keeps working afterwards
+        // because the caret never left the field.
+        onMouseDown={(e) => e.preventDefault()}
       >
         {/* The placeholder is for an empty query with NOTHING to show — a
             fresh profile with no chats yet. With recents below it, it was a
