@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
+import { isMachineMessage } from '@muxpad/shared';
 import { createAgentBridge } from './agent-bridge.js';
 import { ensureAgentNotes, migrateAgentFileEdits } from './agent-files.js';
 import { INSTRUCTIONS_MIGRATION, seedAgentInstructions } from './agent-instructions.js';
@@ -42,6 +43,7 @@ import { browserHostEntry } from './browser/hostEntry.js';
 import { HeadlineWriter } from './chat/HeadlineWriter.js';
 import { SpawnReportWriter } from './chat/SpawnReportWriter.js';
 import { projectsDir } from './chat/TranscriptReader.js';
+import { YieldGate } from './chat/YieldGate.js';
 import { paneAwaitsUser } from './chat/awaiting.js';
 import { glossaryCache } from './chat/glossary.js';
 import { sweepImplausibleHeadlines } from './chat/headline.js';
@@ -1142,6 +1144,45 @@ cronScheduler.start();
 // sid changes). See docs/plans/2026-08-28-session-archive.md.
 archiver?.start();
 headlines.start();
+/**
+ * THE ANTI-YIELD GATE. "The main chat is too fragile — all it takes is the
+ * harness deciding it's done and bam, work is halted."
+ *
+ * Constructed here rather than beside HeadlineWriter because it needs the
+ * send road, which only exists once the socket server is attached. Its
+ * completion is the same tool-free, account-pooled, haiku-class call the
+ * headlines use, so it inherits the quota failover and costs the same.
+ */
+const yieldGate = new YieldGate({
+  db,
+  events,
+  send: wsServer.submitSend,
+  isOwner: (text) => !isMachineMessage(text),
+  decide: async (prompt) => {
+    const { accountCompletion } = await import('./claude-accounts/completion.js');
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 30_000);
+    try {
+      let out = '';
+      for await (const m of accountCompletion({
+        prompt,
+        options: {
+          model: 'haiku',
+          maxTurns: 1,
+          settingSources: [],
+          allowedTools: [],
+          abortController: abort,
+        },
+      })) {
+        if (m.type === 'result' && m.subtype === 'success') out = m.result;
+      }
+      return out;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+});
+yieldGate.start();
 // The other half of the spawn card: the LABEL on a worker's card, generated from
 // its first message. Subscribed here (the report half is driven by ChatRetirer's
 // `onFinished` instead — see the class note for why the two differ).

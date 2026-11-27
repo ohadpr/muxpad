@@ -86,6 +86,13 @@ import { tabLifecycle } from './tab-clock.js';
 export interface WsServerHandle {
   close(): Promise<void>;
   /**
+   * The ordinary send road, for a caller outside the socket layer — today the
+   * anti-yield gate (chat/YieldGate.ts). Exposed rather than re-implemented so
+   * a prod is indistinguishable from any other message: the same durable
+   * queue, the same one-per-turn drain, the same Stop button.
+   */
+  submitSend(paneId: string, text: string): { status: string; reason?: string };
+  /**
    * Run one dead-runner sweep now. Exposed so a test can drive the supervision
    * pass deterministically — its real cadence (20s sweep, 45s cooldown) makes
    * it untestable otherwise, and the ptyd-outage behaviour is exactly the part
@@ -2284,6 +2291,10 @@ export function attachWsServer(deps: {
             sid: conn.sid,
             backend: conn.backend,
             ...(background !== undefined ? { background } : {}),
+            // Stop is not advice, and the anti-yield gate subscribes to this
+            // bus — see the field's note in shared/types. Carried on `done`
+            // only: a start has nothing to have been stopped yet.
+            ...(phase === 'done' && conn.stoppedThisTurn ? { stopped: true } : {}),
           });
         ws.on('message', (data) => {
           // A displaced socket can still deliver in-flight frames during the
@@ -3885,6 +3896,10 @@ export function attachWsServer(deps: {
   return {
     sweepDeadRunners,
     sweepParkedPanes,
+    /** The ordinary send road, for callers outside the socket layer — today
+     *  the anti-yield gate, so a prod is indistinguishable from any other
+     *  message: same durable queue, same drain, same Stop button. */
+    submitSend,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(heartbeat);

@@ -831,6 +831,17 @@ export const AgentTurnEventSchema = z.object({
   /** Present only when this start relays this durable queue row. */
   queue_id: z.string().optional(),
   /**
+   * Did a HUMAN press Stop on this turn? `done` only.
+   *
+   * On the bus because the anti-yield gate (chat/yield-gate.ts) subscribes
+   * here, and Stop is the one condition it must never talk over: it is not
+   * advice, and a prod sent into a turn somebody just halted is the cockpit
+   * arguing with the person holding the button. The flag lives in the socket
+   * handler's per-turn state, so without carrying it here a bus subscriber
+   * cannot know and would have to guess.
+   */
+  stopped: z.boolean().optional(),
+  /**
    * How many BACKGROUND COMMANDS this pane still has running, on a `done`.
    *
    * A turn ending is not the same as the work ending. The model can background

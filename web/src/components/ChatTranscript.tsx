@@ -33,6 +33,7 @@ import {
   useState,
 } from 'react';
 import { type MessagePart, splitMessageAttachments } from '../lib/attachments';
+import { splitAutopilot } from '../lib/autopilot-note';
 import {
   type MentionChat,
   parseDirectMarker,
@@ -472,6 +473,18 @@ export function UserText({
   // Patching each site is how one gets missed — the optimistic one already had
   // been.
   const text = stripMentionContext(raw);
+  // THE AUTOPILOT IS NOT YOU. Its prods ride the ordinary send road, so they
+  // land here among the owner's own words; the chip is how the log stays a
+  // record of who actually said what. See lib/autopilot-note.
+  const auto = splitAutopilot(text);
+  if (auto) {
+    return (
+      <span className="chat-autopilot">
+        <span className="chat-autopilot-chip">⟲ {auto.label}</span>
+        <MentionedText text={auto.body} hl={hl} />
+      </span>
+    );
+  }
   const parts = splitMessageAttachments(text);
   if (parts.length === 1 && parts[0]?.kind === 'text') return <MentionedText text={text} hl={hl} />;
   return (
