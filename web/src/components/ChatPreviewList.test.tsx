@@ -38,7 +38,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-const { PreviewList, plainPreview, previewLine, resetPreviewCache } = await import(
+const { PreviewList, freezeOrder, plainPreview, previewLine, resetPreviewCache } = await import(
   './ChatPreviewList'
 );
 
@@ -426,5 +426,110 @@ describe('hovering a row', () => {
 
   it('clears the separators that would cross the lit row', () => {
     expect(css).toMatch(/\.mcl-row:hover::before,\s*\.mcl-row:hover \+ \.mcl-row::before/);
+  });
+});
+
+/**
+ * THE ROW YOU TAP IS THE ROW YOU SAW.
+ *
+ * Measured with real touch events against the running app: tapping the third
+ * row 160 ms after arriving at Activity opened one chat, and the same tap
+ * 240 ms after arriving opened a different one. The tap was never lost — the
+ * corpus landed and the list re-sorted by recency under the finger.
+ */
+describe('the order holds still while you are looking at it', () => {
+  it('keeps rows where they are when the order changes beneath them', () => {
+    const held = ['a', 'b', 'c'];
+    const resorted = [row('c', 9), row('a', 1), row('b', 1)];
+    expect(freezeOrder(held, resorted).map((r) => r.tabId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('takes the incoming order when it is holding none — a fresh arrival', () => {
+    expect(freezeOrder([], [row('c', 9), row('a', 1)]).map((r) => r.tabId)).toEqual(['c', 'a']);
+  });
+
+  it('lets news ARRIVE, at the end, rather than shoving the list down', () => {
+    const out = freezeOrder(['a', 'b'], [row('new', 9), row('a', 1), row('b', 1)]);
+    expect(out.map((r) => r.tabId)).toEqual(['a', 'b', 'new']);
+  });
+
+  it('drops a row that has gone', () => {
+    expect(freezeOrder(['a', 'b', 'c'], [row('a', 1), row('c', 1)]).map((r) => r.tabId)).toEqual([
+      'a',
+      'c',
+    ]);
+  });
+});
+
+describe('tapping the third row twice, 80ms apart', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  /** What Activity shows on arrival, and what it would re-sort to. */
+  const arrival = [row('kalshi', 5), row('main', 4), row('investing', 3), row('backups', 2)];
+  const resorted = [
+    row('erdos', 9),
+    row('kalshi', 5),
+    row('main', 4),
+    row('investing', 3),
+    row('backups', 2),
+  ];
+  const nameAt = (i: number) => host.querySelectorAll('.mcl-row-name')[i]?.textContent ?? null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    asked.length = 0;
+    resetPreviewCache();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  it('opens the same chat both times', async () => {
+    act(() => {
+      root.render(<PreviewList rows={arrival} active={true} empty={<p>none</p>} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(160);
+    });
+    const at160 = nameAt(2);
+
+    // The corpus lands: a chat that just spoke would sort to the top.
+    act(() => {
+      root.render(<PreviewList rows={resorted} active={true} empty={<p>none</p>} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(80);
+    });
+    const at240 = nameAt(2);
+
+    expect(at160).toBe('investing');
+    // The whole point. Before this, the third row was a different chat.
+    expect(at240).toBe(at160);
+    // And the newcomer did arrive — just not under the thumb.
+    expect([...host.querySelectorAll('.mcl-row-name')].map((e) => e.textContent)).toContain(
+      'erdos',
+    );
+  });
+
+  it('takes the fresh order on the NEXT arrival', async () => {
+    act(() => {
+      root.render(<PreviewList rows={arrival} active={true} empty={<p>none</p>} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    // Switch away and back: a new showing, so the list is current again.
+    act(() => {
+      root.render(<PreviewList rows={resorted} active={false} empty={<p>none</p>} />);
+    });
+    act(() => {
+      root.render(<PreviewList rows={resorted} active={true} empty={<p>none</p>} />);
+    });
+    expect(nameAt(0)).toBe('erdos');
   });
 });

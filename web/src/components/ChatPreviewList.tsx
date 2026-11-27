@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { type TabPreview, api } from '../api';
 import { shortAgo } from '../lib/chat-sections';
 import type { SearchableTab } from '../lib/nav-search';
@@ -62,6 +62,42 @@ export function resetPreviewCache(): void {
   FETCHED_AT.clear();
 }
 
+/**
+ * HOLD THE ORDER THE READER IS LOOKING AT.
+ *
+ * Measured with real touch events: tapping the third row 160 ms after
+ * arriving at Activity opened one chat, and the same tap 240 ms after
+ * arriving opened a DIFFERENT one. The tap was never lost — the list had
+ * re-sorted under the finger, because the corpus landed and Activity orders
+ * by recency. A list you cannot point at is worse than a slightly stale one.
+ *
+ * So rows already on screen never move. News still arrives — a chat not yet
+ * shown is appended, a chat that left is dropped — but nothing that is under
+ * the reader's thumb is relocated beneath it. The natural order is taken up
+ * again on the next arrival, which is what `active` going false resets.
+ *
+ * Pure, because the whole property is "same input, same places", and that is
+ * only checkable as a function.
+ */
+export function freezeOrder<T extends { tabId: string }>(
+  held: readonly string[],
+  rows: readonly T[],
+): T[] {
+  if (held.length === 0) return [...rows];
+  const byId = new Map(rows.map((r) => [r.tabId, r]));
+  const kept: T[] = [];
+  for (const id of held) {
+    const row = byId.get(id);
+    if (row) {
+      kept.push(row);
+      byId.delete(id);
+    }
+  }
+  // Whatever is left is new since the order was taken, in its own order.
+  for (const row of rows) if (byId.has(row.tabId)) kept.push(row);
+  return kept;
+}
+
 export function PreviewList({
   rows,
   active,
@@ -84,6 +120,11 @@ export function PreviewList({
   // The cache is module-level (see PREVIEWS); this is only how a landing
   // reaches the screen.
   const [, landed] = useState(0);
+  /** The order this showing started with — see freezeOrder. */
+  const held = useRef<readonly string[]>([]);
+  if (!active) held.current = [];
+  const shown = freezeOrder(held.current, rows);
+  held.current = shown.map((r) => r.tabId);
   /** Rows this render may paint. Reset on every activation — each switch pays
    *  for a screenful, not for the whole list. */
   const [budget, setBudget] = useState(FIRST_PAINT_ROWS);
@@ -117,7 +158,7 @@ export function PreviewList({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `key` — the ids and their activity — not on the array's identity, which changes every corpus publish.
   useEffect(() => {
     if (!active || rows.length === 0) return;
-    const stale = rows.filter((r) => FETCHED_AT.get(r.tabId) !== (r.lastActivityAt ?? 0));
+    const stale = shown.filter((r) => FETCHED_AT.get(r.tabId) !== (r.lastActivityAt ?? 0));
     if (stale.length === 0) return;
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -139,9 +180,9 @@ export function PreviewList({
   }, [key, active]);
   return (
     <div className="mcl-scroll">
-      {rows.length === 0
+      {shown.length === 0
         ? empty
-        : rows
+        : shown
             .slice(0, budget)
             .map((t) => (
               <ChatRow
