@@ -1,3 +1,4 @@
+import type { ChatEvent } from '@muxpad/shared';
 import { describe, expect, it } from 'vitest';
 import type { Task } from './TaskStore.js';
 import { CONTINUATION_LIMIT } from './task-continue.js';
@@ -6,6 +7,7 @@ import {
   hardStop,
   parseVerdict,
   renderYieldProd,
+  yieldPair,
   yieldPrompt,
 } from './yield-gate.js';
 
@@ -217,5 +219,70 @@ describe('the prod, as the agent receives it', () => {
     expect(prod).toMatch(/say so in one line and\s*\n?stop/);
     expect(prod).toMatch(/irreversible/);
     expect(prod).toMatch(/Do not argue with this message/);
+  });
+});
+
+/**
+ * READING THE YIELD out of a transcript tail. The two inputs decide
+ * everything: what the owner actually asked for, and everything the chat has
+ * said since — not just its last paragraph, because "and that's the last of
+ * it" means nothing without the findings above it.
+ */
+describe('the two sides of a yield', () => {
+  const ev = (kind: 'user' | 'assistant', text: string, over: Partial<ChatEvent> = {}) =>
+    ({ kind, text, ...over }) as ChatEvent;
+  // Continuations, cron fires and sub-chat reports all arrive as user events.
+  const human = (t: string) => !t.startsWith('[muxpad') && !t.startsWith('[cron');
+
+  it('takes the owner’s last message and everything said after it', () => {
+    expect(
+      yieldPair(
+        [
+          ev('user', 'old thing'),
+          ev('assistant', 'did the old thing'),
+          ev('user', 'now do the new thing'),
+          ev('assistant', 'found three issues'),
+          ev('assistant', 'fixed one, the rest need you'),
+        ],
+        human,
+      ),
+    ).toEqual({
+      ask: 'now do the new thing',
+      closing: 'found three issues\n\nfixed one, the rest need you',
+    });
+  });
+
+  it('does not mistake its OWN prod for a fresh instruction', () => {
+    // Otherwise the gate measures a turn against the thing it said last time,
+    // and the owner's actual ask scrolls out of the question entirely.
+    const pair = yieldPair(
+      [
+        ev('user', 'make the bar shorter'),
+        ev('assistant', 'done'),
+        ev('user', '[muxpad autopilot] prove it with a measurement'),
+        ev('assistant', '59px, measured'),
+      ],
+      human,
+    );
+    expect(pair.ask).toBe('make the bar shorter');
+    expect(pair.closing).toContain('59px, measured');
+    expect(pair.closing).toContain('done');
+  });
+
+  it('skips folded context and empty turns', () => {
+    const pair = yieldPair(
+      [
+        ev('user', 'the real ask'),
+        ev('user', 'pasted log', { folded: true } as Partial<ChatEvent>),
+        ev('assistant', '  '),
+      ],
+      human,
+    );
+    expect(pair.ask).toBe('the real ask');
+    expect(pair.closing).toBe('');
+  });
+
+  it('answers empty for a chat with nothing in it', () => {
+    expect(yieldPair([], human)).toEqual({ ask: '', closing: '' });
   });
 });

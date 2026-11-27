@@ -47,6 +47,7 @@
  * only ever make the cockpit *less* likely to stop; it must never be able to
  * trap work inside a chat.
  */
+import type { ChatEvent } from '@muxpad/shared';
 import type { Task } from './TaskStore.js';
 import { CONTINUATION_LIMIT, type ContinueContext } from './task-continue.js';
 
@@ -210,4 +211,43 @@ export function renderYieldProd(
     'stop. That reaches him. Do not argue with this message; either carry on or',
     'name the thing only he can settle.',
   ].join('\n');
+}
+
+/**
+ * THE TWO SIDES OF THE YIELD, out of a transcript tail.
+ *
+ * `ask` is the last thing the OWNER said and `closing` is everything the
+ * chat has said since — not just its final paragraph, because a turn that
+ * ends "…and that's the last of it" means nothing without the three findings
+ * above it.
+ *
+ * A machine message is not an ask. Continuations, cron fires and sub-chat
+ * reports all arrive as user-role events, and treating one as a fresh
+ * instruction is how the gate would measure a turn against its own previous
+ * prod. `isOwner` decides that — the caller passes the same predicate the
+ * send road uses, so there is one definition of "a person said this".
+ */
+export function yieldPair(
+  events: readonly ChatEvent[],
+  isOwner: (text: string) => boolean,
+): { ask: string; closing: string } {
+  let askAt = -1;
+  let ask = '';
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (!e || e.kind !== 'user' || e.folded) continue;
+    const text = (e.text ?? '').trim();
+    if (!text || !isOwner(text)) continue;
+    ask = text;
+    askAt = i;
+    break;
+  }
+  const said: string[] = [];
+  for (let i = askAt + 1; i < events.length; i++) {
+    const e = events[i];
+    if (!e || e.kind !== 'assistant') continue;
+    const text = (e.text ?? '').trim();
+    if (text) said.push(text);
+  }
+  return { ask, closing: said.join('\n\n') };
 }

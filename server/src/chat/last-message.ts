@@ -88,6 +88,44 @@ export function oneLine(text: string): string {
 }
 
 /** Read one pane's transcript tail and answer {@link lastMessageOf}. */
+/**
+ * A pane's recent transcript, normalized — the tail only.
+ *
+ * Split out of `lastMessageForPane` so the anti-yield gate can read the same
+ * events through the same chokepoint (a pane on another machine must not
+ * cause a search of this disk) rather than growing a second transcript
+ * reader beside this one. `null` means there is nothing readable here:
+ * no session, a remote pane, or an unreadable file.
+ */
+export function recentChatEvents(db: Database.Database, paneId: string): ChatEvent[] | null {
+  const sess = new AgentSessionStore(db).getByPane(paneId);
+  const access = transcriptForPane(db, paneId, sess?.current_sid ?? null, sess?.assistant);
+  if (access.kind !== 'local' || !sess) return null;
+  let lines: string[];
+  try {
+    lines = readTailLines(access.path, TAIL_BYTES);
+  } catch {
+    return null;
+  }
+  const claude = sess.assistant === 'claude';
+  const events: ChatEvent[] = [];
+  for (const line of lines) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    for (const ev of (claude
+      ? normalizeTranscriptLine(obj)
+      : identityNormalize(obj)) as ChatEvent[]) {
+      if (claude) events.push(ev);
+      else events.push(...expandChatEvent(ev));
+    }
+  }
+  return events;
+}
+
 function lastMessageForPane(db: Database.Database, paneId: string): Preview | null {
   const sess = new AgentSessionStore(db).getByPane(paneId);
   // Through the chokepoint, like every other transcript read: a pane on
